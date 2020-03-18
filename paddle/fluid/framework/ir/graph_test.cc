@@ -154,13 +154,13 @@ TEST(GraphTest, WriteAfterRead) {
       ASSERT_EQ(n->outputs[0]->Name(), "b");
       ASSERT_TRUE(ir::IsControlDepVar(*n->outputs[1]));
       control_dep1 = n->outputs[1];
-      ASSERT_EQ(n->outputs.size(), 2);
+      ASSERT_EQ(n->outputs.size(), 2UL);
     }
     if (n->Name() == "dummy") {
       ASSERT_EQ(n->inputs[0]->Name(), "c");
       ASSERT_TRUE(ir::IsControlDepVar(*n->inputs[1]));
       control_dep2 = n->inputs[1];
-      ASSERT_EQ(n->inputs.size(), 2);
+      ASSERT_EQ(n->inputs.size(), 2UL);
     }
   }
   ASSERT_EQ(control_dep1, control_dep2);
@@ -192,19 +192,65 @@ TEST(GraphTest, WriteAfterWrite) {
     if (n->Name() == "sum") {
       ASSERT_EQ(n->outputs[0]->Name(), "b");
       ASSERT_TRUE(ir::IsControlDepVar(*n->outputs[1]));
-      ASSERT_EQ(n->outputs.size(), 2);
+      ASSERT_EQ(n->outputs.size(), 2UL);
       control_dep1 = n->outputs[1];
     }
     if (n->Name() == "dummy") {
       ASSERT_EQ(n->inputs[0]->Name(), "c");
       ASSERT_TRUE(ir::IsControlDepVar(*n->inputs[1]));
       control_dep2 = n->inputs[1];
-      ASSERT_EQ(n->inputs.size(), 2);
+      ASSERT_EQ(n->inputs.size(), 2UL);
     }
   }
   ASSERT_NE(control_dep1, nullptr);
   ASSERT_NE(control_dep2, nullptr);
   ASSERT_EQ(control_dep1, control_dep2);
+}
+
+TEST(GraphTest, TestException) {
+  ProgramDesc prog;
+  std::unique_ptr<ir::Graph> g(new ir::Graph(prog));
+
+  bool not_met_exception = false;
+  try {
+    g->Erase("no_attr");
+  } catch (const platform::EnforceNotMet &e) {
+    not_met_exception = true;
+  }
+  ASSERT_TRUE(not_met_exception);
+
+  not_met_exception = false;
+  try {
+    g->CreateVarNode(nullptr);
+  } catch (const platform::EnforceNotMet &e) {
+    not_met_exception = true;
+  }
+  ASSERT_TRUE(not_met_exception);
+
+  not_met_exception = false;
+  try {
+    g->CreateOpNode(nullptr);
+  } catch (const platform::EnforceNotMet &e) {
+    not_met_exception = true;
+  }
+  ASSERT_TRUE(not_met_exception);
+
+  not_met_exception = false;
+  try {
+    g->RemoveNode(nullptr);
+  } catch (const platform::EnforceNotMet &e) {
+    not_met_exception = true;
+  }
+  ASSERT_TRUE(not_met_exception);
+
+  not_met_exception = false;
+  try {
+    g->AddNode(nullptr);
+    g->AddNode(nullptr);
+  } catch (const platform::EnforceNotMet &e) {
+    not_met_exception = true;
+  }
+  ASSERT_TRUE(not_met_exception);
 }
 }  // namespace framework
 }  // namespace paddle

@@ -35,7 +35,6 @@ namespace ir {
 
 constexpr char kLossVarName[] = "loss_var_name";
 constexpr char kStrategy[] = "strategy";
-constexpr char kNRanks[] = "nranks";
 
 class MultiDevSSAGraphBuilderBase : public ir::Pass {
  protected:
@@ -95,7 +94,7 @@ class MultiDevSSAGraphBuilderBase : public ir::Pass {
   void CreateOpHandleIOs(ir::Graph *result, ir::Node *node,
                          size_t device_id) const;
 
-#if defined(PADDLE_WITH_CUDA) && !defined(_WIN32)
+#if defined(PADDLE_WITH_NCCL)
   mutable platform::NCCLContextMap *nccl_ctxs_{nullptr};
   mutable platform::NCCLCommunicator *multi_nccl_ctxs_{nullptr};
 #endif
@@ -124,7 +123,7 @@ class AsyncSSAGraphBuilder : public MultiDevSSAGraphBuilderBase {
                           const std::string &g_name) const override {}
 
   bool NeedCollectiveForGrad(const std::string &grad_name,
-                             std::vector<ir::Node *> ops) const {
+                             std::vector<ir::Node *> ops) const override {
     return false;
   }
 

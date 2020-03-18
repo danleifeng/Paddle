@@ -1,4 +1,4 @@
-// Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2019 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,102 +13,35 @@
 // limitations under the License.
 
 #pragma once
-
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
-#include <map>     // NOLINT
-#include <memory>  // NOLINT
-#include <mutex>   // NOLINT
+#include <list>
+#include <map>
+#include <memory>
+#include <mutex>  // NOLINT
 #include <set>
-#include <string>         // NOLINT
-#include <unordered_map>  // NOLINT
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
-#include <vector>  // NOLINT
-
-// clang-format off
-#include "paddle/fluid/framework/python_headers.h"
-// clang-format on
-
+#include <vector>
 #include "paddle/fluid/framework/op_desc.h"
 #include "paddle/fluid/framework/operator.h"
+#include "paddle/fluid/framework/shape_inference.h"
+#include "paddle/fluid/framework/type_defs.h"
 #include "paddle/fluid/framework/var_desc.h"
+#include "paddle/fluid/framework/var_type.h"
 #include "paddle/fluid/framework/var_type_inference.h"
-#include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/imperative/backward_strategy.h"
-#include "paddle/fluid/imperative/type_defs.h"
+#include "paddle/fluid/framework/variable.h"
 #include "paddle/fluid/imperative/flags.h"
+#include "paddle/fluid/imperative/type_defs.h"
+#include "paddle/fluid/imperative/variable_wrapper.h"
+#include "paddle/fluid/platform/enforce.h"
+#include "paddle/fluid/platform/macros.h"
 
 namespace paddle {
 namespace imperative {
-
-class VarBase;
-
-namespace py = ::pybind11;
-
-class PreparedOp {
- public:
-  PreparedOp(const framework::OperatorBase& op,
-             const framework::RuntimeContext& ctx,
-             framework::OperatorWithKernel::OpKernelFunc func,
-             platform::DeviceContext* dev_ctx,
-             std::vector<framework::KernelConfig>* kernel_configs)
-      : op(op),
-        ctx(ctx),
-        func(func),
-        dev_ctx(dev_ctx),
-        kernel_configs(kernel_configs) {}
-
-  static PreparedOp Prepare(const framework::RuntimeContext& ctx,
-                            const framework::OperatorWithKernel& op,
-                            const platform::Place& place) {
-    platform::DeviceContextPool& pool = platform::DeviceContextPool::Instance();
-    auto* dev_ctx = pool.Get(place);
-
-    // check if op[type] has kernel registered.
-    auto& all_op_kernels = op.AllOpKernels();
-    auto kernels_iter = all_op_kernels.find(op.Type());
-    if (kernels_iter == all_op_kernels.end()) {
-      PADDLE_THROW(
-          "There are no kernels which are registered in the %s operator.",
-          op.Type());
-    }
-
-    framework::OperatorWithKernel::OpKernelMap& kernels = kernels_iter->second;
-
-    auto expected_kernel_key =
-        op.GetExpectedKernelType(framework::ExecutionContext(
-            op, framework::Scope(), *dev_ctx, ctx, nullptr));
-    VLOG(3) << "expected_kernel_key:" << expected_kernel_key;
-
-    auto kernel_iter = kernels.find(expected_kernel_key);
-#ifdef PADDLE_WITH_MKLDNN
-    // workaround for missing MKLDNN kernel when FLAGS_use_mkldnn env var is set
-    if (kernel_iter == kernels.end() &&
-        expected_kernel_key.library_type_ == framework::LibraryType::kMKLDNN) {
-      VLOG(3) << "missing MKLDNN kernel: fallbacking to PLAIN one";
-      expected_kernel_key.library_type_ = framework::LibraryType::kPlain;
-      expected_kernel_key.data_layout_ = framework::DataLayout::kAnyLayout;
-      kernel_iter = kernels.find(expected_kernel_key);
-    }
-#endif
-    if (kernel_iter == kernels.end()) {
-      PADDLE_THROW("op %s does not have kernel for %s", op.Type(),
-                   KernelTypeToString(expected_kernel_key));
-    }
-    std::vector<framework::KernelConfig>* kernel_configs =
-        op.GetKernelConfig(expected_kernel_key);
-    return PreparedOp(op, ctx, kernel_iter->second, dev_ctx, kernel_configs);
-  }
-
-  inline platform::DeviceContext* GetDeviceContext() const { return dev_ctx; }
-
-  const framework::OperatorBase& op;
-  const framework::RuntimeContext& ctx;
-  framework::OperatorWithKernel::OpKernelFunc func;
-  platform::DeviceContext* dev_ctx;
-  std::vector<framework::KernelConfig>* kernel_configs;
-};
 
 class OpBase;
 
@@ -125,291 +58,147 @@ class ThreadSafeNameSet {
   mutable std::mutex mtx_;
 };
 
-/* The wrapper for Variable which holds a Variable and a VarBase of its
- * gradient. This object should be managed totally by Python intepreter.
- *
- * Nearly all interface should be implemented in C++.
- */
 class VarBase {
+  DISABLE_COPY_AND_ASSIGN(VarBase);
+
  public:
   static std::vector<std::string> AliveVarNames();
-
-  // Internal interface, create VarBase from exist variable
-  VarBase(const std::string& name, std::unique_ptr<framework::Variable> var,
-          VarBase* grad, bool stop_gradient)
-      : VarBase(name, var->Get<framework::LoDTensor>().type(),
-                var->Get<framework::LoDTensor>().dims(),
-                var->Get<framework::LoDTensor>().place(), nullptr, grad,
-                stop_gradient, false, true) {
-    var_ = std::move(var);
-  }
-
-  // Python interface
-  VarBase(const std::string& name, const framework::proto::VarType::Type dtype,
-          const std::vector<int64_t>& shape, const platform::Place& place,
-          bool stop_gradient, bool persistable)
-      : VarBase(name, dtype, framework::make_ddim(shape), place, stop_gradient,
-                persistable) {}
-
-  // Internal interface, create VarBase from with ddim
-  VarBase(const std::string& name, const framework::proto::VarType::Type dtype,
-          const framework::DDim& shape, const platform::Place& place,
-          bool stop_gradient, bool persistable)
-      : VarBase(name, dtype, shape, place, nullptr, nullptr, stop_gradient,
-                persistable, true) {}
-
-  // Grad used constructor
-  VarBase(const std::string& name, const framework::proto::VarType::Type dtype,
-          const std::vector<int64_t>& shape, const platform::Place& place,
-          bool stop_gradient, bool persistable, bool need_initialize)
-      : VarBase(name, dtype, framework::make_ddim(shape), place, nullptr,
-                nullptr, stop_gradient, persistable, need_initialize) {}
-
- private:
-  // TODO(minqiyang): need support SelectedRows
-  VarBase(const std::string& name, framework::proto::VarType::Type dtype,
-          const framework::DDim& shape, const platform::Place& place,
-          std::unique_ptr<framework::Variable> var, VarBase* grad,
-          bool stop_gradient, bool persistable, bool need_initialize)
-      : name_(name),
-        type_(framework::proto::VarType::LOD_TENSOR),
-        place_(place),
-        var_(std::move(var)),
-        grads_(grad),
-        dtype_(dtype),
-        stop_gradient_(stop_gradient),
-        persistable_(persistable),
-        pre_op_(nullptr),
-        pre_op_out_name_(),
-        pre_op_out_idx_(-1) {
-    if (!var_) {
-      var_.reset(new framework::Variable());
-    }
-
-    auto tensor = var_->GetMutable<framework::LoDTensor>();
-    tensor->Resize(shape);
-    if (need_initialize) {
-      tensor->mutable_data(place, dtype);
-      is_initialized_ = true;
-      VLOG(8) << "initialized varbase: " << name_ << " type: " << dtype
-              << " place: " << place;
-    } else {
-      is_initialized_ = false;
-      VLOG(8) << "not initialized varbase: " << name_;
-    }
-    VLOG(8) << "create varbase: " << name_ << " type: " << dtype
-            << " place: " << place << "Stop gradient: " << stop_gradient_;
-
+  explicit VarBase(bool has_grad, const std::string& name)
+      : var_(std::make_shared<VariableWrapper>(name)),
+        grad_var_(has_grad ? new VarBase(false, GradVarName()) : nullptr) {
     if (IsDebugEnabled()) {
-      name_set_.Insert(name_);
+      VLOG(10) << "Construct VarBase: " << Name();
+      name_set_.Insert(Name());
     }
   }
 
- public:
-  virtual ~VarBase() {
-    pre_op_ = nullptr;
-    pre_op_out_idx_ = -1;
-    VLOG(8) << "destruct varbase: " << name_;
+  explicit VarBase(const std::string& name) : VarBase(true, name) {}
+
+  ~VarBase() {
+    VLOG(10) << "Destruct VarBase: " << Name();
     if (IsDebugEnabled()) {
-      name_set_.Remove(name_);
+      name_set_.Remove(Name());
     }
   }
 
-  inline void SetName(const std::string& name) { name_ = name; }
-  inline std::string Name() const { return name_; }
-  inline bool IsInitialize() const { return is_initialized_; }
-  inline void SetInitialize(bool inited) { is_initialized_ = inited; }
-  inline std::vector<int64_t> Shape() const {
-    if (var_->IsInitialized()) {
-      return framework::vectorize(var_->Get<framework::LoDTensor>().dims());
-    } else {
-      return {};
+  const std::shared_ptr<VariableWrapper>& SharedVar() const { return var_; }
+
+  const framework::Variable& Var() const { return var_->Var(); }
+
+  framework::Variable* MutableVar() { return var_->MutableVar(); }
+
+  bool HasGradVar() const { return grad_var_ != nullptr; }
+
+  const std::shared_ptr<VarBase>& GradVarBase() const { return grad_var_; }
+
+  void ClearGradVarBase() { grad_var_ = nullptr; }
+
+  const std::shared_ptr<VarBase>& MutableGradVarBase() {
+    if (grad_var_ == nullptr) {
+      grad_var_ = std::make_shared<VarBase>(false, GradVarName());
+      // NOTE(zhiqiu): we should keep grad_var_'s stop_gradient property same as
+      // fwd varbase
+      grad_var_->SetOverridedStopGradient(var_->InnerOverridedStopGradient());
+    }
+    return grad_var_;
+  }
+
+  const framework::Variable& GradVar() const {
+    PADDLE_ENFORCE_NOT_NULL(
+        grad_var_,
+        platform::errors::NotFound("Gradient of %s does not exist", Name()));
+    return grad_var_->Var();
+  }
+
+  framework::Variable* MutableGradVar() {
+    PADDLE_ENFORCE_NOT_NULL(
+        grad_var_,
+        platform::errors::NotFound("Gradient of %s does not exist", Name()));
+    return grad_var_->MutableVar();
+  }
+
+  void SetOverridedStopGradient(bool stop_gradient) {
+    var_->SetOverridedStopGradient(stop_gradient);
+    if (grad_var_) {
+      grad_var_->SetOverridedStopGradient(stop_gradient);
     }
   }
 
-  inline framework::DDim Dims() const {
-    return var_->Get<framework::LoDTensor>().dims();
-  }
+  bool OverridedStopGradient() const { return var_->OverridedStopGradient(); }
 
-  // data type. e.g.. FP32
-  inline void SetDataType(framework::proto::VarType::Type type) {
-    auto tensor = var_->GetMutable<framework::LoDTensor>();
-    tensor->mutable_data(tensor->place(), type);
-  }
-  inline framework::proto::VarType::Type DataType() const { return dtype_; }
-
-  // tensor type. e.g.. LoDTensor
-  inline void SetType(framework::proto::VarType::Type type) { type_ = type; }
-  inline framework::proto::VarType::Type Type() const { return type_; }
-
-  inline void SetStopGradient(bool stop_gradient) {
-    stop_gradient_ = stop_gradient;
-    if (grads_) {
-      grads_->stop_gradient_ = stop_gradient;
-    }
-  }
-  inline bool IsStopGradient() const { return stop_gradient_; }
-
-  inline void SetPersistable(bool persistable) { persistable_ = persistable; }
-  inline bool IsPersistable() const { return persistable_; }
-  inline void SetPreOp(OpBase* op) { pre_op_ = op; }
-  inline platform::Place GetPlace() { return place_; }
-  inline OpBase* PreOp() const { return pre_op_; }
-  inline int PreOpOutIdx() const { return pre_op_out_idx_; }
-
-  void RunBackward(const detail::BackwardStrategy& bck_stratedy);
-
-  inline void ResetPreOp(OpBase* op) {
-    if (op == pre_op_) {
-      // clear pre_op info when op equals to var's pre_op
-      pre_op_ = nullptr;
-      pre_op_out_idx_ = -1;
+  void InnerSetOverridedStopGradient(bool stop_gradient) {
+    if (var_->InnerOverridedStopGradient() == -1) {
+      var_->InnerSetOverridedStopGradient(stop_gradient);
+      if (grad_var_) {
+        grad_var_->InnerSetOverridedStopGradient(stop_gradient);
+      }
     }
   }
 
-  void InitBuffer() {
-    if (!is_initialized_) {
-      var_->GetMutable<framework::LoDTensor>()->mutable_data(place_, dtype_);
-      is_initialized_ = true;
-      VLOG(8) << "initialized varbase: " << name_ << " type: " << dtype_
-              << " place: " << place_;
-    } else {
-      VLOG(8) << "var: " << name_ << " has already been initialized ";
+  void SetPersistable(bool persistable) { var_->SetPersistable(persistable); }
+
+  bool Persistable() const { return var_->Persistable(); }
+
+  // Only grad var is allowed to call these 2 methods
+  void AddGradOp(const std::shared_ptr<OpBase>& op) {
+    if (op &&
+        std::find(grad_ops_.begin(), grad_ops_.end(), op) == grad_ops_.end()) {
+      grad_ops_.emplace_back(op);
     }
   }
 
-  void TrackPreOp(OpBase* pre_op, const std::string& pre_op_out_name,
-                  int pre_op_out_idx, bool pre_op_stop_gradient) {
-    pre_op_ = pre_op;
-    pre_op_out_name_ = pre_op_out_name;
-    pre_op_out_idx_ = pre_op_out_idx;
-    if (pre_op_stop_gradient) {
-      stop_gradient_ = pre_op_stop_gradient;
+  const std::vector<std::shared_ptr<OpBase>>& GradOps() const {
+    return grad_ops_;
+  }
+
+  void ClearGradOps() { grad_ops_.clear(); }
+
+  const std::string& Name() const { return var_->Name(); }
+
+  void SetName(const std::string& name) {
+    var_->SetName(name);
+    if (grad_var_) {
+      grad_var_->SetName(GradVarName());
     }
   }
 
-  void ClearGradient() {
-    VLOG(1) << "clear gradient of " << Name();
-    if (grads_ && grads_->var_ && grads_->var_->IsInitialized()) {
-      auto grads_t = grads_->var_->GetMutable<framework::LoDTensor>();
-      operators::math::set_constant(
-          *(platform::DeviceContextPool::Instance().Get(
-              grads_->var_->Get<framework::LoDTensor>().place())),
-          grads_t, 0.0);
+  std::string GradVarName() { return framework::GradVarName(Name()); }
+
+  void SetType(framework::proto::VarType::Type type) { var_->SetType(type); }
+
+  framework::proto::VarType::Type Type() const { return var_->Type(); }
+
+  void SetDataType(framework::proto::VarType::Type data_type) {
+    var_->SetDataType(data_type);
+    if (grad_var_) {
+      grad_var_->SetDataType(data_type);
     }
   }
 
-  framework::LoDTensor& GradValue();
+  framework::proto::VarType::Type DataType() const { return var_->DataType(); }
 
-  std::unique_ptr<VarBase> NewVarBase(const platform::Place& dst_place,
+  void ClearGradient();
+
+  std::shared_ptr<VarBase> NewVarBase(const platform::Place& dst_place,
                                       const bool blocking) const;
 
-  inline std::string GradName() const {
-    return string::Sprintf("%s@IGrad", Name());
-  }
-
-  std::string name_;
-  framework::proto::VarType::Type type_;
-  platform::Place place_;
-
-  std::unique_ptr<framework::Variable> var_;
-  std::shared_ptr<VarBase> grads_;
-
  private:
-  framework::proto::VarType::Type dtype_;
-  bool stop_gradient_;
-  bool persistable_;
-  bool is_initialized_;
-  OpBase* pre_op_;
-  std::string pre_op_out_name_;
-  int pre_op_out_idx_;
+  /**
+   * NOTE(zengjinle): never remove the const qualifier of `var_` if you are
+   * not very familiar with the autograd idea (including the higher order
+   * derivative).
+   */
+  const std::shared_ptr<VariableWrapper> var_;
 
-  // A private flag to check memory leak
+  std::shared_ptr<VarBase> grad_var_;
+  std::vector<std::shared_ptr<OpBase>> grad_ops_;
+
+  mutable size_t copied_counter_ = 0;
+
   static ThreadSafeNameSet name_set_;
 };
 
-/* The wrapper for OpDesc which holds a OpDesc and a OpDesc of its
- * gradient. This object should be managed totally by Python intepreter.
- */
-class PYBIND11_HIDDEN OpBase {
- public:
-  OpBase(const std::string& type)
-      : type_(type),
-        trace_id_(-1),
-        place_(platform::CPUPlace()),
-        backward_hooks_() {}
-
-  virtual ~OpBase() {
-    for (const auto& it : outputs_ref) {
-      auto vb = it.lock();
-      if (vb) {
-        VLOG(3) << "Op reset by" << vb->name_;
-        vb->ResetPreOp(this);
-      }
-    }
-    // TODO(minqiyang): remove op_desc from block_desc in tracer
-    // release resource
-    for (framework::OpDesc* desc : grad_op_descs_) {
-      delete desc;
-    }
-  }
-
-  std::vector<VarBasePtrMap> ApplyGrad(
-      BackwardSumMap* bck_map, GradientRef* grad_ref,
-      const detail::BackwardStrategy& bck_stratedy);
-
-  inline std::string Type() const { return type_; }
-  inline std::string GradOpType(size_t index) const {
-    PADDLE_ENFORCE_NOT_NULL(grad_op_descs_[index]);
-    return grad_op_descs_[index]->Type();
-  }
-
-  void RegisterBackwardHooks(const py::object& callable);
-
-  void InvokeBackwardHooks();
-
-  void TrackPreOp(
-      const std::string& inp_name,
-      const std::vector<std::shared_ptr<imperative::VarBase>>& inputs) {
-    auto& pre_ops_list = pre_ops_[inp_name];
-    pre_ops_list.reserve(inputs.size());
-    auto& pre_ops_out_idx_list = pre_ops_out_idx_[inp_name];
-    for (std::shared_ptr<imperative::VarBase> inp_var : inputs) {
-      if (inp_var->PreOp() && !inp_var->IsStopGradient()) {
-        VLOG(3) << "add pre op " << inp_var->PreOp()->Type() << " in slot "
-                << inp_name;
-        pre_ops_list.emplace_back(inp_var->PreOp());
-        pre_ops_out_idx_list.push_back(inp_var->PreOpOutIdx());
-      } else {
-        VLOG(3) << "no pre op in slot " << inp_name
-                << " input var stop_gradient: " << inp_var->IsStopGradient();
-        pre_ops_list.emplace_back(nullptr);
-        // pre_ops_out_idx_list.push_back(-1);
-      }
-    }
-  }
-
-  std::string type_;
-  int trace_id_;
-
-  // Note: each fwd op corresponds to a vector of bwd ops.
-  std::vector<framework::OpDesc*> grad_op_descs_;
-
-  platform::Place place_;
-
-  OpBasePtrMap pre_ops_;
-  std::map<std::string, std::vector<int>> pre_ops_out_idx_;
-
-  VarBaseWeakPtrList outputs_ref;
-  // Inputs to a vector of bwd ops.
-  std::vector<VarBasePtrMap> grad_input_vars_;
-  // Outputs to a vector of bwd ops.
-  std::vector<VarBasePtrMap> grad_output_vars_;
-
-  std::vector<py::object> backward_hooks_;
-
-  framework::AttributeMap attrs_;
-};
+using VariableWrapperList = std::vector<std::shared_ptr<VariableWrapper>>;
 
 class Layer {
  public:
@@ -417,18 +206,174 @@ class Layer {
 
   virtual std::vector<std::shared_ptr<VarBase>> Forward(
       const std::vector<std::shared_ptr<VarBase>>& inputs) {
-    std::vector<std::shared_ptr<VarBase>> vars;
-    return vars;
+    return {};
   }
 };
 
-// infer var type context for imperative mode
-class PYBIND11_HIDDEN RuntimeInferVarTypeContext
-    : public framework::InferVarTypeContext {
+template <typename VarType>
+class DygraphExecutionContext : public framework::ExecutionContext {
+  using Variable = framework::Variable;
+
  public:
-  RuntimeInferVarTypeContext(const imperative::VarBasePtrMap* inputs,
-                             imperative::VarBasePtrMap* outputs,
-                             const framework::AttributeMap* attrs_map)
+  DygraphExecutionContext(const framework::OperatorBase& op,
+                          const framework::Scope& scope,
+                          const platform::DeviceContext& device_context,
+                          const framework::RuntimeContext& ctx,
+                          std::vector<framework::KernelConfig>* configs,
+                          const NameVarMap<VarType>& var_base_map_in,
+                          const NameVarMap<VarType>& var_base_map_out,
+                          const framework::AttributeMap& attrs)
+      : ExecutionContext(op, scope, device_context, ctx, configs),
+        var_base_map_in_(var_base_map_in),
+        var_base_map_out_(var_base_map_out),
+        attrs_(attrs) {}
+
+  std::string InputName(const std::string& name) const override {
+    auto it = var_base_map_in_.find(name);
+    PADDLE_ENFORCE_NE(it, var_base_map_in_.end(),
+                      platform::errors::PreconditionNotMet(
+                          "Can not find [%s] in Input", name));
+    return it->second[0]->Name();
+  }
+  std::vector<std::string> InputNames(const std::string& name) const override {
+    auto it = var_base_map_in_.find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_in_.end(),
+        platform::errors::NotFound("Can not find [%s] in Input", name));
+    std::vector<std::string> vec_res;
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.push_back(it->second[i]->Name());
+    }
+    return vec_res;
+  }
+
+  std::string OutputName(const std::string& name) const override {
+    auto it = var_base_map_out_.find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_out_.end(),
+        platform::errors::NotFound("Can not find [%s] in Output", name));
+    return it->second[0]->Name();
+  }
+
+  std::vector<std::string> OutputNames(const std::string& name) const override {
+    auto it = var_base_map_out_.find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_out_.end(),
+        platform::errors::NotFound("Can not find [%s] in Output", name));
+    std::vector<std::string> vec_res;
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.push_back(it->second[i]->Name());
+    }
+    return vec_res;
+  }
+
+  bool HasAttr(const std::string& name) const override {
+    return attrs_.count(name) != 0;
+  }
+
+  const framework::AttributeMap& Attrs() const override { return attrs_; }
+
+  const framework::Attribute& GetAttr(const std::string& name) const override {
+    auto it = attrs_.find(name);
+
+    PADDLE_ENFORCE_NE(
+        it, attrs_.end(),
+        platform::errors::NotFound("can not find [%s] in attrs", name));
+
+    return it->second;
+  }
+
+  std::vector<std::string> InNameList() const override {
+    std::vector<std::string> vec_temp;
+    vec_temp.reserve(var_base_map_in_.size());
+
+    for (auto& v : var_base_map_in_) {
+      vec_temp.push_back(v.first);
+    }
+
+    return vec_temp;
+  }
+  bool HasInput(const std::string& name) const override {
+    auto it = var_base_map_in_.find(name);
+    return (it != var_base_map_in_.end() && it->second.size() > 0);
+  }
+
+  bool HasOutput(const std::string& name) const override {
+    auto it = var_base_map_out_.find(name);
+    return (it != var_base_map_out_.end() && it->second.size() > 0);
+  }
+
+  size_t InputSize(const std::string& name) const override {
+    return InputNames(name).size();
+  }
+
+  size_t OutputSize(const std::string& name) const override {
+    return OutputNames(name).size();
+  }
+
+  const Variable* InputVar(const std::string& name) const override {
+    auto it = var_base_map_in_.find(name);
+    if (it == var_base_map_in_.end()) {
+      return nullptr;
+    }
+
+    return it->second.empty() ? nullptr : it->second[0]->MutableVar();
+  }
+
+  Variable* OutputVar(const std::string& name) const override {
+    auto it = var_base_map_out_.find(name);
+    if (it == var_base_map_out_.end()) {
+      return nullptr;
+    }
+
+    return it->second.empty() ? nullptr : it->second[0]->MutableVar();
+  }
+
+  const std::vector<Variable*> MultiInputVar(
+      const std::string& name) const override {
+    auto it = var_base_map_in_.find(name);
+    if (it == var_base_map_in_.end()) {
+      return {};
+    }
+    std::vector<Variable*> vec_res;
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.push_back(it->second[i]->MutableVar());
+    }
+
+    return vec_res;
+  }
+
+  std::vector<Variable*> MultiOutputVar(
+      const std::string& name) const override {
+    auto it = var_base_map_out_.find(name);
+    if (it == var_base_map_out_.end()) {
+      return {};
+    }
+    std::vector<Variable*> vec_res;
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.push_back(it->second[i]->MutableVar());
+    }
+
+    return vec_res;
+  }
+
+ private:
+  const NameVarMap<VarType>& var_base_map_in_;
+  const NameVarMap<VarType>& var_base_map_out_;
+  const framework::AttributeMap& attrs_;
+};
+
+// infer var type context for imperative mode
+template <typename VarType>
+class RuntimeInferVarTypeContext : public framework::InferVarTypeContext {
+ public:
+  RuntimeInferVarTypeContext(const NameVarMap<VarType>& inputs,
+                             const NameVarMap<VarType>* outputs,
+                             const framework::AttributeMap& attrs_map)
       : InferVarTypeContext(nullptr, nullptr),
         inputs_(inputs),
         outputs_(outputs),
@@ -436,19 +381,19 @@ class PYBIND11_HIDDEN RuntimeInferVarTypeContext
         input_names_(),
         output_names_(),
         var_set_() {
-    input_names_.reserve(inputs_->size());
-    for (auto& it : *inputs_) {
-      for (std::shared_ptr<imperative::VarBase> var : it.second) {
+    input_names_.reserve(inputs_.size());
+    for (auto& it : inputs_) {
+      for (auto& var : it.second) {
         input_names_[it.first].emplace_back(var->Name());
-        var_set_[var->Name()] = var;
+        var_set_[var->Name()] = var.get();
       }
     }
 
     output_names_.reserve(outputs_->size());
     for (auto& it : *outputs_) {
-      for (std::shared_ptr<imperative::VarBase> var : it.second) {
+      for (auto& var : it.second) {
         output_names_[it.first].emplace_back(var->Name());
-        var_set_[var->Name()] = var;
+        var_set_[var->Name()] = var.get();
       }
     }
   }
@@ -456,8 +401,10 @@ class PYBIND11_HIDDEN RuntimeInferVarTypeContext
   virtual ~RuntimeInferVarTypeContext() {}
 
   framework::Attribute GetAttr(const std::string& name) const override {
-    PADDLE_ENFORCE_NOT_NULL(attrs_);
-    return attrs_->at(name);
+    auto iter = attrs_.find(name);
+    PADDLE_ENFORCE_EQ(iter != attrs_.end(), true, "Cannot find attribute %s",
+                      name);
+    return iter->second;
   }
 
   bool HasVar(const std::string& name) const override {
@@ -465,28 +412,40 @@ class PYBIND11_HIDDEN RuntimeInferVarTypeContext
   }
 
   bool HasInput(const std::string& name) const override {
-    PADDLE_ENFORCE_NOT_NULL(inputs_);
-    return inputs_->count(name) > 0;
+    auto it = inputs_.find(name);
+    return (it != inputs_.end() && it->second.size() > 0);
   }
 
   bool HasOutput(const std::string& name) const override {
     PADDLE_ENFORCE_NOT_NULL(outputs_);
-    return outputs_->count(name) > 0;
+    auto it = outputs_->find(name);
+    return (it != outputs_->end() && it->second.size() > 0);
   }
 
   const std::vector<std::string>& Input(
       const std::string& name) const override {
-    return input_names_.at(name);
+    auto iter = input_names_.find(name);
+    PADDLE_ENFORCE_EQ(iter != input_names_.end(), true, "Cannot find input %s",
+                      name);
+    return iter->second;
   }
 
   const std::vector<std::string>& Output(
       const std::string& name) const override {
-    return output_names_.at(name);
+    auto iter = output_names_.find(name);
+
+    PADDLE_ENFORCE_EQ(iter != output_names_.end(), true,
+                      "Cannot find output %s", name);
+    return iter->second;
   }
 
   framework::proto::VarType::Type GetType(
       const std::string& name) const override {
-    return var_set_.at(name)->Type();
+    auto iter = var_set_.find(name);
+
+    PADDLE_ENFORCE_EQ(iter != var_set_.end(), true,
+                      "Cannot find var %s in GetType", name);
+    return iter->second->Type();
   }
 
   void SetType(const std::string& name,
@@ -495,12 +454,20 @@ class PYBIND11_HIDDEN RuntimeInferVarTypeContext
       VLOG(2) << "SUPER UGLY FIX, remove this when move imperative mode in C++";
     } else {
       var_set_[name]->SetType(type);
+      if ((var_set_[name]->MutableVar()->IsInitialized() == true) &&
+          (var_set_[name]->MutableVar()->Type() != type)) {
+        var_set_[name]->MutableVar()->Clear();
+      }
     }
   }
 
   framework::proto::VarType::Type GetDataType(
       const std::string& name) const override {
-    return var_set_.at(name)->DataType();
+    auto iter = var_set_.find(name);
+
+    PADDLE_ENFORCE_EQ(iter != var_set_.end(), true,
+                      "Cannot find var %s in GetDataType", name);
+    return iter->second->DataType();
   }
 
   void SetDataType(const std::string& name,
@@ -537,13 +504,465 @@ class PYBIND11_HIDDEN RuntimeInferVarTypeContext
   }
 
  private:
-  const imperative::VarBasePtrMap* inputs_;
-  imperative::VarBasePtrMap* outputs_;
-  const framework::AttributeMap* attrs_;
+  const NameVarMap<VarType>& inputs_;
+  const NameVarMap<VarType>* outputs_;
+  const framework::AttributeMap& attrs_;
   std::unordered_map<std::string, std::vector<std::string>> input_names_;
   std::unordered_map<std::string, std::vector<std::string>> output_names_;
-  std::unordered_map<std::string, std::shared_ptr<imperative::VarBase>>
-      var_set_;
+  std::unordered_map<std::string, VarType*> var_set_;
+};
+
+// TODO(zjl): to support py_func layer
+class OpBase {
+  DISABLE_COPY_AND_ASSIGN(OpBase);
+
+ public:
+  OpBase() = default;
+
+  ~OpBase() { VLOG(3) << "Destruct Op: " << Type(); }
+
+  size_t id() const { return id_; }
+
+  const std::string& Type() const { return op_->Type(); }
+
+  const framework::AttributeMap& Attrs() const { return attrs_; }
+
+  const framework::OpInfo& Info() const { return op_->Info(); }
+
+  const framework::OperatorBase& InnerOp() const { return *op_; }
+
+  void ClearBackwardTrace();
+
+  const std::vector<std::shared_ptr<OpBase>>& GradPendingOps() const {
+    return grad_pending_ops_;
+  }
+
+  void SetGradPendingOps(std::vector<std::shared_ptr<OpBase>> pending_ops) {
+    grad_pending_ops_ = std::move(pending_ops);
+  }
+
+  NameVarMap<VariableWrapper>* GetMutableOutsMap() { return &outs_; }
+
+  NameVarMap<VariableWrapper>* GetMutableInsMap() { return &ins_; }
+
+  const NameVarMap<VariableWrapper>& GetInsMap() { return ins_; }
+
+  const NameVarMap<VariableWrapper>& GetOutsMap() { return outs_; }
+
+  const platform::Place& place() const { return place_; }
+
+  // TODO(jiabin) prepare for backward hook
+  void RegisterBackwardHooks(const std::function<void()>& func) {
+    backward_hooks_.emplace_back(func);
+  }
+
+  void InvokeBackwardHooks() {
+    for (const auto& func : backward_hooks_) {
+      func();
+      VLOG(5) << "Invoke Backward Hook for: " << Type() << std::endl;
+    }
+  }
+
+  void SetType(const std::string& type);
+
+  void CheckAttrs() {
+    auto& info = op_->Info();
+    if (info.Checker() != nullptr) {
+      info.Checker()->Check(&attrs_, true);
+    }
+  }
+
+  void SetInput(const std::string& name, VariableWrapperList vars) {
+    ins_[name] = std::move(vars);
+  }
+
+  void SetOutput(const std::string& name, VariableWrapperList vars) {
+    outs_[name] = std::move(vars);
+  }
+
+  void SetAttrMap(const framework::AttributeMap& attrs) { attrs_ = attrs; }
+
+  void SetAttr(const std::string& name, const framework::Attribute& v) {
+    attrs_[name] = v;
+  }
+
+  void SetBlockAttr(const std::string& name, framework::BlockDesc* block) {
+    PADDLE_THROW("SetBlockAttr is not support in dygraph OpBase");
+  }
+
+  const framework::AttributeMap& Attrs() { return attrs_; }
+
+  void SetId(size_t id) { id_ = id; }
+
+  void SetPlace(const platform::Place& place) { place_ = place; }
+
+  bool HasAttr(const std::string& name) const { return attrs_.count(name) > 0; }
+
+  const framework::Attribute& GetAttr(const std::string& name) const {
+    auto it = attrs_.find(name);
+    PADDLE_ENFORCE(it != attrs_.end(), "can not find attribute [%s]", name);
+
+    return it->second;
+  }
+
+  template <typename T>
+  inline const T& Attr(const std::string& name) const {
+    return boost::get<T>(GetAttr(name));
+  }
+
+  void AddAllowedEmptyVar(const VariableWrapper* var) {
+    allow_empty_vars_.emplace(var);
+  }
+
+  bool IsAllowedEmptyVar(const VariableWrapper* var) {
+    return allow_empty_vars_.count(var) > 0;
+  }
+
+  static void Run(const framework::OperatorBase& op,
+                  const NameVarMap<VarBase>& ins,
+                  const NameVarMap<VarBase>& outs,
+                  const framework::AttributeMap& attrs,
+                  const platform::Place& place);
+
+  static void Run(const framework::OperatorBase& op,
+                  const NameVarMap<VariableWrapper>& ins,
+                  const NameVarMap<VariableWrapper>& outs,
+                  const framework::AttributeMap& attrs,
+                  const platform::Place& place);
+
+ private:
+  NameVarMap<VariableWrapper> ins_;
+  NameVarMap<VariableWrapper> outs_;
+  framework::AttributeMap attrs_;
+  std::unique_ptr<framework::OperatorBase> op_;
+
+  std::vector<std::shared_ptr<OpBase>> grad_pending_ops_;
+  platform::Place place_;
+
+  std::unordered_set<const VariableWrapper*> allow_empty_vars_;
+
+  size_t id_{-1UL};
+
+  std::vector<std::function<void()>> backward_hooks_;
+};
+
+template <typename VarType>
+class DygraphInferShapeContext : public framework::InferShapeContext {
+  using DDim = framework::DDim;
+
+ public:
+  DygraphInferShapeContext(const NameVarMap<VarType>* in,
+                           const NameVarMap<VarType>* out,
+                           const framework::AttributeMap* attr)
+      : var_base_map_in_(in), var_base_map_out_(out), attrs_(attr) {}
+
+  bool HasInput(const std::string& name) const override {
+    // has only one input
+    auto it = var_base_map_in_->find(name);
+
+    if (it == var_base_map_in_->end()) {
+      return false;
+    }
+    const auto& in = it->second;
+    if (in.size() == 0) return false;
+    PADDLE_ENFORCE_EQ(
+        in.size(), 1UL,
+        platform::errors::PreconditionNotMet(
+            "Input %s should not have more than one inputs", name));
+    return in[0] != nullptr;
+  }
+
+  bool HasOutput(const std::string& name) const override {
+    // has only one output
+    auto it = var_base_map_out_->find(name);
+    if (it == var_base_map_out_->end()) {
+      return false;
+    }
+    const auto& out = it->second;
+    if (out.size() == 0) {
+      return false;
+    }
+    PADDLE_ENFORCE_EQ(
+        out.size(), 1UL,
+        platform::errors::PreconditionNotMet(
+            "Output %s should not have more than one outputs", name));
+    return out[0] != nullptr;
+  }
+
+  bool HasInputs(const std::string& name) const override {
+    auto it = var_base_map_in_->find(name);
+    if (it == var_base_map_in_->end() || it->second.empty()) {
+      return false;
+    }
+    for (auto& input : it->second) {
+      if (input == nullptr) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool HasOutputs(const std::string& name) const override {
+    auto it = var_base_map_out_->find(name);
+    if (it == var_base_map_out_->end() || it->second.empty()) {
+      return false;
+    }
+    for (auto& output : it->second) {
+      if (output == nullptr) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  framework::AttrReader Attrs() const override {
+    return framework::AttrReader(*attrs_);
+  }
+
+  std::vector<std::string> Inputs(const std::string& name) const override {
+    // return op_.Inputs(name);
+    std::vector<std::string> vec_res;
+    auto it = var_base_map_in_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_in_->end(),
+        platform::errors::NotFound("can not find [%s] in input", name));
+
+    vec_res.reserve(it->second.size());
+    for (auto& var : it->second) {
+      vec_res.push_back(var->Name());
+    }
+
+    return vec_res;
+  }
+
+  std::vector<std::string> Outputs(const std::string& name) const override {
+    std::vector<std::string> vec_res;
+    auto it = var_base_map_out_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_out_->end(),
+        platform::errors::NotFound("can not find [%s] in output", name));
+
+    vec_res.reserve(it->second.size());
+    for (auto& var : it->second) {
+      vec_res.push_back(var->Name());
+    }
+
+    return vec_res;
+  }
+
+  void ShareDim(const std::string& in, const std::string& out, size_t i = 0,
+                size_t j = 0) override {
+    auto in_it = var_base_map_in_->find(in);
+    auto out_it = var_base_map_out_->find(out);
+    PADDLE_ENFORCE_NE(
+        in_it, var_base_map_in_->end(),
+        platform::errors::NotFound("can not found [%s] in input", in));
+    PADDLE_ENFORCE_GT(in_it->second.size(), i,
+                      platform::errors::PreconditionNotMet(
+                          "Inputs %s should have %llu argument", in, i));
+    PADDLE_ENFORCE_NE(
+        out_it, var_base_map_out_->end(),
+        platform::errors::NotFound("can not found [%s] in input", in));
+    PADDLE_ENFORCE_GT(out_it->second.size(), j,
+                      platform::errors::PreconditionNotMet(
+                          "Outputs %s should have %llu argument", out, j));
+
+    framework::Variable* in_var = in_it->second[i]->MutableVar();
+    framework::Variable* out_var = out_it->second[j]->MutableVar();
+
+    PADDLE_ENFORCE_EQ(in_var->Type(), out_var->Type(),
+                      platform::errors::PreconditionNotMet(
+                          "The type of %s and %s is not the same.", in, out));
+
+    if (in_var->IsType<framework::LoDTensor>()) {
+      auto& in_lod_tensor = in_var->Get<framework::LoDTensor>();
+      auto* out_lod_tensor = out_var->GetMutable<framework::LoDTensor>();
+      out_lod_tensor->Resize(in_lod_tensor.dims());
+    } else {
+      auto& in_sele_rows = in_var->Get<framework::SelectedRows>();
+      auto out_sele_rows = out_var->GetMutable<framework::SelectedRows>();
+      out_sele_rows->mutable_value()->Resize(in_sele_rows.value().dims());
+      out_sele_rows->set_rows(in_sele_rows.rows());
+      out_sele_rows->set_height(in_sele_rows.height());
+    }
+  }
+
+  void ShareAllLoD(const std::string& in,
+                   const std::string& out) const override {
+    // do nothing
+  }
+  void ShareLoD(const std::string& in, const std::string& out, size_t i = 0,
+                size_t j = 0) const override {
+    // do nothing
+  }
+
+  bool IsRuntime() const override { return true; }
+
+  // TODO(paddle-dev): Can this be template?
+  std::vector<framework::InferShapeVarPtr> GetInputVarPtrs(
+      const std::string& name) override {
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "GetInputVarPtrs not support in dygraph runtime context"));
+  }
+
+  std::vector<framework::InferShapeVarPtr> GetOutputVarPtrs(
+      const std::string& name) override {
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "GetOutputVarPtrs not support in dygraph runtime context"));
+  }
+
+  DDim GetInputDim(const std::string& name) const override {
+    auto it = var_base_map_in_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_in_->end(),
+        platform::errors::NotFound("can not find [%s] in input", name));
+    PADDLE_ENFORCE_EQ(
+        it->second.size(), 1UL,
+        platform::errors::PreconditionNotMet(
+            "Input(%s) should hold one element, but now it holds %d", name,
+            it->second.size()));
+    return this->GetDim(it->second[0]->MutableVar());
+  }
+
+  std::vector<DDim> GetInputsDim(const std::string& name) const override {
+    // const std::vector<Variable*>& vars = InputVars(name);
+    std::vector<DDim> vec_res;
+    auto it = var_base_map_in_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_in_->end(),
+        platform::errors::NotFound("can not find [%s] in output", name));
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.emplace_back(GetDim(it->second[i]->MutableVar()));
+    }
+
+    return vec_res;
+  }
+
+  std::vector<framework::proto::VarType::Type> GetInputsVarType(
+      const std::string& name) const override {
+    std::vector<framework::proto::VarType::Type> vec_res;
+    auto it = var_base_map_in_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_in_->end(),
+        platform::errors::NotFound("can not find [%s] in input", name));
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.emplace_back(
+          framework::ToVarType(it->second[i]->MutableVar()->Type()));
+    }
+    return vec_res;
+  }
+
+  std::vector<framework::proto::VarType::Type> GetOutputsVarType(
+      const std::string& name) const override {
+    std::vector<framework::proto::VarType::Type> vec_res;
+    auto it = var_base_map_out_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_out_->end(),
+        platform::errors::NotFound("can not find [%s] in output", name));
+    vec_res.reserve(it->second.size());
+    for (size_t i = 0; i < it->second.size(); ++i) {
+      vec_res.emplace_back(
+          framework::ToVarType(it->second[i]->MutableVar()->Type()));
+    }
+    return vec_res;
+  }
+
+  void SetOutputDim(const std::string& name, const DDim& dim) override {
+    auto it = var_base_map_out_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_out_->end(),
+        platform::errors::NotFound("can not find [%s] in output", name));
+
+    SetDim(it->second[0]->MutableVar(), dim);
+  }
+
+  void SetOutputsDim(const std::string& name,
+                     const std::vector<DDim>& dims) override {
+    auto it = var_base_map_out_->find(name);
+    PADDLE_ENFORCE_NE(
+        it, var_base_map_out_->end(),
+        platform::errors::NotFound("can not find [%s] in output", name));
+
+    PADDLE_ENFORCE_EQ(it->second.size(), dims.size(),
+                      platform::errors::PreconditionNotMet(
+                          "dim size [%d] is not match output var number [%d]",
+                          dims.size(), it->second.size()));
+
+    for (size_t i = 0; i < dims.size(); ++i) {
+      SetDim(it->second[i]->MutableVar(), dims[i]);
+    }
+  }
+
+  int32_t GetLoDLevel(const std::string& in, size_t i = 0) const override {
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "GetLoDLevel function not support in dygraph mode"));
+  }
+
+  void SetLoDLevel(const std::string& out, int32_t lod_level,
+                   size_t j = 0) const override {
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "SetLoDLevel function not support in dygraph mode"));
+  }
+
+ protected:
+  DDim GetDim(framework::Variable* var) const {
+    PADDLE_ENFORCE_NOT_NULL(var, platform::errors::PreconditionNotMet(
+                                     "Input variable should not be null"));
+    if (var->IsType<framework::LoDTensor>()) {
+      return var->Get<framework::LoDTensor>().dims();
+    } else if (var->IsType<framework::SelectedRows>()) {
+      return var->Get<framework::SelectedRows>().GetCompleteDims();
+    } else {
+      PADDLE_THROW(platform::errors::PermissionDenied(
+          "Only LoDTensor/SelectedRows support 'GetDim', but Variables "
+          "type_id is xx."));
+    }
+  }
+
+  std::vector<DDim> GetRepeatedDims(const std::string& name) const override {
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "GetRepeatedDims not support in dygraph runtime"));
+  }
+
+  void SetDim(framework::Variable* var, const DDim& dim) {
+    if (var->IsType<framework::LoDTensor>()) {
+      var->GetMutable<framework::LoDTensor>()->Resize(dim);
+    } else if (var->IsType<framework::SelectedRows>()) {
+      var->GetMutable<framework::SelectedRows>()->set_height(dim[0]);
+    } else {
+      PADDLE_THROW(platform::errors::PermissionDenied(
+          "Variable type_id %s, expect LoDTensor/SelectedRows."));
+    }
+  }
+
+  void SetDims(const std::vector<framework::Variable*>& vars,
+               const std::vector<DDim>& dims) {
+    size_t length = vars.size();
+    PADDLE_ENFORCE_EQ(
+        length, dims.size(),
+        platform::errors::PreconditionNotMet(
+            "Vars number [%d] should be equal with dims number [%d]", length,
+            dims.size()));
+    for (size_t i = 0; i < length; ++i) {
+      if (vars[i] == nullptr) {
+        continue;
+      }
+      SetDim(vars[i], dims[i]);
+    }
+  }
+
+  void SetRepeatedDims(const std::string& name,
+                       const std::vector<DDim>& dims) override {
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "SetRepeatedDims not support in dygraph runtime"));
+  }
+
+ private:
+  const NameVarMap<VarType>* var_base_map_in_;
+  const NameVarMap<VarType>* var_base_map_out_;
+  const framework::AttributeMap* attrs_;
 };
 
 }  // namespace imperative

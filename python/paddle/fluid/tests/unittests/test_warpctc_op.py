@@ -178,12 +178,11 @@ class CTCForward(object):
 class TestWarpCTCOp(OpTest):
     def config(self):
         self.batch_size = 4
-        self.num_classes = 8
+        self.num_classes = 12
         self.logits_lod = [[4, 1, 3, 3]]
         self.labels_lod = [[3, 1, 4, 4]]
         self.blank = self.num_classes - 1
         self.norm_by_times = False
-        self.use_cudnn = False
 
     def setUp(self):
         self.op_type = "warpctc"
@@ -219,15 +218,15 @@ class TestWarpCTCOp(OpTest):
         self.attrs = {
             "blank": self.blank,
             "norm_by_times": self.norm_by_times,
-            "use_cudnn": self.use_cudnn
         }
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
     def test_check_grad(self):
         self.outputs['WarpCTCGrad'] = self.gradient
-        self.check_grad(["Logits"], "Loss", max_relative_error=0.007)
+        self.check_grad(
+            ["Logits"], "Loss", max_relative_error=0.007, check_dygraph=False)
 
 
 class TestWarpCTCOpCase1(TestWarpCTCOp):
@@ -238,7 +237,6 @@ class TestWarpCTCOpCase1(TestWarpCTCOp):
         self.labels_lod = [[3, 1, 4, 4]]
         self.blank = 0
         self.norm_by_times = False
-        self.use_cudnn = False
 
 
 class TestWarpCTCOpWithPadding(OpTest):
@@ -251,7 +249,6 @@ class TestWarpCTCOpWithPadding(OpTest):
         self.labels_length = np.array([3, 1, 4, 4], dtype=np.int64)
         self.blank = self.num_classes - 1
         self.norm_by_times = False
-        self.use_cudnn = False
 
     def setUp(self):
         self.op_type = "warpctc"
@@ -307,7 +304,7 @@ class TestWarpCTCOpWithPadding(OpTest):
 
         self.inputs = {
             "Logits": new_logits,
-            "Label": labels,
+            "Label": new_labels,
             "LogitsLength": self.logits_length,
             "LabelLength": self.labels_length
         }
@@ -315,15 +312,15 @@ class TestWarpCTCOpWithPadding(OpTest):
         self.attrs = {
             "blank": self.blank,
             "norm_by_times": self.norm_by_times,
-            "use_cudnn": self.use_cudnn
         }
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_dygraph=False)
 
     def test_check_grad(self):
         self.outputs['WarpCTCGrad'] = self.gradient
-        self.check_grad(["Logits"], "Loss", max_relative_error=0.007)
+        self.check_grad(
+            ["Logits"], "Loss", max_relative_error=0.007, check_dygraph=False)
 
 
 class TestWarpCTCOpWithPaddingCase1(TestWarpCTCOpWithPadding):
@@ -336,23 +333,7 @@ class TestWarpCTCOpWithPaddingCase1(TestWarpCTCOpWithPadding):
         self.labels_length = np.array([3, 1, 4, 4], dtype=np.int64)
         self.blank = 0
         self.norm_by_times = False
-        self.use_cudnn = False
 
-
-# TODO: fix this test failed cuda9/10 manylinux images
-# class TestCudnnCTCOp(TestWarpCTCOp):
-#     def config(self):
-#         self.batch_size = 4
-#         self.num_classes = 8
-#         self.logits_lod = [[4, 1, 3, 3]]
-#         self.labels_lod = [[3, 1, 4, 4]]
-#         self.blank = 0
-#         self.norm_by_times = False
-#         self.use_cudnn = True
-#     def test_check_grad(self):
-#         if sys.version_info < (3, 0):
-#             self.outputs['WarpCTCGrad'] = self.gradient
-#             self.check_grad(["Logits"], "Loss", max_relative_error=0.01)
 
 if __name__ == "__main__":
     unittest.main()

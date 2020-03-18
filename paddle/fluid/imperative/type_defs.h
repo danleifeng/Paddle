@@ -17,27 +17,24 @@ limitations under the License. */
 #include <map>
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace paddle {
 namespace imperative {
 
+class VariableWrapper;
 class VarBase;
 class OpBase;
+class Tracer;
 
-typedef std::map<std::string, std::vector<std::shared_ptr<VarBase>>>
-    VarBasePtrMap;
-typedef std::vector<std::weak_ptr<VarBase>> VarBaseWeakPtrList;
-typedef std::map<std::string, std::vector<OpBase*>> OpBasePtrMap;
-typedef std::unordered_map<
-    const VarBase*,
-    std::pair<platform::Place,
-              std::vector<std::pair<int, std::shared_ptr<VarBase>>>>>
-    BackwardSumMap;  // var_grad -> {place, {id -> var_grad@rename}}
-typedef std::unordered_map<const VarBase*, std::pair<int, bool>> GradientRef;
-// var_grad -> {ref_times, is_first_to_be_accumulate}
+template <typename T>
+using NameVarMap = std::map<std::string, std::vector<std::shared_ptr<T>>>;
+
+using NameVarBaseMap = NameVarMap<VarBase>;
+using NameVariableWrapperMap = NameVarMap<VariableWrapper>;
+
+using WeakNameVarBaseMap =
+    std::map<std::string, std::vector<std::weak_ptr<VarBase>>>;
 
 }  // namespace imperative
 }  // namespace paddle

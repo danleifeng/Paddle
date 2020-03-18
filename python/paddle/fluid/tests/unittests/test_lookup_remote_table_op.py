@@ -25,9 +25,12 @@ import paddle.fluid as fluid
 import paddle.fluid.core as core
 from paddle.fluid.op import Operator
 from paddle.fluid.framework import Program, program_guard
+from paddle.fluid.transpiler.distribute_transpiler import DistributedMode
+from dist_test_utils import *
 
 
 def run_pserver(pserver_id, use_cuda, sync_mode):
+    remove_ps_flag(os.getgid())
     scope = fluid.core.Scope()
     program = Program()
     with fluid.scope_guard(scope):
@@ -51,7 +54,7 @@ def run_pserver(pserver_id, use_cuda, sync_mode):
                     "optimize_blocks": [optimize_block],
                     "endpoint": '127.0.0.1:0',
                     "Fanin": 1,
-                    "sync_mode": True,
+                    "distributed_mode": DistributedMode.SYNC,
                     "grad_to_block_id": []
                 })
 
