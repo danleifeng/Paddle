@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/api/paddle_analysis_config.h"
-#include "paddle/fluid/inference/api/paddle_inference_api.h"
 #include "paddle/fluid/inference/api/paddle_pass_builder.h"
+#include "paddle/fluid/platform/cpu_info.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/gpu_info.h"
 
+#ifdef PADDLE_WITH_CUDA
+DECLARE_uint64(initial_gpu_memory_in_mb);
+#endif
+
 namespace paddle {
+struct MkldnnQuantizerConfig;
+
 extern const std::vector<std::string> kTRTSubgraphPasses;
 extern const std::vector<std::string> kLiteSubgraphPasses;
 
@@ -68,6 +72,7 @@ void AnalysisConfig::EnableUseGpu(uint64_t memory_pool_init_size_mb,
 #ifdef PADDLE_WITH_CUDA
   use_gpu_ = true;
   memory_pool_init_size_mb_ = memory_pool_init_size_mb;
+  FLAGS_initial_gpu_memory_in_mb = memory_pool_init_size_mb_;
   device_id_ = device_id;
 #else
   LOG(ERROR) << "Please compile with gpu to EnableGpu()";
@@ -88,6 +93,12 @@ void AnalysisConfig::DisableFCPadding() {
   Update();
 }
 
+void AnalysisConfig::EnableXpu(int l3_workspace_size) {
+  use_xpu_ = true;
+  xpu_l3_workspace_size_ = l3_workspace_size;
+  Update();
+}
+
 AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
 #define CP_MEMBER(member__) member__ = other.member__;
 
@@ -97,8 +108,8 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
                                   // params_file_ fields.
 
   CP_MEMBER(opt_cache_dir_);
-  prog_file_ = std::move(other.prog_file_);
-  params_file_ = std::move(other.params_file_);
+  CP_MEMBER(prog_file_);
+  CP_MEMBER(params_file_);
 
   CP_MEMBER(use_fc_padding_);
   // GPU related.
@@ -116,23 +127,30 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
   CP_MEMBER(tensorrt_precision_mode_);
   CP_MEMBER(trt_use_static_engine_);
   CP_MEMBER(trt_use_calib_mode_);
-  // NGRAPH related.
-  CP_MEMBER(use_ngraph_);
+  CP_MEMBER(trt_use_oss_);
   // MKLDNN related.
   CP_MEMBER(use_mkldnn_);
   CP_MEMBER(mkldnn_enabled_op_types_);
   CP_MEMBER(mkldnn_cache_capacity_);
+  // Bfloat16 related.
+  CP_MEMBER(use_mkldnn_bfloat16_);
+  CP_MEMBER(bfloat16_enabled_op_types_);
   // Quantization related.
   CP_MEMBER(use_mkldnn_quantizer_);
   CP_MEMBER(mkldnn_quantizer_config_);
   CP_MEMBER(min_input_shape_);
   CP_MEMBER(max_input_shape_);
   CP_MEMBER(optim_input_shape_);
+  CP_MEMBER(disable_trt_plugin_fp16_);
 
   CP_MEMBER(use_lite_);
   CP_MEMBER(lite_precision_mode_);
   CP_MEMBER(lite_passes_filter_);
   CP_MEMBER(lite_ops_filter_);
+  CP_MEMBER(lite_zero_copy_);
+
+  CP_MEMBER(use_xpu_);
+  CP_MEMBER(xpu_l3_workspace_size_);
 
   // profile related.
   CP_MEMBER(with_profile_);
@@ -150,6 +168,8 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
 
   CP_MEMBER(serialized_info_cache_);
 
+  CP_MEMBER(thread_local_stream_);
+
   if (use_gpu_) {
     pass_builder_.reset(new GpuPassStrategy(
         *static_cast<GpuPassStrategy *>(other.pass_builder())));
@@ -161,6 +181,24 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
 #undef CP_MEMBER
 
   Update();
+  if (use_tensorrt_) {
+    // Update() will reset all the passes, when some tensorRT pass is deleted in
+    // other.pass_builder(), it will set again, so we just remove the
+    // deleted_pass.
+    auto all_passes = kTRTSubgraphPasses;
+    auto other_passes = other.pass_builder()->AllPasses();
+    // We should sort them, because the user may call the SwitchIrDebug
+    // interface, which will change the pass.
+    std::sort(all_passes.begin(), all_passes.end());
+    std::sort(other_passes.begin(), other_passes.end());
+    std::vector<std::string> deleted_passes;
+    std::set_difference(all_passes.begin(), all_passes.end(),
+                        other_passes.begin(), other_passes.end(),
+                        std::inserter(deleted_passes, deleted_passes.begin()));
+    for (auto ps : deleted_passes) {
+      pass_builder_->DeletePass(ps);
+    }
+  }
 }
 
 void AnalysisConfig::EnableCUDNN() {
@@ -207,29 +245,33 @@ void AnalysisConfig::EnableMkldnnQuantizer() {
   Update();
 }
 
-void AnalysisConfig::EnableNgraph() {
-#ifdef PADDLE_WITH_NGRAPH
-  pass_builder()->EnableNgraph();
-  use_ngraph_ = true;
+void AnalysisConfig::EnableMkldnnBfloat16() {
+#ifdef PADDLE_WITH_MKLDNN
+  if (platform::MayIUse(platform::cpu_isa_t::avx512_core)) {
+    use_mkldnn_bfloat16_ = true;
+  } else {
+    LOG(INFO) << "CPU does not support BFLOAT16 calculations";
+    use_mkldnn_bfloat16_ = false;
+  }
 #else
-  LOG(ERROR) << "Please compile with NGRAPH first to use NGRAPH";
-  use_ngraph_ = false;
+  LOG(ERROR) << "Please compile with MKLDNN first to use MkldnnBfloat16";
+  use_mkldnn_bfloat16_ = false;
 #endif
+
+  Update();
 }
 
 MkldnnQuantizerConfig *AnalysisConfig::mkldnn_quantizer_config() const {
   PADDLE_ENFORCE_NOT_NULL(mkldnn_quantizer_config_,
-                          "MkldnnQuantizer was not enabled yet.");
+                          platform::errors::PreconditionNotMet(
+                              "MkldnnQuantizer was not enabled yet."));
   return mkldnn_quantizer_config_.get();
 }
 
 void AnalysisConfig::EnableTensorRtEngine(
     int workspace_size, int max_batch_size, int min_subgraph_size,
     AnalysisConfig::Precision precision_mode, bool use_static,
-    bool use_calib_mode,
-    std::map<std::string, std::vector<int>> min_input_shape,
-    std::map<std::string, std::vector<int>> max_input_shape,
-    std::map<std::string, std::vector<int>> optim_input_shape) {
+    bool use_calib_mode) {
 #ifdef PADDLE_WITH_CUDA
   if (!use_gpu()) {
     LOG(ERROR) << "To use TensorRT engine, please call EnableGpu() first";
@@ -243,9 +285,6 @@ void AnalysisConfig::EnableTensorRtEngine(
   tensorrt_precision_mode_ = precision_mode;
   trt_use_static_engine_ = use_static;
   trt_use_calib_mode_ = use_calib_mode;
-  min_input_shape_ = min_input_shape;
-  max_input_shape_ = max_input_shape;
-  optim_input_shape_ = optim_input_shape;
 
   Update();
 #else
@@ -253,6 +292,19 @@ void AnalysisConfig::EnableTensorRtEngine(
       << "To use TensorRT engine, please compile inference lib with GPU first.";
 #endif
 }
+
+void AnalysisConfig::SetTRTDynamicShapeInfo(
+    std::map<std::string, std::vector<int>> min_input_shape,
+    std::map<std::string, std::vector<int>> max_input_shape,
+    std::map<std::string, std::vector<int>> optim_input_shape,
+    bool disable_trt_plugin_fp16) {
+  min_input_shape_ = min_input_shape;
+  max_input_shape_ = max_input_shape;
+  optim_input_shape_ = optim_input_shape;
+  disable_trt_plugin_fp16_ = disable_trt_plugin_fp16;
+}
+
+void AnalysisConfig::EnableTensorRtOSS() { trt_use_oss_ = true; }
 
 // TODO(Superjomn) refactor this, buggy.
 void AnalysisConfig::Update() {
@@ -286,6 +338,10 @@ void AnalysisConfig::Update() {
   if (use_tensorrt_) {
     pass_builder()->ClearPasses();
     for (const auto &pass : kTRTSubgraphPasses) {
+      if (tensorrt_precision_mode_ == AnalysisConfig::Precision::kInt8 &&
+          (pass == "conv_bn_fuse_pass" || pass == "fc_fuse_pass")) {
+        continue;
+      }
       pass_builder()->AppendPass(pass);
     }
   }
@@ -296,20 +352,6 @@ void AnalysisConfig::Update() {
     } else {
       pass_builder()->EnableCUDNN();
     }
-#endif
-  }
-
-  if (use_ngraph_) {
-    if (!enable_ir_optim_) {
-      LOG(ERROR)
-          << "EnableNgraph() only works when IR optimization is enabled.";
-    }
-#ifdef PADDLE_WITH_NGRAPH
-    pass_builder()->EnableNgraph();
-    use_ngraph_ = true;
-#else
-    LOG(ERROR) << "Please compile with NGRAPH first to use NGRAPH";
-    use_ngraph_ = false;
 #endif
   }
 
@@ -332,6 +374,12 @@ void AnalysisConfig::Update() {
     }
 #ifdef PADDLE_WITH_MKLDNN
     pass_builder()->EnableMkldnnQuantizer();
+#endif
+  }
+
+  if (use_mkldnn_bfloat16_) {
+#ifdef PADDLE_WITH_MKLDNN
+    pass_builder()->EnableMkldnnBfloat16();
 #endif
   }
 
@@ -358,6 +406,22 @@ void AnalysisConfig::Update() {
     }
   }
 
+  if (use_xpu_) {
+#ifndef LITE_SUBGRAPH_WITH_XPU
+    PADDLE_THROW(platform::errors::Unavailable(
+        "You tried to use an XPU device, but Paddle was not compiled "
+        "with XPU-runtime."));
+#endif
+    if (!use_lite_) {
+      LOG(WARNING) << "Because XPU currently only works in Paddle-Lite "
+                      "subgraph mode, please make sure you have enabled it.";
+    }
+    PADDLE_ENFORCE_EQ(use_gpu_, false,
+                      platform::errors::Unavailable(
+                          "Currently, XPU and GPU cannot be enabled in the "
+                          "same analysis configuration."));
+  }
+
   if (ir_debug_) {
     pass_builder()->TurnOnDebug();
   }
@@ -381,14 +445,15 @@ std::string AnalysisConfig::SerializeInfoCache() {
 
   ss << enable_memory_optim_;
 
-  ss << use_ngraph_;
-
   ss << use_mkldnn_;
   ss << mkldnn_cache_capacity_;
   for (auto &item : mkldnn_enabled_op_types_) ss << item;
   ss << ";";
 
   ss << use_mkldnn_quantizer_;
+  ss << use_mkldnn_bfloat16_;
+  for (auto &item : bfloat16_enabled_op_types_) ss << item;
+  ss << ";";
   ss << model_from_memory_;
 
   ss << with_profile_;
@@ -403,6 +468,10 @@ std::string AnalysisConfig::SerializeInfoCache() {
   ss << cpu_math_library_num_threads_;
 
   ss << use_lite_;
+  ss << use_xpu_;
+  ss << xpu_l3_workspace_size_;
+
+  ss << thread_local_stream_;
 
   return ss.str();
 }
@@ -418,12 +487,16 @@ float AnalysisConfig::fraction_of_gpu_memory_for_pool() const {
 #ifdef PADDLE_WITH_CUDA
   // Get the GPU memory details and calculate the fraction of memory for the
   // GPU memory pool.
-  size_t gpu_used, gpu_available;
+  size_t gpu_total, gpu_available;
   platform::SetDeviceId(device_id_);
-  platform::GpuMemoryUsage(&gpu_used, &gpu_available);
-  double total_gpu_memory = (gpu_used + gpu_available) / 1024. / 1024.;
+  platform::GpuMemoryUsage(&gpu_available, &gpu_total);
+  double total_gpu_memory = gpu_total / 1024. / 1024.;
   float fraction_of_gpu_memory =
       static_cast<double>(memory_pool_init_size_mb()) / total_gpu_memory;
+  VLOG(3) << "total_gpu_memory is " << total_gpu_memory
+          << "M, gpu_available is " << gpu_available / 1024. / 1024.
+          << "M, memory_pool_init_size is " << memory_pool_init_size_mb()
+          << "M.";
   return fraction_of_gpu_memory;
 #else
   return 0.;
@@ -478,13 +551,14 @@ void AnalysisConfig::DisableGlogInfo() {
 }
 
 void AnalysisConfig::EnableLiteEngine(
-    AnalysisConfig::Precision precision_mode,
+    AnalysisConfig::Precision precision_mode, bool zero_copy,
     const std::vector<std::string> &passes_filter,
     const std::vector<std::string> &ops_filter) {
   use_lite_ = true;
   lite_precision_mode_ = precision_mode;
   lite_passes_filter_ = passes_filter;
   lite_ops_filter_ = ops_filter;
+  lite_zero_copy_ = zero_copy;
   Update();
 }
 
@@ -494,5 +568,7 @@ void AnalysisConfig::PartiallyRelease() {
   params_file_.clear();
   params_file_.shrink_to_fit();
 }
+
+void AnalysisConfig::EnableGpuMultiStream() { thread_local_stream_ = true; }
 
 }  // namespace paddle

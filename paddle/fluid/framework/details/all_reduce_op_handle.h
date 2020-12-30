@@ -20,9 +20,23 @@
 #include "paddle/fluid/framework/details/op_handle_base.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/scope.h"
+
+namespace paddle {
+namespace framework {
+namespace ir {
+class Node;
+}  // namespace ir
+}  // namespace framework
+namespace platform {
+class NCCLCommunicator;
+}  // namespace platform
+}  // namespace paddle
 #if defined(PADDLE_WITH_NCCL)
 #include "paddle/fluid/framework/details/nccl_op_handle.h"
 #include "paddle/fluid/platform/nccl_helper.h"
+#elif defined(PADDLE_WITH_XPU_BKCL)
+#include "paddle/fluid/framework/details/bkcl_op_handle.h"
+#include "paddle/fluid/platform/bkcl_helper.h"
 #endif
 
 namespace paddle {
@@ -35,6 +49,12 @@ class AllReduceOpHandle : public NCCLOpHandleBase {
   AllReduceOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
                     const std::vector<platform::Place> &places,
                     const platform::NCCLCommunicator *ctxs);
+#elif defined(PADDLE_WITH_XPU_BKCL)
+class AllReduceOpHandle : public BKCLOpHandleBase {
+ public:
+  AllReduceOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
+                    const std::vector<platform::Place> &places,
+                    const platform::BKCLCommunicator *ctxs);
 #else
 class AllReduceOpHandle : public OpHandleBase {
  public:
@@ -54,8 +74,8 @@ class AllReduceOpHandle : public OpHandleBase {
 
   std::vector<Scope *> local_scopes_;
 
-#ifndef PADDLE_WITH_NCCL
-  // NCCLOpHandleBase already have these attributes.
+#if !(PADDLE_WITH_NCCL || PADDLE_WITH_XPU_BKCL)
+  // NCCLOpHandleBase and BKCLOpHandleBase already have these attributes.
   // Will polish it by class inheritance framework.
   std::vector<platform::Place> places_;
 #endif
@@ -65,6 +85,11 @@ class AllReduceOpHandle : public OpHandleBase {
       const std::vector<std::function<void()>> &all_reduce_calls);
 
   void SyncNCCLAllReduce();
+#endif
+
+#if defined(PADDLE_WITH_XPU_BKCL)
+  void BKCLAllReduceFunc(
+      const std::vector<std::function<void()>> &all_reduce_calls);
 #endif
 
   void AllReduceImpl(const std::vector<VarHandle *> &in_var_handles,

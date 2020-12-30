@@ -236,20 +236,24 @@ def single_defcom_extract(start_from, srcls, is_class_begin=False):
         if srcls[x].startswith('def ') or srcls[x].startswith('class '):
             break
         else:
-            if (comstart == -1 and srcls[x].replace(" ", '').replace(
-                    "\t", '').replace("\n", '').startswith("\"\"\"")):
-                comstart = x
-                comstyle = 2
-                continue
+            if comstart == -1:
+                s = srcls[x].replace(" ", '').replace("\t",
+                                                      '').replace("\n", '')
+                if s.startswith("\"\"\"") or s.startswith("r\"\"\""):
+                    comstart = x
+                    comstyle = 2
+                    continue
             if (comstyle == 2 and comstart != -1 and
                     srcls[x].replace(" ", '').replace("\t", '').replace(
                         "\n", '').startswith("\"\"\"")):
                 break
-            if (comstart == -1 and srcls[x].replace(" ", '').replace(
-                    "\t", '').replace("\n", '').startswith("\'\'\'")):
-                comstart = x
-                comstyle = 1
-                continue
+            if comstart == -1:
+                s = srcls[x].replace(" ", '').replace("\t",
+                                                      '').replace("\n", '')
+                if s.startswith("\'\'\'") or s.startswith("r\'\'\'"):
+                    comstart = x
+                    comstyle = 1
+                    continue
             if (comstyle == 1 and comstart != -1 and
                     srcls[x].replace(" ", '').replace("\t", '').replace(
                         "\n", '').startswith("\'\'\'")):
@@ -457,7 +461,9 @@ def get_filenames():
     '''
     filenames = []
     global methods
+    global whl_error
     methods = []
+    whl_error = []
     get_incrementapi()
     API_spec = 'dev_pr_diff_api.spec'
     with open(API_spec) as f:
@@ -466,17 +472,19 @@ def get_filenames():
             try:
                 module = eval(api).__module__
             except AttributeError:
+                whl_error.append(api)
                 continue
-            if len(module.split('.')) > 2:
+            if len(module.split('.')) > 1:
                 filename = '../python/'
                 module_py = '%s.py' % module.split('.')[-1]
                 for i in range(0, len(module.split('.')) - 1):
                     filename = filename + '%s/' % module.split('.')[i]
                 filename = filename + module_py
             else:
-                print("\n----Exception in get api filename----\n")
-                print("\n" + api + 'module is ' + module + "\n")
-            if filename not in filenames:
+                filename = ''
+                print("\nWARNING:----Exception in get api filename----\n")
+                print("\n" + api + ' module is ' + module + "\n")
+            if filename != '' and filename not in filenames:
                 filenames.append(filename)
             # get all methods
             method = ''
@@ -488,7 +496,7 @@ def get_filenames():
                 name = '%s.%s' % (api.split('.')[-2], api.split('.')[-1])
             else:
                 name = ''
-                print("\n----Exception in get api methods----\n")
+                print("\nWARNING:----Exception in get api methods----\n")
                 print("\n" + line + "\n")
                 print("\n" + api + ' method is None!!!' + "\n")
             for j in range(2, len(module.split('.'))):
@@ -530,13 +538,6 @@ def get_incrementapi():
                 f.write('\n')
 
 
-# only white on CPU
-gpu_not_white = [
-    "deformable_conv", "cuda_places", "CUDAPinnedPlace", "CUDAPlace",
-    "cuda_profiler", 'DGCMomentumOptimizer'
-]
-
-
 def get_wlist():
     '''
     this function will get the white list of API.
@@ -547,14 +548,26 @@ def get_wlist():
 
     '''
     wlist = []
+    wlist_file = []
+    # only white on CPU
+    gpu_not_white = []
     with open("wlist.json", 'r') as load_f:
         load_dict = json.load(load_f)
         for key in load_dict:
-            wlist = wlist + load_dict[key]
-    return wlist
+            if key == 'wlist_dir':
+                for item in load_dict[key]:
+                    wlist_file.append(item["name"])
+            elif key == "gpu_not_white":
+                gpu_not_white = load_dict[key]
+            elif key == "wlist_api":
+                for item in load_dict[key]:
+                    wlist.append(item["name"])
+            else:
+                wlist = wlist + load_dict[key]
+    return wlist, wlist_file, gpu_not_white
 
 
-wlist = get_wlist()
+wlist, wlist_file, gpu_not_white = get_wlist()
 
 if len(sys.argv) < 2:
     print("Error: inadequate number of arguments")
@@ -577,11 +590,17 @@ else:
         os.mkdir("./samplecode_temp")
     cpus = multiprocessing.cpu_count()
     filenames = get_filenames()
-    if len(filenames) == 0:
+    if len(filenames) == 0 and len(whl_error) == 0:
         print("-----API_PR.spec is the same as API_DEV.spec-----")
         exit(0)
-    elif '../python/paddle/fluid/core_avx.py' in filenames:
-        filenames.remove('../python/paddle/fluid/core_avx.py')
+    rm_file = []
+    for f in filenames:
+        for w_file in wlist_file:
+            if f.startswith(w_file):
+                rm_file.append(f)
+                filenames.remove(f)
+    if len(rm_file) != 0:
+        print("REMOVE white files: %s" % rm_file)
     print("API_PR is diff from API_DEV: %s" % filenames)
     one_part_filenum = int(math.ceil(len(filenames) / cpus))
     if one_part_filenum == 0:
@@ -605,8 +624,27 @@ else:
     os.rmdir("./samplecode_temp")
 
     print("----------------End of the Check--------------------")
-    for temp in result:
-        if not temp:
-            print("Mistakes found in sample codes")
-            exit(1)
+    if len(whl_error) != 0:
+        print("%s is not in whl." % whl_error)
+        print("")
+        print("Please check the whl package and API_PR.spec!")
+        print("You can follow these steps in order to generate API.spec:")
+        print("1. cd ${paddle_path}, compile paddle;")
+        print("2. pip install build/python/dist/(build whl package);")
+        print(
+            "3. run 'python tools/print_signatures.py paddle > paddle/fluid/API.spec'."
+        )
+        for temp in result:
+            if not temp:
+                print("")
+                print("In addition, mistakes found in sample codes.")
+                print("Please check sample codes.")
+        print("----------------------------------------------------")
+        exit(1)
+    else:
+        for temp in result:
+            if not temp:
+                print("Mistakes found in sample codes.")
+                print("Please check sample codes.")
+                exit(1)
     print("Sample code check is successful!")

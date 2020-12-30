@@ -56,6 +56,12 @@ inline std::vector<int> get_expand_times(
       TensorCopySync(*expand_tensor, platform::CPUPlace(), &cpu_expand_tensor);
       expand_data = cpu_expand_tensor.data<int>();
     }
+#ifdef PADDLE_WITH_XPU
+    if (platform::is_xpu_place(expand_tensor->place())) {
+      TensorCopySync(*expand_tensor, platform::CPUPlace(), &cpu_expand_tensor);
+      expand_data = cpu_expand_tensor.data<int>();
+    }
+#endif
     auto vec_epxand_times =
         std::vector<int>(expand_data, expand_data + expand_tensor->numel());
     return vec_epxand_times;
@@ -72,7 +78,15 @@ inline std::vector<int> get_expand_times(
         framework::Tensor temp;
         TensorCopySync(*tensor, platform::CPUPlace(), &temp);
         vec_epxand_times.push_back(*temp.data<int32_t>());
-      } else {
+      }
+#ifdef PADDLE_WITH_XPU
+      else if (platform::is_xpu_place(tensor->place())) {  // NOLINT
+        framework::Tensor temp;
+        TensorCopySync(*tensor, platform::CPUPlace(), &temp);
+        vec_epxand_times.push_back(*temp.data<int32_t>());
+      }
+#endif
+      else {  // NOLINT
         vec_epxand_times.push_back(*tensor->data<int32_t>());
       }
     }
@@ -90,18 +104,26 @@ using EigenVector = framework::EigenVector<T, MajorType, IndexType>;
 template <typename T, size_t D, int MajorType = Eigen::RowMajor,
           typename IndexType = Eigen::DenseIndex>
 using EigenTensor = framework::EigenTensor<T, D, MajorType, IndexType>;
+using framework::To32BitIndex;
 
 template <typename DeviceContext, typename T>
 class ExpandKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& context) const override {
     auto rank = context.Input<Tensor>("X")->dims().size();
-    switch (rank) {
-      REP_EXPAND_TEMPLATE(MAX_RANK_SUPPORTED)
-      default:
-        PADDLE_ENFORCE(false,
-                       "Only support tensor with rank being between 1 and 6.");
-    }
+    PADDLE_ENFORCE_GE(
+        rank, 1,
+        platform::errors::InvalidArgument(
+            "The number of dimensions of the input 'x' for Op(expand) "
+            "must be greater than or equal to 1, but the value received is %d.",
+            rank));
+    PADDLE_ENFORCE_LE(
+        rank, MAX_RANK_SUPPORTED,
+        platform::errors::InvalidArgument(
+            "The number of dimensions of the input 'x' for Op(expand) "
+            "must be less than or equal to %d, but the value received is %d.",
+            MAX_RANK_SUPPORTED, rank));
+    switch (rank) { REP_EXPAND_TEMPLATE(MAX_RANK_SUPPORTED) }
   }
 
  protected:
@@ -111,9 +133,13 @@ class ExpandKernel : public framework::OpKernel<T> {
 
     auto in_dims = in0->dims();
     auto expand_times = get_expand_times(context);
-    PADDLE_ENFORCE_EQ(static_cast<size_t>(in_dims.size()), expand_times.size(),
-                      "The number of Attr(expand_times)'s value must be equal "
-                      "to the rank of Input(X).");
+    PADDLE_ENFORCE_EQ(
+        static_cast<size_t>(in_dims.size()), expand_times.size(),
+        platform::errors::InvalidArgument(
+            "The number of elements (%d) of 'expand_times' for "
+            "Op(expand) must be equal to the number "
+            "of dimensions (%d) of the input.",
+            expand_times.size(), static_cast<size_t>(in_dims.size())));
     auto* out0 = context.Output<Tensor>("Out");
     Eigen::DSizes<int, Rank> bcast_dims;
     for (size_t i = 0; i < expand_times.size(); ++i) {
@@ -131,7 +157,13 @@ class ExpandKernel : public framework::OpKernel<T> {
     auto y = EigenTensor<T, Rank>::From(*out0);
     auto& place =
         *context.template device_context<DeviceContext>().eigen_device();
-    y.device(place) = x.broadcast(bcast_dims);
+    // use 32-bit index to speed up
+    bool use_32bit_index = y.size() < Eigen::NumTraits<int>::highest();
+    if (use_32bit_index) {
+      To32BitIndex(y).device(place) = To32BitIndex(x).broadcast(bcast_dims);
+    } else {
+      y.device(place) = x.broadcast(bcast_dims);
+    }
   }
 };
 
@@ -172,12 +204,19 @@ class ExpandGradKernel : public framework::OpKernel<T> {
       framework::TensorCopy(*in0, context.GetPlace(), context.device_context(),
                             out0);
     } else {
-      switch (dims) {
-        REP_EXPAND_GRAD_TEMPLATE(MAX_RANK_SUPPORTED)
-        default:
-          PADDLE_ENFORCE(
-              false, "Only support tensor with rank being between 1 and 6.");
-      }
+      PADDLE_ENFORCE_GE(dims, 1, platform::errors::InvalidArgument(
+                                     "The number of dimensions of the input "
+                                     "'Out@GRAD' for Op(expand_grad)"
+                                     " must be greater than or equal to 1, but "
+                                     "the value received is %d.",
+                                     dims));
+      PADDLE_ENFORCE_LE(dims, MAX_RANK_SUPPORTED,
+                        platform::errors::InvalidArgument(
+                            "The number of dimensions of the input 'Out@GRAD' "
+                            "for Op(expand_grad) must be less than or equal "
+                            "to %d, but the value received is %d.",
+                            MAX_RANK_SUPPORTED, dims));
+      switch (dims) { REP_EXPAND_GRAD_TEMPLATE(MAX_RANK_SUPPORTED) }
     }
   }
 
@@ -189,11 +228,15 @@ class ExpandGradKernel : public framework::OpKernel<T> {
     size_t reshape_size = reshape_dims_vec.size();
     size_t reduce_size = reduce_dims_vec.size();
     PADDLE_ENFORCE_EQ(reshape_size, reshape_dims_vec.size(),
-                      "Inconsistent size between template Dims and "
-                      "reshape dimensions.");
+                      platform::errors::InvalidArgument(
+                          "Inconsistent size between template Dims (%d) and "
+                          "reshape dimensions (%d).",
+                          reshape_size, reshape_dims_vec.size()));
     PADDLE_ENFORCE_EQ(reduce_size, reduce_dims_vec.size(),
-                      "Inconsistent size between template Dims and "
-                      "reduce dimensions.");
+                      platform::errors::InvalidArgument(
+                          "Inconsistent size between template Dims (%d) and "
+                          "reduce dimensions (%d).",
+                          reduce_size, reduce_dims_vec.size()));
     auto* in0 = context.Input<Tensor>(framework::GradVarName("Out"));
     auto* out0 = context.Output<Tensor>(framework::GradVarName("X"));
     out0->mutable_data<T>(context.GetPlace());

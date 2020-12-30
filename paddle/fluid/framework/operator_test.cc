@@ -16,6 +16,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
+#include "paddle/fluid/platform/errors.h"
 #include "paddle/fluid/platform/init.h"
 
 DECLARE_bool(enable_unused_var_check);
@@ -75,7 +76,7 @@ REGISTER_OP_WITHOUT_GRADIENT(test_operator,
                              paddle::framework::OpWithoutKernelCheckerMaker);
 
 TEST(OperatorBase, all) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("test_operator");
   BuildVar("input", {"IN1"}, op_desc.add_inputs());
@@ -227,7 +228,7 @@ REGISTER_OP_KERNEL_WITH_CUSTOM_TYPE(
 
 // test with single input
 TEST(OpKernel, all) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("op_with_kernel");
   BuildVar("x", {"IN1"}, op_desc.add_inputs());
@@ -267,7 +268,7 @@ REGISTER_OP_CPU_KERNEL(op_multi_inputs_with_kernel,
 
 // test with multi inputs
 TEST(OpKernel, multi_inputs) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
 
   op_desc.set_type("op_multi_inputs_with_kernel");
@@ -418,7 +419,7 @@ REGISTER_OP_CPU_KERNEL(indicate_other_data_type_test,
                            paddle::platform::CPUDeviceContext, int>);
 
 TEST(IndicateVarDataTypeTest, lodtensor) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("indicate_lod_tensor_data_type_test");
   BuildVar("LoDTensor", {"lodtensor_1"}, op_desc.add_inputs());
@@ -446,7 +447,7 @@ TEST(IndicateVarDataTypeTest, lodtensor) {
 }
 
 TEST(IndicateVarDataTypeTest, selectedrows) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("indicate_selected_rows_data_type_test");
   BuildVar("SelectedRows", {"selected_rows_1"}, op_desc.add_inputs());
@@ -473,17 +474,17 @@ TEST(IndicateVarDataTypeTest, selectedrows) {
 }
 
 TEST(IndicateVarDataTypeTest, other) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("indicate_other_data_type_test");
-  BuildVar("Other", {"lod_tensor_array_1"}, op_desc.add_inputs());
+  BuildVar("Other", {"lod_rank_table_1"}, op_desc.add_inputs());
 
   paddle::platform::CPUPlace cpu_place;
   paddle::framework::Scope scope;
 
   auto op = paddle::framework::OpRegistry::CreateOp(op_desc);
-  auto* var = scope.Var("lod_tensor_array_1");
-  var->GetMutable<paddle::framework::LoDTensorArray>();
+  auto* var = scope.Var("lod_rank_table_1");
+  var->GetMutable<paddle::framework::LoDRankTable>();
 
   bool caught = false;
   try {
@@ -491,17 +492,19 @@ TEST(IndicateVarDataTypeTest, other) {
   } catch (paddle::platform::EnforceNotMet& err) {
     caught = true;
     std::string ex_msg = err.what();
-    EXPECT_TRUE(ex_msg.find("The Input Variable(Other) of "
-                            "indicate_other_data_type_test Op used to "
-                            "determine kernel data type "
-                            "is empty or not LoDTensor or SelectedRows") !=
-                std::string::npos);
+    EXPECT_TRUE(
+        ex_msg.find(
+            "The Input Variable(Other) of "
+            "(indicate_other_data_type_test) Operator used to "
+            "determine kernel data type "
+            "is empty or not LoDTensor or SelectedRows or LoDTensorArray.") !=
+        std::string::npos);
   }
   ASSERT_TRUE(caught);
 }
 
 TEST(ExecutionContextAttrAndInOut, new_api) {
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("test_operator");
   BuildVar("input", {"IN1"}, op_desc.add_inputs());
@@ -525,13 +528,13 @@ TEST(ExecutionContextAttrAndInOut, new_api) {
 
   paddle::framework::RuntimeContext ctx({}, {});
   paddle::framework::ExecutionContext exe_context(*(op.get()), scope, *dev_ctx,
-                                                  ctx, nullptr);
+                                                  ctx);
 
   ASSERT_EQ(exe_context.InputSize("input"), 1u);
   ASSERT_EQ(exe_context.OutputSize("output"), 1u);
 
   auto attr_map = exe_context.Attrs();
-  ASSERT_EQ(boost::get<float>(attr_map["scale"]), 3.14f);
+  ASSERT_EQ(BOOST_GET(float, attr_map["scale"]), 3.14f);
   ASSERT_EQ(exe_context.Type(), "test_operator");
 }
 
@@ -544,12 +547,13 @@ class GetLoDLevelTest : public OperatorWithKernel {
 
  protected:
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasInputs("X"), true,
-                      "Input(X) should not be null.");
-    PADDLE_ENFORCE_EQ(ctx->HasOutput("Out"), true,
-                      "Output(Out) should not be null.");
-    PADDLE_ENFORCE_GT(ctx->GetLoDLevel("X"), 0,
-                      "The LoD level Input(X) should be larger than 0.");
+    OP_INOUT_CHECK(ctx->HasInputs("X"), "Input", "X", "GetLoDLevelTest");
+    OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "GetLoDLevelTest");
+
+    auto lod_level = ctx->GetLoDLevel("X");
+    PADDLE_ENFORCE_GT(lod_level, 0,
+                      paddle::platform::errors::InvalidArgument(
+                          "The LoD level Input(X) should be larger than 0."));
   }
 };
 
@@ -559,10 +563,8 @@ class SetLoDLevelTest : public OperatorWithKernel {
 
  protected:
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasInputs("X"), true,
-                      "Input(X) should not be null.");
-    PADDLE_ENFORCE_EQ(ctx->HasOutput("Out"), true,
-                      "Output(Out) should not be null.");
+    OP_INOUT_CHECK(ctx->HasInputs("X"), "Input", "X", "SetLoDLevelTest");
+    OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "SetLoDLevelTest");
     ctx->SetLoDLevel("Out", 1);
   }
 };
@@ -594,7 +596,7 @@ REGISTER_OP_CPU_KERNEL(set_lod_level_test,
                            paddle::platform::CPUDeviceContext, float>);
 
 void SetGetLoDLevelTestMain(std::string op_type) {
-  paddle::framework::InitDevices(false, {});
+  paddle::framework::InitDevices({});
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type(op_type);
   BuildVar("X", {"x.0"}, op_desc.add_inputs());
@@ -699,7 +701,7 @@ REGISTER_OP_CPU_KERNEL(op_without_unused_var,
 TEST(OpWithUnusedVar, all) {
   // enable the unused_var_check
   FLAGS_enable_unused_var_check = true;
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("op_with_unused_var");
   BuildVar("X", {"X"}, op_desc.add_inputs());
@@ -724,7 +726,7 @@ TEST(OpWithoutUnusedVar, all) {
   // enable the unused_var_check
   FLAGS_enable_unused_var_check = true;
 
-  paddle::framework::InitDevices(true);
+  paddle::framework::InitDevices();
   paddle::framework::proto::OpDesc op_desc;
   op_desc.set_type("op_without_unused_var");
   BuildVar("X", {"X"}, op_desc.add_inputs());

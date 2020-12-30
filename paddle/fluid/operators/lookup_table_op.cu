@@ -144,7 +144,7 @@ class LookupTableGradCUDAKernel : public framework::OpKernel<T> {
       // copy GPU memory to CPU pinned memory
       framework::Vector<int64_t> new_rows;
       new_rows.resize(ids_num);
-      auto gpu_place = boost::get<platform::CUDAPlace>(context.GetPlace());
+      auto gpu_place = BOOST_GET_CONST(platform::CUDAPlace, context.GetPlace());
 
       // TODO(yuyang18): Strange code here.
       memory::Copy(gpu_place, new_rows.CUDAMutableData(context.GetPlace()),
@@ -161,11 +161,12 @@ class LookupTableGradCUDAKernel : public framework::OpKernel<T> {
       auto d_output_dims_2d =
           framework::flatten_to_2d(d_output_dims, d_output_dims.size() - 1);
       PADDLE_ENFORCE_EQ(d_table_value->dims(), d_output_dims_2d,
-                        "ShapeError: The shape of lookup_table@Grad and "
-                        "output@Grad should be same. "
-                        "But received lookup_table@Grad's shape = [%s], "
-                        "output@Grad's shape = [%s].",
-                        d_table_value->dims(), d_output_dims_2d);
+                        platform::errors::InvalidArgument(
+                            "ShapeError: The shape of lookup_table@Grad and "
+                            "output@Grad should be same. "
+                            "But received lookup_table@Grad's shape = [%s], "
+                            "output@Grad's shape = [%s].",
+                            d_table_value->dims(), d_output_dims_2d));
       memory::Copy(gpu_place, d_table_data, gpu_place, d_output_data,
                    d_output->numel() * sizeof(T), stream);
 

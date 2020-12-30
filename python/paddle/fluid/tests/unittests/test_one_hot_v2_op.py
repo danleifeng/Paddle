@@ -18,6 +18,7 @@ import unittest
 import numpy as np
 import math
 from op_test import OpTest
+import paddle
 import paddle.fluid as fluid
 import paddle.fluid.core as core
 import paddle.fluid.framework as framework
@@ -169,7 +170,7 @@ class TestOneHotOp_exception(unittest.TestCase):
                         fetch_list=[one_hot_out],
                         return_numpy=False)
 
-            self.assertRaises(core.EnforceNotMet, run)
+            self.assertRaises(ValueError, run)
 
 
 class TestOneHotOpApi(unittest.TestCase):
@@ -204,5 +205,21 @@ class TestOneHotOpApi(unittest.TestCase):
                       return_numpy=False)
 
 
+class BadInputTestOnehotV2(unittest.TestCase):
+    def test_error(self):
+        with fluid.program_guard(fluid.Program()):
+
+            def test_bad_x():
+                label = fluid.layers.data(
+                    name="label",
+                    shape=[4],
+                    append_batch_size=False,
+                    dtype="float32")
+                one_hot_label = fluid.one_hot(input=label, depth=4)
+
+            self.assertRaises(TypeError, test_bad_x)
+
+
 if __name__ == '__main__':
+    paddle.enable_static()
     unittest.main()

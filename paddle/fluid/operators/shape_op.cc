@@ -24,10 +24,12 @@ class ShapeOp : public framework::OperatorWithKernel {
   using framework::OperatorWithKernel::OperatorWithKernel;
 
   void InferShape(framework::InferShapeContext *ctx) const override {
-    PADDLE_ENFORCE(ctx->HasInput("Input"),
-                   "Input (Input) of get_shape op should not be null.");
-    PADDLE_ENFORCE(ctx->HasOutput("Out"),
-                   "Output (Out) of get_shape op should not be null.");
+    PADDLE_ENFORCE_EQ(ctx->HasInput("Input"), true,
+                      platform::errors::InvalidArgument(
+                          "Input (Input) of get_shape op should not be null."));
+    PADDLE_ENFORCE_EQ(ctx->HasOutput("Out"), true,
+                      platform::errors::InvalidArgument(
+                          "Output (Out) of get_shape op should not be null."));
     auto in_dim = ctx->GetInputDim("Input");
     ctx->SetOutputDim("Out", {in_dim.size()});
   }
@@ -66,6 +68,6 @@ REGISTER_OPERATOR(
     shape, ops::ShapeOp, ops::ShapeOpMaker,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>);
-REGISTER_OP_CPU_KERNEL(shape, ops::ShapeKernel<int>, ops::ShapeKernel<int32_t>,
+REGISTER_OP_CPU_KERNEL(shape, ops::ShapeKernel<bool>, ops::ShapeKernel<int>,
                        ops::ShapeKernel<int64_t>, ops::ShapeKernel<float>,
                        ops::ShapeKernel<double>);

@@ -12,16 +12,75 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
+import numpy as np
+
+import paddle
 from .. import framework
 from .. import core
-from . import BackwardStrategy
-from ..framework import Variable, _getitem_impl_
 from .. import unique_name
-import numpy as np
+from ..framework import Variable, Parameter, ParamBase
+from .base import switch_to_static_graph
 from .math_op_patch import monkey_patch_math_varbase
+from .parallel import scale_loss
 
 
 def monkey_patch_varbase():
+    @switch_to_static_graph
+    def _to_static_var(self, to_parameter=False, **kwargs):
+        """
+        **Notes**:
+            **This API is ONLY available in Dygraph mode**
+
+        Transform a VarBase into static Variable with same attributes. It's a low level interface used
+        in dy2static and shall not be called directly.
+
+        Args:
+            to_parameter (bool): It takes effect only if the input a VarBase. If set True,
+                                 the VarBase will be converted into framework.Parameters. Otherwise, it will
+                                 be converted into framework.Variable. Default False.
+
+        Examples:
+            .. code-block:: python
+
+                import paddle.fluid as fluid
+                from paddle.fluid.dygraph.base import to_variable
+                import numpy as np
+
+                data = np.ones([3, 1024], dtype='float32')
+                with fluid.dygraph.guard():
+                    var_base = to_variable(data)
+                    static_var = var_base._to_static_var()
+
+        """
+
+        # Note: getattr(self, attr, None) will call x.grad=x.gradient(), but gradient() only available in dygraph. 
+        # It will fail. So, for propery in dygraph only, should not let it getattr(self, attr, None).
+        attr_not_need_keys = ['grad']
+        if isinstance(self, ParamBase):
+            attr_kwargs = self.__dict__.copy()
+        else:
+            attr_names = []
+            for name in dir(self):
+                if name not in attr_not_need_keys and not (
+                        inspect.ismethod(getattr(self, name)) or
+                        name.startswith('_')):
+                    attr_names.append(name)
+            attr_kwargs = {name: getattr(self, name) for name in attr_names}
+
+        attr_keys = ['block', 'shape', 'dtype', 'type', 'name', 'persistable']
+        for attr in attr_keys:
+            attr_kwargs[attr] = getattr(self, attr, None)
+
+        attr_kwargs.update(kwargs)
+
+        if to_parameter or isinstance(self, ParamBase):
+            del attr_kwargs['persistable']
+            static_var = Parameter(**attr_kwargs)
+        else:
+            static_var = Variable(**attr_kwargs)
+        return static_var
+
     # TODO(jiabin): move this to cplusplus end if we find some performance issue on it
     @framework.dygraph_only
     def set_value(self, value):
@@ -73,15 +132,19 @@ def monkey_patch_varbase():
                                       framework._current_expected_place())
 
     @framework.dygraph_only
-    def backward(self, backward_strategy=None):
+    def backward(self, retain_graph=False):
         """
-        **Notes**:
-            **This API is ONLY available in Dygraph mode**
+        Run backward of current Graph which starts from current Tensor.
 
-        Run backward of current Graph which starts from current Variable
+        The new gradient will accumulat on previous gradient.
+
+        You can clear gradient by ``Tensor.clear_grad()`` .
 
         Args:
-            backward_strategy( :ref:`api_fluid_dygraph_BackwardStrategy` ): The Backward Strategy to run backward
+            retain_graph(bool, optional): If False, the graph used to compute grads will be freed. If you would
+                like to add more ops to the built graph after calling this method( :code:`backward` ), set the parameter
+                :code:`retain_graph` to True, then the grads will be retained. Thus, seting it to False is much more memory-efficient.
+                Defaults to False.
 
         Returns:
             NoneType: None
@@ -89,31 +152,29 @@ def monkey_patch_varbase():
         Examples:
             .. code-block:: python
 
-                import paddle.fluid as fluid
-                import numpy as np
+                x = paddle.to_tensor(5., stop_gradient=False)
+                for i in range(5):
+                    y = paddle.pow(x, 4.0)
+                    y.backward()
+                    print("{}: {}".format(i, x.grad))
+                # 0: [500.]
+                # 1: [1000.]
+                # 2: [1500.]
+                # 3: [2000.]
+                # 4: [2500.]
 
-                x = np.ones([2, 2], np.float32)
-                with fluid.dygraph.guard():
-                    inputs2 = []
-                    for _ in range(10):
-                        tmp = fluid.dygraph.base.to_variable(x)
-                        # if we don't set tmp's stop_gradient as False then, all path to loss will has no gradient since
-                        # there is no one need gradient on it.
-                        tmp.stop_gradient=False
-                        inputs2.append(tmp)
-                    ret2 = fluid.layers.sums(inputs2)
-                    loss2 = fluid.layers.reduce_sum(ret2)
-                    backward_strategy = fluid.dygraph.BackwardStrategy()
-                    backward_strategy.sort_sum_gradient = True
-                    loss2.backward(backward_strategy)
+                x.clear_grad()
+                print("{}".format(x.grad))
+                # 0.
 
         """
         if framework.in_dygraph_mode():
-            if backward_strategy is None:
-                backward_strategy = BackwardStrategy()
-                backward_strategy.sort_sum_gradient = False
-
-            self._run_backward(backward_strategy, framework._dygraph_tracer())
+            if paddle.distributed.get_world_size() > 1:
+                scaled_loss = scale_loss(self)
+                scaled_loss._run_backward(framework._dygraph_tracer(),
+                                          retain_graph)
+            else:
+                self._run_backward(framework._dygraph_tracer(), retain_graph)
         else:
             raise ValueError(
                 "Variable.backward() is only available in DyGraph mode")
@@ -121,33 +182,21 @@ def monkey_patch_varbase():
     @framework.dygraph_only
     def gradient(self):
         """
-        **Notes**:
-            **This API is ONLY available in Dygraph mode**
-
-        Get the Gradient of Current Variable
+        Get the Gradient of Current Tensor.
 
         Returns:
-            ndarray: Numpy value of the gradient of current Variable
+            ndarray: Numpy value of the gradient of current Tensor
 
         Examples:
             .. code-block:: python
 
-                import paddle.fluid as fluid
-                import numpy as np
+                import paddle
 
-                x = np.ones([2, 2], np.float32)
-                with fluid.dygraph.guard():
-                    inputs2 = []
-                    for _ in range(10):
-                        tmp = fluid.dygraph.base.to_variable(x)
-                        tmp.stop_gradient=False
-                        inputs2.append(tmp)
-                    ret2 = fluid.layers.sums(inputs2)
-                    loss2 = fluid.layers.reduce_sum(ret2)
-                    backward_strategy = fluid.dygraph.BackwardStrategy()
-                    backward_strategy.sort_sum_gradient = True
-                    loss2.backward(backward_strategy)
-                    print(loss2.gradient())
+                x = paddle.to_tensor(5., stop_gradient=False)
+                y = paddle.pow(x, 4.0)
+                y.backward()
+                print("grad of x: {}".format(x.grad))
+                # [500.]
 
         """
         if self._grad_ivar() is None:
@@ -160,117 +209,114 @@ def monkey_patch_varbase():
         else:
             return np.array(new_ivar.value().get_tensor())
 
+    @property
+    def grad(self):
+        """
+        The alias of gradient().
+        """
+
+        return self.gradient()
+
+    def clear_grad(self):
+        """
+        The alias of clear_gradient().
+        """
+        self.clear_gradient()
+
+    @property
+    def inplace_version(self):
+        """
+        The inplace version of current Tensor.
+        The version number is incremented whenever the current Tensor is modified through an inplace operation.
+
+        **Notes: This is a read-only property**
+
+        Examples:
+          .. code-block:: python
+
+            import paddle
+            var = paddle.ones(shape=[4, 2, 3], dtype="float32")
+            print(var.inplace_version)  # 0
+
+            var[1] = 2.2
+            print(var.inplace_version)  # 1
+
+        """
+        return self._inplace_version()
+
     def __str__(self):
-        return self.to_string(True)
+        """
+        Convert a VarBase object to a readable string.
+
+        Returns(str): A readable string.
+
+        Examples:
+            .. code-block:: python
+
+                import paddle
+                x = paddle.rand([2, 5])
+                print(x)
+                
+                # Tensor(shape=[2, 5], dtype=float32, place=CPUPlace,
+                #        [[0.30574632, 0.55739117, 0.30902600, 0.39413780, 0.44830436],
+                #         [0.79010487, 0.53972793, 0.09495186, 0.44267157, 0.72112119]])
+        """
+        from paddle.tensor.to_string import to_string
+        return to_string(self)
+
+    def __deepcopy__(self, memo):
+        """
+        Deep copy Tensor, it will always performs Tensor copy.
+
+        Examples:
+            .. code-block:: python
+
+                import paddle
+                import copy
+                x = paddle.to_tensor(2.)
+                y = copy.deepcopy(x)
+                
+                print(x)
+                # Tensor(shape=[1], dtype=float32, place=CPUPlace, stop_gradient=True,
+                #        [2.])
+
+                print(y)
+                # Tensor(shape=[1], dtype=float32, place=CPUPlace, stop_gradient=True,
+                #        [2.])
+
+        """
+        if not self.is_leaf:
+            raise RuntimeError(
+                "Only Leaf Tensor support the deepcopy at the moment, non-Leaf Tensors contains graph information that does't support deepcopy"
+            )
+        new_varbase = core.VarBase()
+        new_varbase.name = self.name + unique_name.generate("_deepcopy")
+        memo[id(self)] = new_varbase
+        new_varbase.copy_(self, True)
+        return new_varbase
 
     @property
     def block(self):
         return framework.default_main_program().global_block()
 
-    def to_string(self, throw_on_error, with_details=False):
-        """
-        Get debug string.
+    def __nonzero__(self):
+        numel = np.prod(self.shape)
+        assert numel == 1, "When Variable is used as the condition of if/while , Variable can only contain one element."
+        tensor = self.value().get_tensor()
+        assert tensor._is_initialized(), "tensor not initialized"
+        return bool(np.all(tensor.__array__() > 0))
 
-        Args:
+    def __bool__(self):
+        return self.__nonzero__()
 
-            throw_on_error (bool): True if raise an exception when self is not initialized.
-
-            with_details (bool): more details about variables and parameters (e.g. trainable, optimize_attr, ...) will be printed when with_details is True. Default value is False;
-
-        Returns:
-            str: The debug string.
-
-        Examples:
-            .. code-block:: python
-
-                import paddle.fluid as fluid
-
-                cur_program = fluid.Program()
-                cur_block = cur_program.current_block()
-                new_variable = cur_block.create_var(name="X",
-                                                    shape=[-1, 23, 48],
-                                                    dtype='float32')
-                print(new_variable.to_string(True))
-                print("=============with detail===============")
-                print(new_variable.to_string(True, True))
-        """
-        if framework.in_dygraph_mode():
-            # TODO(panyx0718): add more dygraph debug info.
-            tensor = self.value().get_tensor()
-            if tensor._is_initialized():
-                return 'name %s, dtype: %s shape: %s %s' % (
-                    self.name, self.dtype, self.shape, str(tensor))
-            else:
-                return 'name %s, shape: %s, not inited' % (self.name,
-                                                           self.shape)
-
-    def __getitem__(self, item):
-        if not isinstance(item, tuple):
-            item = [item]
-
-        decrease_axis = []
-        slice_axis = []
-        slice_start = []
-        slice_end = []
-        reverse_axis = []
-
-        for dim, slice_item in enumerate(item):
-            if isinstance(slice_item, slice):
-                start = slice_item.start
-                end = slice_item.stop
-                step = slice_item.step if slice_item.step else 1
-
-                assert (step == 1 or step == -1)
-
-                if step == -1:
-                    reverse_axis.append(dim)
-                    assert (start is None and end is None)
-
-                if start is None and end is None:
-                    continue
-
-                if start is None:
-                    start = 0
-
-                if end is None:
-                    end = 10000000
-
-                slice_axis.append(dim)
-                slice_start.append(start)
-                slice_end.append(end)
-            else:
-                # int
-                decrease_axis.append(dim)
-                slice_axis.append(dim)
-                slice_start.append(slice_item)
-                slice_end.append(slice_item + 1
-                                 if slice_item != -1 else 10000000)
-
-        out = self
-        if len(slice_axis) > 0:
-            # append slice_op here
-            inputs = {'Input': [out]}
-            attrs = {
-                'axes': slice_axis,
-                'starts': slice_start,
-                'ends': slice_end,
-                'decrease_axis': decrease_axis
-            }
-            outs = core.ops.slice(inputs, attrs)
-            out = outs['Out'][0]
-
-        if len(reverse_axis) > 0:
-            inputs = {'X': [out]}
-            attrs = {'axis': reverse_axis}
-            outs = core.ops.reverse(inputs, attrs)
-            out = outs['Out'][0]
-
-        return out
-
-    for method_name, method in (("set_value", set_value), ("block", block),
-                                ("backward", backward), ("gradient", gradient),
-                                ("__str__", __str__), ("to_string", to_string),
-                                ("__getitem__", __getitem__)):
+    for method_name, method in (
+        ("__bool__", __bool__), ("__nonzero__", __nonzero__),
+        ("_to_static_var", _to_static_var), ("set_value", set_value),
+        ("block", block), ("backward", backward), ("clear_grad", clear_grad),
+        ("inplace_version", inplace_version), ("grad", grad),
+        ("gradient", gradient), ("__str__", __str__), ("__repr__", __str__),
+        ("__deepcopy__", __deepcopy__), ("__module__", "paddle"),
+        ("__name__", "Tensor")):
         setattr(core.VarBase, method_name, method)
 
     # patch math methods for varbase

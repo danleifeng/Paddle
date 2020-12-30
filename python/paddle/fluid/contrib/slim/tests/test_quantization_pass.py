@@ -27,6 +27,8 @@ from paddle.fluid.contrib.slim.quantization import TransformForMobilePass
 from paddle.fluid.contrib.slim.quantization import AddQuantDequantPass
 from paddle.fluid import core
 
+paddle.enable_static()
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["CPU_NUM"] = "1"
 
@@ -316,6 +318,7 @@ class TestQuantizationFreezePass(unittest.TestCase):
         build_strategy = fluid.BuildStrategy()
         build_strategy.memory_optimize = False
         build_strategy.enable_inplace = False
+        build_strategy.fuse_all_reduce_ops = False
         binary = fluid.CompiledProgram(main_graph.graph).with_data_parallel(
             loss_name=loss.name, build_strategy=build_strategy)
         quantized_test_program = test_graph.to_program()

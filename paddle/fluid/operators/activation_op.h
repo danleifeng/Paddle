@@ -26,8 +26,8 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/detail/safe_ref.h"
 #include "paddle/fluid/operators/math/blas.h"
+#include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/float16.h"
 
 #ifdef PADDLE_WITH_MKLDNN
@@ -36,6 +36,8 @@ limitations under the License. */
 
 namespace paddle {
 namespace operators {
+
+using framework::To32BitIndex;
 
 enum ActBwdOpFwdDeps {
   kNoDeps = 0x00,  // Do not need any forward input/output
@@ -54,12 +56,14 @@ inline void ExtractActivationTensor(const framework::ExecutionContext& context,
                                     framework::Tensor** Out) {
   auto x_var = context.InputVar("X");
   auto out_var = context.OutputVar("Out");
-  PADDLE_ENFORCE(x_var != nullptr,
-                 "Cannot get input Variable X, variable name = %s",
-                 context.InputName("X"));
-  PADDLE_ENFORCE(out_var != nullptr,
-                 "Cannot get output Variable Out, variable name = %s",
-                 context.OutputName("Out"));
+  PADDLE_ENFORCE_NOT_NULL(x_var,
+                          platform::errors::NotFound(
+                              "Cannot get input Variable X, variable name = %s",
+                              context.InputName("X")));
+  PADDLE_ENFORCE_NOT_NULL(
+      out_var, platform::errors::NotFound(
+                   "Cannot get output Variable Out, variable name = %s",
+                   context.OutputName("Out")));
   if (CanBeUsedBySelectedRows.count(context.Type())) {
     *X = paddle::framework::GetLoDTensorOrSelectedRowsValueFromVar(*x_var);
     *Out = paddle::framework::GetMutableLoDTensorOrSelectedRowsValueFromVar(
@@ -69,9 +73,10 @@ inline void ExtractActivationTensor(const framework::ExecutionContext& context,
     *Out = context.Output<framework::Tensor>("Out");
   }
 
-  PADDLE_ENFORCE(*Out != nullptr,
-                 "Cannot get output tensor Out, variable name = %s",
-                 context.OutputName("Out"));
+  PADDLE_ENFORCE_NOT_NULL(*Out, platform::errors::NotFound(
+                                    "Cannot get the tensor from the Variable "
+                                    "Output(Out), variable name = %s",
+                                    context.OutputName("Out")));
 }
 
 template <ActBwdOpFwdDeps kDepValue>
@@ -85,18 +90,22 @@ inline void ExtractActivationGradTensor(
 
   if (static_cast<int>(kDepValue) & static_cast<int>(kDepOut)) {
     out_var = context.InputVar("Out");
-    PADDLE_ENFORCE(out_var != nullptr,
-                   "Cannot get input Variable Out, variable name = %s",
-                   context.InputName("Out"));
+    PADDLE_ENFORCE_NOT_NULL(
+        out_var, platform::errors::NotFound(
+                     "Cannot get input Variable Out, variable name = %s",
+                     context.InputName("Out")));
   }
-  PADDLE_ENFORCE(out_grad_var != nullptr,
-                 "Cannot get input Variable %s, variable name = %s",
-                 framework::GradVarName("Out"),
-                 context.InputName(framework::GradVarName("Out")));
-  PADDLE_ENFORCE(x_grad_var != nullptr,
-                 "Cannot get output Variable %s, variable name = %s",
-                 framework::GradVarName("X"),
-                 context.OutputName(framework::GradVarName("X")));
+
+  PADDLE_ENFORCE_NOT_NULL(
+      out_grad_var, platform::errors::NotFound(
+                        "Cannot get input Variable %s, variable name = %s",
+                        framework::GradVarName("Out"),
+                        context.InputName(framework::GradVarName("Out"))));
+  PADDLE_ENFORCE_NOT_NULL(
+      x_grad_var, platform::errors::NotFound(
+                      "Cannot get output Variable %s, variable name = %s",
+                      framework::GradVarName("X"),
+                      context.OutputName(framework::GradVarName("X"))));
 
   if (CanBeUsedBySelectedRows.count(context.Type())) {
     *dOut = paddle::framework::GetLoDTensorOrSelectedRowsValueFromVar(
@@ -123,16 +132,18 @@ inline void ExtractActivationGradTensor(
     }
   }
 
-  PADDLE_ENFORCE(*dX != nullptr,
-                 "Cannot get output tensor %s, variable name = %s",
-                 framework::GradVarName("X"),
-                 context.OutputName(framework::GradVarName("X")));
+  PADDLE_ENFORCE_NOT_NULL(*dX,
+                          platform::errors::NotFound(
+                              "Cannot get the tensor from the Variable "
+                              "Output(Out), variable name = %s",
+                              context.OutputName(framework::GradVarName("X"))));
 
   if (static_cast<int>(kDepValue) & static_cast<int>(kDepX)) {
     auto x_var = context.InputVar("X");
-    PADDLE_ENFORCE(x_var != nullptr,
-                   "Cannot get input tensor X, variable name = %s",
-                   context.InputName("X"));
+    PADDLE_ENFORCE_NOT_NULL(x_var, platform::errors::NotFound(
+                                       "Cannot get the tensor from the "
+                                       "Variable Input(X), variable name = %s",
+                                       context.InputName("X")));
     if (CanBeUsedBySelectedRows.count(context.Type())) {
       *X = paddle::framework::GetLoDTensorOrSelectedRowsValueFromVar(*x_var);
     } else {
@@ -156,8 +167,10 @@ class ActivationKernel
     ExtractActivationTensor(context, &X, &Out);
     Out->mutable_data<T>(context.GetPlace());
 
-    auto x = framework::EigenVector<T>::Flatten(detail::Ref(X));
-    auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "Activation"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Output", "Out", "Activation"));
     auto* place =
         context.template device_context<DeviceContext>().eigen_device();
     Functor functor;
@@ -166,7 +179,14 @@ class ActivationKernel
     for (auto& attr : attrs) {
       *attr.second = context.Attr<float>(attr.first);
     }
-    functor(*place, x, out);
+    // use 32bit index to speed up computation
+    bool use_32bit_index = out.size() < Eigen::NumTraits<int>::highest();
+    bool is_gpu_place = platform::is_gpu_place(context.GetPlace());
+    if (use_32bit_index && is_gpu_place) {
+      functor(*place, To32BitIndex(x), To32BitIndex(out));
+    } else {
+      functor(*place, x, out);
+    }
   }
 };
 
@@ -182,10 +202,14 @@ class ActivationGradKernel
     ExtractActivationGradTensor<Functor::FwdDeps()>(context, &X, &Out, &dOut,
                                                     &dX);
     dX->mutable_data<T>(context.GetPlace());
-    auto dout = framework::EigenVector<T>::Flatten(detail::Ref(dOut));
-    auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
-    auto dx = framework::EigenVector<T>::Flatten(detail::Ref(dX));
-    auto x = framework::EigenVector<T>::Flatten(detail::Ref(X));
+    auto dout = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(dOut, "Input", "Out@GRAD", "ActivationGrad"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Input", "Out", "ActivationGrad"));
+    auto dx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(dX, "Input", "X@GRAD", "ActivationGrad"));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "ActivationGrad"));
     auto* place =
         context.template device_context<DeviceContext>().eigen_device();
     Functor functor;
@@ -193,7 +217,15 @@ class ActivationGradKernel
     for (auto& attr : attrs) {
       *attr.second = context.Attr<float>(attr.first);
     }
-    functor(*place, x, out, dout, dx);
+    // use 32bit index to speed up computation
+    bool use_32bit_index = out.size() < Eigen::NumTraits<int>::highest();
+    bool is_gpu_place = platform::is_gpu_place(context.GetPlace());
+    if (use_32bit_index && is_gpu_place) {
+      functor(*place, To32BitIndex(x), To32BitIndex(out), To32BitIndex(dout),
+              To32BitIndex(dx));
+    } else {
+      functor(*place, x, out, dout, dx);
+    }
   }
 };
 
@@ -356,9 +388,9 @@ struct HardShrinkFunctor : public BaseActivationFunctor<T> {
   }
   template <typename Device, typename X, typename Out>
   void operator()(Device d, X x, Out out) const {
-    auto temp1 = (x < static_cast<T>(threshold * -1)).template cast<T>();
-    auto temp2 = (x > static_cast<T>(threshold)).template cast<T>();
-    out.device(d) = x * (temp1 + temp2);
+    auto temp1 = x < static_cast<T>(threshold * -1.f);
+    auto temp2 = x > static_cast<T>(threshold);
+    out.device(d) = x * (temp1 + temp2 > 0).template cast<T>();
   }
 };
 
@@ -373,9 +405,9 @@ struct HardShrinkGradFunctor : public BaseActivationFunctor<T> {
   template <typename Device, typename X, typename Out, typename dOut,
             typename dX>
   void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
-    auto temp1 = (x < static_cast<T>(threshold * -1)).template cast<T>();
-    auto temp2 = (x > static_cast<T>(threshold)).template cast<T>();
-    dx.device(d) = dout * (temp1 + temp2).template cast<T>();
+    auto temp1 = x < static_cast<T>(threshold * -1.f);
+    auto temp2 = x > static_cast<T>(threshold);
+    dx.device(d) = dout * (temp1 + temp2 > 0).template cast<T>();
   }
 
   static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
@@ -553,6 +585,105 @@ struct SinFunctor : public BaseActivationFunctor<T> {
 };
 
 template <typename T>
+struct Tangent {
+  HOSTDEVICE T operator()(const T& val) const { return tan(val); }
+};
+
+template <>
+struct Tangent<platform::float16> {
+  HOSTDEVICE platform::float16 operator()(const platform::float16& val) const {
+    return platform::float16(tan(static_cast<float>(val)));
+  }
+};
+
+// Tangent'(x) = -Tangent(x)
+template <typename T>
+struct TanGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out, typename dOut,
+            typename dX>
+  void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
+    dx.device(d) = dout / x.unaryExpr(Cosine<T>()).square();
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
+// Tangent(x) = tan(x)
+template <typename T>
+struct TanFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.unaryExpr(Tangent<T>());
+  }
+};
+
+template <typename T>
+struct Sinh {
+  HOSTDEVICE T operator()(const T& val) const { return sinh(val); }
+};
+
+template <>
+struct Sinh<platform::float16> {
+  HOSTDEVICE platform::float16 operator()(const platform::float16& val) const {
+    return platform::float16(sinhf(static_cast<float>(val)));
+  }
+};
+
+template <typename T>
+struct Cosh {
+  HOSTDEVICE T operator()(const T& val) const { return cosh(val); }
+};
+
+template <>
+struct Cosh<platform::float16> {
+  HOSTDEVICE platform::float16 operator()(const platform::float16& val) const {
+    return platform::float16(coshf(static_cast<float>(val)));
+  }
+};
+
+// sinh(x) = sinh(x)
+template <typename T>
+struct SinhFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.unaryExpr(Sinh<T>());
+  }
+};
+
+// cosh(x) = cosh(x)
+template <typename T>
+struct CoshFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.unaryExpr(Cosh<T>());
+  }
+};
+
+// sinh'(x) = cosh(x)
+template <typename T>
+struct SinhGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out, typename dOut,
+            typename dX>
+  void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
+    dx.device(d) = dout * x.unaryExpr(Cosh<T>());
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
+// cosh'(x) = sinh(x)
+template <typename T>
+struct CoshGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out, typename dOut,
+            typename dX>
+  void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
+    dx.device(d) = dout * x.unaryExpr(Sinh<T>());
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
+template <typename T>
 struct Acos {
   HOSTDEVICE T operator()(const T& val) const { return acos(val); }
 };
@@ -722,6 +853,68 @@ struct LogGradFunctor : public BaseActivationFunctor<T> {
   static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
 };
 
+// log2(x) = logarithm to the base 2 of the elements of x
+template <typename T>
+struct Log2Functor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.log() / static_cast<T>(log(2));
+  }
+};
+
+// the gradient of log2(x) is 1/(x*ln(2))
+template <typename T>
+struct Log2GradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out, typename dOut,
+            typename dX>
+  void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
+    dx.device(d) = dout * static_cast<T>(1) / (x * static_cast<T>(log(2)));
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
+// log10(x) = logarithm to the base 10 of the elements of x
+template <typename T>
+struct Log10Functor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = x.log() / static_cast<T>(log(10));
+  }
+};
+
+// the gradient of log10(x) is 1/(x*ln(10))
+template <typename T>
+struct Log10GradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out, typename dOut,
+            typename dX>
+  void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
+    dx.device(d) = dout * static_cast<T>(1) / (x * static_cast<T>(log(10)));
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
+// log1p(x) = natural logarithm of x+1
+template <typename T>
+struct Log1pFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out>
+  void operator()(Device d, X x, Out out) const {
+    out.device(d) = (static_cast<T>(1) + x).log();
+  }
+};
+
+template <typename T>
+struct Log1pGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device, typename X, typename Out, typename dOut,
+            typename dX>
+  void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
+    dx.device(d) = dout * (static_cast<T>(1) / (x + static_cast<T>(1)));
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
 // square(x) = x^2
 template <typename T>
 struct SquareFunctor : public BaseActivationFunctor<T> {
@@ -857,32 +1050,46 @@ struct HardSwishGradFunctor : public BaseActivationFunctor<T> {
   static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
 };
 
-// softplus(x) = log(1 + exp(x))
-// When x is a very large positive number, exp(x) may explode to inf,
-// Using trick below for numerical stability
-// https://hips.seas.harvard.edu/blog/2013/01/09/computing-log-sum-exp/
-// Then: softplus(x) = max(x, 0) + log(exp(-max(x, 0)) + exp(x - max(x, 0)))
+// For numerical stability, using the following formula instead of softplus(x) =
+// log(1 + exp(x))
+// softplus(x) = log(1 + exp(beta * x)) / beta when beta * x <= threshold(beta =
+// 1, threshold = 20 by default), otherwise x
 template <typename T>
 struct SoftplusFunctor : public BaseActivationFunctor<T> {
+  float beta;
+  float threshold;
+  typename BaseActivationFunctor<T>::AttrPair GetAttrs() {
+    return {{"beta", &beta}, {"threshold", &threshold}};
+  }
+
   template <typename Device, typename X, typename Out>
   void operator()(Device d, X x, Out out) {
-    auto temp = x.cwiseMax(static_cast<T>(0));  // temp = max(x, 0)
-    out.device(d) = temp + (((-temp).exp() + (x - temp).exp()).log());
+    auto x_beta = static_cast<T>(beta) * x;
+    out.device(d) = (x_beta > static_cast<T>(threshold))
+                        .select(x, (static_cast<T>(1) + x_beta.exp()).log() /
+                                       static_cast<T>(beta));
   }
 };
 
-// d(softplus(x))/dx = exp(x) / (1 + exp(x))
-// For numerical stability:
-// d(softplus(x))/dx = exp(x - max(x, 0)) / (exp(-max(x, 0)) +
-// exp(x - max(x, 0)))
+// For numerical stability, using the following formula instead of
+// d(softplus(x))/dx = 1 / (1 + exp(-x))
+// d(softplus(x))/dx = 1 / (1 + exp(-beta * x)) when beta * x <= threshold(beta
+// = 1, threshold = 20 by default), otherwise x
 template <typename T>
 struct SoftplusGradFunctor : public BaseActivationFunctor<T> {
+  float beta;
+  float threshold;
+  typename BaseActivationFunctor<T>::AttrPair GetAttrs() {
+    return {{"beta", &beta}, {"threshold", &threshold}};
+  }
+
   template <typename Device, typename X, typename Out, typename dOut,
             typename dX>
   void operator()(Device d, X x, Out out, dOut dout, dX dx) {
-    auto temp = x.cwiseMax(static_cast<T>(0));  // temp = max(x, 0)
+    auto x_beta = static_cast<T>(beta) * x;
     dx.device(d) =
-        dout * ((x - temp).exp() / ((-temp).exp() + (x - temp).exp()));
+        (x_beta > static_cast<T>(threshold))
+            .select(dout, dout / (static_cast<T>(1) + (-x_beta).exp()));
   }
 
   static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
@@ -952,7 +1159,11 @@ struct LeakyReluFunctor : public BaseActivationFunctor<T> {
 
   template <typename Device, typename X, typename Out>
   void operator()(Device d, X x, Out out) const {
-    out.device(d) = x.cwiseMax(static_cast<T>(alpha) * x);
+    if (alpha < 1.f) {
+      out.device(d) = x.cwiseMax(static_cast<T>(alpha) * x);
+    } else {
+      out.device(d) = x.cwiseMin(static_cast<T>(alpha) * x);
+    }
   }
 };
 
@@ -966,12 +1177,12 @@ struct LeakyReluGradFunctor : public BaseActivationFunctor<T> {
             typename dX>
   void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
     auto temp1 =
-        static_cast<T>(alpha) * (out <= static_cast<T>(0)).template cast<T>();
-    auto temp2 = (out > static_cast<T>(0)).template cast<T>();
+        static_cast<T>(alpha) * (x < static_cast<T>(0)).template cast<T>();
+    auto temp2 = (x >= static_cast<T>(0)).template cast<T>();
     dx.device(d) = dout * (temp1 + temp2).template cast<T>();
   }
 
-  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepOut; }
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
 };
 
 template <typename T>
@@ -998,9 +1209,20 @@ struct ELUGradFunctor : public BaseActivationFunctor<T> {
   template <typename Device, typename X, typename Out, typename dOut,
             typename dX>
   void operator()(Device d, X x, Out out, dOut dout, dX dx) const {
-    dx.device(d) = dout * (x > static_cast<T>(0)).template cast<T>() +
-                   dout * static_cast<T>(alpha) * x.exp() *
-                       (x <= static_cast<T>(0)).template cast<T>();
+    auto temp_a_pos = static_cast<T>(alpha > 0);
+    auto temp_a_neg = static_cast<T>(alpha <= 0);
+    auto temp_x_pos = (x > static_cast<T>(0)).template cast<T>();
+    auto temp_x_neg = (x <= static_cast<T>(0)).template cast<T>();
+
+    // dx = dout, if alpha > 0 and x > 0
+    // dx = dout * alpha * x.exp(), if alpha > 0 and x <= 0
+    // dx = dout * (1 + alpha * x.exp()), if alpha <= 0 and x > 0
+    // dx = 0, if alpha <= 0 and x <=0
+    dx.device(d) =
+        dout * temp_a_pos * temp_x_pos +
+        dout * static_cast<T>(alpha) * x.exp() * temp_a_pos * temp_x_neg +
+        dout * (static_cast<T>(1) + static_cast<T>(alpha) * x.exp()) *
+            temp_a_neg * temp_x_pos;
   }
 
   static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
@@ -1181,9 +1403,10 @@ inline void ExtractActivationDoubleGradTensor(
     framework::Tensor** ddOut) {
   auto ddx_var = ctx.InputVar("DDX");
   auto ddo_var = ctx.OutputVar("DDOut");
-  PADDLE_ENFORCE(ddx_var != nullptr,
-                 "Cannot get input Variable Out, variable name = %s",
-                 ctx.InputName("DDX"));
+  PADDLE_ENFORCE_NOT_NULL(
+      ddx_var, platform::errors::NotFound(
+                   "Cannot get input Variable Out, variable name = %s",
+                   ctx.InputName("DDX")));
   if (CanBeUsedBySelectedRows.count(ctx.Type())) {
     *ddX = paddle::framework::GetLoDTensorOrSelectedRowsValueFromVar(*ddx_var);
     if (ddo_var) {
@@ -1196,15 +1419,18 @@ inline void ExtractActivationDoubleGradTensor(
       *ddOut = ctx.Output<framework::Tensor>("DDOut");
     }
   }
-  PADDLE_ENFORCE(*ddX != nullptr,
-                 "Cannot get output tensor DDX, variable name = %s",
-                 ctx.OutputName("DDX"));
+  PADDLE_ENFORCE_NOT_NULL(
+      *ddX,
+      platform::errors::NotFound(
+          "Cannot get the tensor from the Variable Output, variable name = %s",
+          ctx.OutputName("DDX")));
 
   if (static_cast<int>(kDepValue) & static_cast<int>(kDepX)) {
     auto x_var = ctx.InputVar("X");
-    PADDLE_ENFORCE(x_var != nullptr,
+    PADDLE_ENFORCE_NOT_NULL(
+        x_var, platform::errors::NotFound(
                    "Cannot get input Variable Out, variable name = %s",
-                   ctx.InputName("X"));
+                   ctx.InputName("X")));
     auto dx_var = ctx.OutputVar("DX");
     if (CanBeUsedBySelectedRows.count(ctx.Type())) {
       *X = paddle::framework::GetLoDTensorOrSelectedRowsValueFromVar(*x_var);
@@ -1224,9 +1450,11 @@ inline void ExtractActivationDoubleGradTensor(
   }
   if (static_cast<int>(kDepValue) & static_cast<int>(kDepOut)) {
     auto out_var = ctx.InputVar("Out");
-    PADDLE_ENFORCE(out_var != nullptr,
-                   "Cannot get input tensor Out, variable name = %s",
-                   ctx.InputName("Out"));
+    PADDLE_ENFORCE_NOT_NULL(
+        out_var,
+        platform::errors::NotFound(
+            "Cannot get the tensor from the Variable Out, variable name = %s",
+            ctx.InputName("Out")));
     auto dout_var = ctx.OutputVar("DOut");
     if (CanBeUsedBySelectedRows.count(ctx.Type())) {
       *Out =
@@ -1278,6 +1506,27 @@ class ActivationDoubleGradKernel
 };
 
 template <typename T>
+struct AbsGradGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device>
+  void operator()(const Device& dev, const framework::Tensor* X,
+                  const framework::Tensor* Out, const framework::Tensor* ddX,
+                  framework::Tensor* ddOut, framework::Tensor* dOut,
+                  framework::Tensor* dX) const {
+    auto* d = dev.eigen_device();
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "AbsGradGrad"));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "AbsGradGrad"));
+    if (ddOut) {
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "AbsGradGrad"));
+      ddout.device(*d) = ddx * x.sign();
+    }
+  }
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
+template <typename T>
 struct ReluGradGradFunctor : public BaseActivationFunctor<T> {
   template <typename Device>
   void operator()(const Device& dev, const framework::Tensor* X,
@@ -1285,10 +1534,13 @@ struct ReluGradGradFunctor : public BaseActivationFunctor<T> {
                   framework::Tensor* ddOut, framework::Tensor* dOut,
                   framework::Tensor* dX) const {
     auto* d = dev.eigen_device();
-    auto ddx = framework::EigenVector<T>::Flatten(detail::Ref(ddX));
-    auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "ReluGradGrad"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Output", "Out", "ReluGradGrad"));
     if (ddOut) {
-      auto ddout = framework::EigenVector<T>::Flatten(detail::Ref(ddOut));
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "ReluGradGrad"));
       ddout.device(*d) = ddx * (out > static_cast<T>(0)).template cast<T>();
     }
   }
@@ -1308,17 +1560,20 @@ struct LeakyReluGradGradFunctor : public BaseActivationFunctor<T> {
                   framework::Tensor* dX) const {
     if (ddOut) {
       auto* d = dev.eigen_device();
-      auto ddx = framework::EigenVector<T>::Flatten(detail::Ref(ddX));
-      auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
-      auto ddout = framework::EigenVector<T>::Flatten(detail::Ref(ddOut));
-      ddout.device(*d) = ddx *
-                         ((out > static_cast<T>(0)).template cast<T>() +
-                          static_cast<T>(alpha) *
-                              (out <= static_cast<T>(0)).template cast<T>())
-                             .template cast<T>();
+      auto ddx = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddX, "Input", "DDX", "LeakyReluGradGrad"));
+      auto x = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(X, "Input", "X", "LeakyReluGradGrad"));
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DOut", "LeakyReluGradGrad"));
+      ddout.device(*d) =
+          ddx *
+          ((x > static_cast<T>(0)).template cast<T>() +
+           static_cast<T>(alpha) * (x <= static_cast<T>(0)).template cast<T>())
+              .template cast<T>();
     }
   }
-  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepOut; }
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
 };
 
 template <typename T>
@@ -1332,18 +1587,23 @@ struct ELUGradGradFunctor : public BaseActivationFunctor<T> {
                   const framework::Tensor* ddX, framework::Tensor* ddOut,
                   const framework::Tensor* dOut, framework::Tensor* dX) const {
     auto* d = dev.eigen_device();
-    auto ddx = framework::EigenVector<T>::Flatten(detail::Ref(ddX));
-    auto x = framework::EigenVector<T>::Flatten(detail::Ref(X));
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "ELUGradGrad"));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "ELUGradGrad"));
 
     if (dX) {
-      auto dx = framework::EigenVector<T>::Flatten(detail::Ref(dX));
-      auto dout = framework::EigenVector<T>::Flatten(detail::Ref(dOut));
+      auto dx = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dX, "Output", "DX", "ELUGradGrad"));
+      auto dout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dOut, "Output", "DOut", "ELUGradGrad"));
       dx.device(*d) = ddx * dout * static_cast<T>(alpha) * x.exp() *
                       (x < static_cast<T>(0)).template cast<T>();
     }
 
     if (ddOut) {
-      auto ddout = framework::EigenVector<T>::Flatten(detail::Ref(ddOut));
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "ELUGradGrad"));
       ddout.device(*d) = ddx *
                          ((x > static_cast<T>(0)).template cast<T>() +
                           static_cast<T>(alpha) * x.exp() *
@@ -1361,18 +1621,52 @@ struct SqrtGradGradFunctor : public BaseActivationFunctor<T> {
                   const framework::Tensor* ddX, framework::Tensor* ddOut,
                   framework::Tensor* dOut, const framework::Tensor* dX) const {
     auto* d = dev.eigen_device();
-    auto ddx = framework::EigenVector<T>::Flatten(detail::Ref(ddX));
-    auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "SqrtGradGrad"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Output", "Out", "SqrtGradGrad"));
     // sqrt GradGrad: ddy = 0.5 * ddx / y, dy = -1 * dx * ddx
     // calculate dy first, so ddy can inplace ddx
     if (dOut) {
-      auto dx = framework::EigenVector<T>::Flatten(detail::Ref(dX));
-      auto dout = framework::EigenVector<T>::Flatten(detail::Ref(dOut));
+      auto dx = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dX, "Output", "DX", "SqrtGradGrad"));
+      auto dout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dOut, "Output", "DOut", "SqrtGradGrad"));
       dout.device(*d) = dx * ddx * static_cast<T>(-1) / out;
     }
     if (ddOut) {
-      auto ddout = framework::EigenVector<T>::Flatten(detail::Ref(ddOut));
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "SqrtGradGrad"));
       ddout.device(*d) = ddx * static_cast<T>(0.5) / out;
+    }
+  }
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepOut; }
+};
+
+template <typename T>
+struct RsqrtGradGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device>
+  void operator()(const Device& dev, const framework::Tensor* Out,
+                  const framework::Tensor* ddX, framework::Tensor* ddOut,
+                  framework::Tensor* dOut, const framework::Tensor* dX) const {
+    auto* d = dev.eigen_device();
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "RsqrtGradGrad"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Output", "Out", "RsqrtGradGrad"));
+
+    // rsqrt GradGrad: ddy = -0.5 * ddx * y * y * y, dy = (3/y) * dx * ddx
+    if (dOut) {
+      auto dx = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dX, "Output", "DX", "RsqrtGradGrad"));
+      auto dout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dOut, "Output", "DOut", "RsqrtGradGrad"));
+      dout.device(*d) = (static_cast<T>(3.0) / out) * dx * ddx;
+    }
+    if (ddOut) {
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "RsqrtGradGrad"));
+      ddout.device(*d) = ddx * static_cast<T>(-0.5) * out * out * out;
     }
   }
   static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepOut; }
@@ -1385,17 +1679,22 @@ struct SquareGradGradFunctor : public BaseActivationFunctor<T> {
                   const framework::Tensor* ddX, framework::Tensor* ddOut,
                   const framework::Tensor* dOut, framework::Tensor* dX) const {
     auto* d = dev.eigen_device();
-    auto ddx = framework::EigenVector<T>::Flatten(detail::Ref(ddX));
-    auto x = framework::EigenVector<T>::Flatten(detail::Ref(X));
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "SquareGradGrad"));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "SquareGradGrad"));
     // square GradGrad: ddy=2x*ddx, dx=2dy*ddx
     // calculate dx first, so ddy can inplace ddx
     if (dX) {
-      auto dx = framework::EigenVector<T>::Flatten(detail::Ref(dX));
-      auto dout = framework::EigenVector<T>::Flatten(detail::Ref(dOut));
+      auto dx = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dX, "Output", "DX", "SquareGradGrad"));
+      auto dout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dOut, "Output", "DOut", "SquareGradGrad"));
       dx.device(*d) = ddx * static_cast<T>(2) * dout;
     }
     if (ddOut) {
-      auto ddout = framework::EigenVector<T>::Flatten(detail::Ref(ddOut));
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "SquareGradGrad"));
       ddout.device(*d) = ddx * static_cast<T>(2) * x;
     }
   }
@@ -1412,22 +1711,26 @@ inline void ExtractDoubleGradTensorWithInputDOut(
   // extract ddX(output), ddOut(input)
   auto ddx_var = ctx.InputVar("DDX");
   auto ddo_var = ctx.OutputVar("DDOut");
-  PADDLE_ENFORCE(ddx_var != nullptr,
-                 "Cannot get input Variable Out, variable name = %s",
-                 ctx.InputName("DDX"));
+  PADDLE_ENFORCE_NOT_NULL(
+      ddx_var, platform::errors::NotFound(
+                   "Cannot get input Variable Out, variable name = %s",
+                   ctx.InputName("DDX")));
   *ddX = ctx.Input<framework::Tensor>("DDX");
   if (ddo_var) {
     *ddOut = ctx.Output<framework::Tensor>("DDOut");
   }
-  PADDLE_ENFORCE(*ddX != nullptr,
-                 "Cannot get output tensor DDX, variable name = %s",
-                 ctx.OutputName("DDX"));
+  PADDLE_ENFORCE_NOT_NULL(
+      ddX,
+      platform::errors::NotFound(
+          "Cannot get the tensor from the Variable DDX, variable name = %s",
+          ctx.OutputName("DDX")));
 
   // extract x(input), dx(output)
   auto x_var = ctx.InputVar("X");
-  PADDLE_ENFORCE(x_var != nullptr,
+  PADDLE_ENFORCE_NOT_NULL(
+      x_var, platform::errors::NotFound(
                  "Cannot get input Variable Out, variable name = %s",
-                 ctx.InputName("X"));
+                 ctx.InputName("X")));
   auto dx_var = ctx.OutputVar("DX");
   *X = ctx.Input<framework::Tensor>("X");
   if (dx_var) {
@@ -1463,6 +1766,10 @@ class SquareDoubleGradKernel
     functor(place, X, ddX, ddOut, dOut, dX);
   }
 };
+
+template <typename DeviceContext, typename Functor>
+class LogDoubleGradKernel
+    : public SquareDoubleGradKernel<DeviceContext, Functor> {};
 
 template <typename DeviceContext, typename Functor>
 class ELUDoubleGradKernel
@@ -1505,22 +1812,25 @@ class SqrtDoubleGradKernel
     // extract ddx(input), ddout(output)
     auto ddx_var = ctx.InputVar("DDX");
     auto ddo_var = ctx.OutputVar("DDOut");
-    PADDLE_ENFORCE(ddx_var != nullptr,
-                   "Cannot get input Variable DDX, variable name = %s",
-                   ctx.InputName("DDX"));
+    PADDLE_ENFORCE_NOT_NULL(
+        ddx_var, platform::errors::NotFound(
+                     "Cannot get input Variable DDX, variable name = %s",
+                     ctx.InputName("DDX")));
     ddX = ctx.Input<framework::Tensor>("DDX");
     if (ddo_var) {
       ddOut = ctx.Output<framework::Tensor>("DDOut");
     }
-    PADDLE_ENFORCE(ddX != nullptr,
-                   "Cannot get input Variable DDX, variable name = %s",
-                   ctx.InputName("DDX"));
+    PADDLE_ENFORCE_NOT_NULL(
+        ddX, platform::errors::NotFound(
+                 "Cannot get input Variable DDX, variable name = %s",
+                 ctx.InputName("DDX")));
 
     // extract out(input), dout(output)
     auto out_var = ctx.InputVar("Out");
-    PADDLE_ENFORCE(out_var != nullptr,
-                   "Cannot get input Variable Out, variable name = %s",
-                   ctx.InputName("Out"));
+    PADDLE_ENFORCE_NOT_NULL(
+        out_var, platform::errors::NotFound(
+                     "Cannot get input Variable Out, variable name = %s",
+                     ctx.InputName("Out")));
     auto dout_var = ctx.OutputVar("DOut");
     Out = ctx.Input<framework::Tensor>("Out");
     if (dout_var) {
@@ -1529,9 +1839,71 @@ class SqrtDoubleGradKernel
 
     // extract dx(input)
     auto dx_var = ctx.InputVar("DX");
-    PADDLE_ENFORCE(dx_var != nullptr,
-                   "Cannot get input Variable DX, variable name = %s",
-                   ctx.InputName("DX"));
+    PADDLE_ENFORCE_NOT_NULL(
+        dx_var, platform::errors::NotFound(
+                    "Cannot get input Variable DX, variable name = %s",
+                    ctx.InputName("DX")));
+    if (dx_var) {
+      dX = ctx.Input<framework::Tensor>("DX");
+    }
+
+    if (dOut) dOut->mutable_data<T>(Out->dims(), ctx.GetPlace());
+    if (ddOut) ddOut->mutable_data<T>(Out->dims(), ctx.GetPlace());
+
+    auto& place = ctx.template device_context<DeviceContext>();
+
+    Functor functor;
+    functor(place, Out, ddX, ddOut, dOut, dX);
+  }
+};
+
+// rsqrt Grad: dx = -0.5 * dy * y * y * y
+// rsqrt GradGrad: ddy = -0.5 * ddx * y * y * y, dy = (3 / y) * dx * ddx
+template <typename DeviceContext, typename Functor>
+class RsqrtDoubleGradKernel
+    : public framework::OpKernel<typename Functor::ELEMENT_TYPE> {
+ public:
+  using T = typename Functor::ELEMENT_TYPE;
+  void Compute(const framework::ExecutionContext& ctx) const override {
+    const framework::Tensor *Out, *dX, *ddX;
+    Out = dX = ddX = nullptr;
+    framework::Tensor *ddOut, *dOut;
+    ddOut = dOut = nullptr;
+
+    // extract ddx(input), ddout(output)
+    auto ddx_var = ctx.InputVar("DDX");
+    auto ddo_var = ctx.OutputVar("DDOut");
+    PADDLE_ENFORCE_NOT_NULL(
+        ddx_var, platform::errors::NotFound(
+                     "Cannot get input Variable DDX, variable name = %s",
+                     ctx.InputName("DDX")));
+    ddX = ctx.Input<framework::Tensor>("DDX");
+    if (ddo_var) {
+      ddOut = ctx.Output<framework::Tensor>("DDOut");
+    }
+    PADDLE_ENFORCE_NOT_NULL(
+        ddX, platform::errors::NotFound(
+                 "Cannot get input Variable DDX, variable name = %s",
+                 ctx.InputName("DDX")));
+
+    // extract out(input), dout(output)
+    auto out_var = ctx.InputVar("Out");
+    PADDLE_ENFORCE_NOT_NULL(
+        out_var, platform::errors::NotFound(
+                     "Cannot get input Variable Out, variable name = %s",
+                     ctx.InputName("Out")));
+    auto dout_var = ctx.OutputVar("DOut");
+    Out = ctx.Input<framework::Tensor>("Out");
+    if (dout_var) {
+      dOut = ctx.Output<framework::Tensor>("DOut");
+    }
+
+    // extract dx(input)
+    auto dx_var = ctx.InputVar("DX");
+    PADDLE_ENFORCE_NOT_NULL(
+        dx_var, platform::errors::NotFound(
+                    "Cannot get input Variable DX, variable name = %s",
+                    ctx.InputName("DX")));
     if (dx_var) {
       dX = ctx.Input<framework::Tensor>("DX");
     }
@@ -1557,8 +1929,10 @@ class PowKernel : public framework::OpKernel<typename Functor::ELEMENT_TYPE> {
     ExtractActivationTensor(context, &X, &Out);
     Out->mutable_data<T>(context.GetPlace());
 
-    auto x = framework::EigenVector<T>::Flatten(detail::Ref(X));
-    auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "Pow"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Output", "Out", "Pow"));
     auto* place =
         context.template device_context<DeviceContext>().eigen_device();
     Functor functor;
@@ -1580,8 +1954,11 @@ class PowKernel : public framework::OpKernel<typename Functor::ELEMENT_TYPE> {
       }
       auto factor =
           std::vector<float>(factor_data, factor_data + factor_tensor->numel());
-      PADDLE_ENFORCE_EQ(factor.size(), 1,
-                        "The shape of factor(tensor) MUST BE [1].");
+      PADDLE_ENFORCE_EQ(
+          factor.size(), 1,
+          platform::errors::InvalidArgument(
+              "The shape of factor(tensor) must be [1] rather than %d",
+              factor.size()));
       for (auto& attr : attrs) {
         *attr.second = factor[0];
       }
@@ -1602,10 +1979,14 @@ class PowGradKernel
     ExtractActivationGradTensor<Functor::FwdDeps()>(context, &X, &Out, &dOut,
                                                     &dX);
     dX->mutable_data<T>(context.GetPlace());
-    auto dout = framework::EigenVector<T>::Flatten(detail::Ref(dOut));
-    auto out = framework::EigenVector<T>::Flatten(detail::Ref(Out));
-    auto dx = framework::EigenVector<T>::Flatten(detail::Ref(dX));
-    auto x = framework::EigenVector<T>::Flatten(detail::Ref(X));
+    auto dout = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(dOut, "Input", "Out@GRAD", "PowGrad"));
+    auto out = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(Out, "Input", "Out", "PowGrad"));
+    auto dx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(dX, "Output", "X@GRAD", "PowGrad"));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "PowGrad"));
     auto* place =
         context.template device_context<DeviceContext>().eigen_device();
     Functor functor;
@@ -1628,8 +2009,11 @@ class PowGradKernel
       }
       auto factor =
           std::vector<float>(factor_data, factor_data + factor_tensor->numel());
-      PADDLE_ENFORCE_EQ(factor.size(), 1,
-                        "The shape of factor(tensor) MUST BE [1].");
+      PADDLE_ENFORCE_EQ(
+          factor.size(), 1,
+          platform::errors::InvalidArgument(
+              "The shape of factor(tensor) must be [1] rather than %d",
+              factor.size()));
       for (auto& attr : attrs) {
         *attr.second = factor[0];
       }
@@ -1637,6 +2021,37 @@ class PowGradKernel
     functor(*place, x, out, dout, dx);
   }
 };
+
+template <typename T>
+struct LogGradGradFunctor : public BaseActivationFunctor<T> {
+  template <typename Device>
+  void operator()(const Device& dev, const framework::Tensor* X,
+                  const framework::Tensor* ddX, framework::Tensor* ddOut,
+                  const framework::Tensor* dOut, framework::Tensor* dX) const {
+    auto* d = dev.eigen_device();
+    auto ddx = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(ddX, "Input", "DDX", "LogGradGrad"));
+    auto x = framework::EigenVector<T>::Flatten(
+        GET_DATA_SAFELY(X, "Input", "X", "LogGradGrad"));
+    // ddout = ddx / x; dx = -(dout / x) * (ddx / x)
+    // calculate dx first, so ddout can inplace ddx
+    if (dX) {
+      auto dout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dOut, "Output", "DOut", "LogGradGrad"));
+      auto dx = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(dX, "Output", "DX", "LogGradGrad"));
+      dx.device(*d) = dout * static_cast<T>(-1) * ddx / (x * x);
+    }
+    if (ddOut) {
+      auto ddout = framework::EigenVector<T>::Flatten(
+          GET_DATA_SAFELY(ddOut, "Output", "DDOut", "LogGradGrad"));
+      ddout.device(*d) = ddx * static_cast<T>(1) / x;
+    }
+  }
+
+  static constexpr ActBwdOpFwdDeps FwdDeps() { return kDepX; }
+};
+
 }  // namespace operators
 }  // namespace paddle
 
@@ -1646,16 +2061,20 @@ class PowGradKernel
   __macro(tanh, Tanh, TanhFunctor, TanhGradFunctor);                          \
   __macro(atan, Atan, AtanFunctor, AtanGradFunctor);                          \
   __macro(softshrink, SoftShrink, SoftShrinkFunctor, SoftShrinkGradFunctor);  \
-  __macro(rsqrt, Rsqrt, RsqrtFunctor, RsqrtGradFunctor);                      \
   __macro(ceil, Ceil, CeilFunctor, ZeroGradFunctor);                          \
   __macro(floor, Floor, FloorFunctor, ZeroGradFunctor);                       \
   __macro(cos, Cos, CosFunctor, CosGradFunctor);                              \
+  __macro(tan, Tan, TanFunctor, TanGradFunctor);                              \
   __macro(acos, Acos, AcosFunctor, AcosGradFunctor);                          \
   __macro(sin, Sin, SinFunctor, SinGradFunctor);                              \
   __macro(asin, Asin, AsinFunctor, AsinGradFunctor);                          \
+  __macro(sinh, Sinh, SinhFunctor, SinhGradFunctor);                          \
+  __macro(cosh, Cosh, CoshFunctor, CoshGradFunctor);                          \
   __macro(round, Round, RoundFunctor, ZeroGradFunctor);                       \
   __macro(reciprocal, Reciprocal, ReciprocalFunctor, ReciprocalGradFunctor);  \
-  __macro(log, Log, LogFunctor, LogGradFunctor);                              \
+  __macro(log1p, Log1p, Log1pFunctor, Log1pGradFunctor);                      \
+  __macro(log2, Log2, Log2Functor, Log2GradFunctor);                          \
+  __macro(log10, Log10, Log10Functor, Log10GradFunctor);                      \
   __macro(brelu, BRelu, BReluFunctor, BReluGradFunctor);                      \
   __macro(soft_relu, SoftRelu, SoftReluFunctor, SoftReluGradFunctor);         \
   __macro(stanh, STanh, STanhFunctor, STanhGradFunctor);                      \

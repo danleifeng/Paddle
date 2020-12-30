@@ -28,8 +28,9 @@ template <typename T>
 class TransposeMKLDNNOpKernel : public paddle::framework::OpKernel<T> {
  public:
   void Compute(const paddle::framework::ExecutionContext& ctx) const override {
-    PADDLE_ENFORCE(paddle::platform::is_cpu_place(ctx.GetPlace()),
-                   "It must use CPUPlace.");
+    PADDLE_ENFORCE_EQ(platform::is_cpu_place(ctx.GetPlace()), true,
+                      paddle::platform::errors::PreconditionNotMet(
+                          "Operator DNNL Transpose must use CPUPlace"));
     auto& dev_ctx =
         ctx.template device_context<paddle::platform::MKLDNNDeviceContext>();
     const auto& mkldnn_engine = dev_ctx.GetEngine();
@@ -47,7 +48,8 @@ class TransposeMKLDNNOpKernel : public paddle::framework::OpKernel<T> {
 
     auto nchw_tz = paddle::framework::vectorize<int64_t>(input->dims());
 
-    const std::string key = platform::CreateKey(nchw_tz, ctx.OutputName("Out"));
+    const std::string key =
+        platform::CreateKey(dev_ctx, nchw_tz, ctx.OutputName("Out"));
 
     platform::TransposeMKLDNNHandler<T> handler(nchw_tz, axis, dev_ctx,
                                                 mkldnn_engine, key);
@@ -73,8 +75,9 @@ template <typename T>
 class TransposeMKLDNNGradOpKernel : public paddle::framework::OpKernel<T> {
  public:
   void Compute(const paddle::framework::ExecutionContext& ctx) const override {
-    PADDLE_ENFORCE(paddle::platform::is_cpu_place(ctx.GetPlace()),
-                   "It must use CPUPlace.");
+    PADDLE_ENFORCE_EQ(platform::is_cpu_place(ctx.GetPlace()), true,
+                      paddle::platform::errors::PreconditionNotMet(
+                          "Operator DNNL TransposeGrad must use CPUPlace"));
     auto* out_grad =
         ctx.Input<framework::Tensor>(framework::GradVarName("Out"));
     auto* x_grad = ctx.Output<framework::Tensor>(framework::GradVarName("X"));
@@ -101,7 +104,7 @@ class TransposeMKLDNNGradOpKernel : public paddle::framework::OpKernel<T> {
     auto nchw_tz = paddle::framework::vectorize<int64_t>(out_grad->dims());
 
     const std::string key = platform::CreateKey(
-        nchw_tz, ctx.OutputName(framework::GradVarName("X")));
+        dev_ctx, nchw_tz, ctx.OutputName(framework::GradVarName("X")));
 
     platform::TransposeMKLDNNHandler<T> handler(nchw_tz, reversed_axis, dev_ctx,
                                                 mkldnn_engine, key);
@@ -139,6 +142,11 @@ REGISTER_OP_KERNEL_WITH_CUSTOM_TYPE(transpose2, MKLDNN,
                                     ::paddle::platform::CPUPlace, S8,
                                     ops::kTransposeMKLDNNINT8,
                                     ops::TransposeMKLDNNOpKernel<int8_t>);
+
+REGISTER_OP_KERNEL_WITH_CUSTOM_TYPE(
+    transpose2, MKLDNN, ::paddle::platform::CPUPlace, BF16,
+    ops::kTransposeMKLDNNFP32,
+    ops::TransposeMKLDNNOpKernel<paddle::platform::bfloat16>);
 
 REGISTER_OP_KERNEL(transpose, MKLDNN, ::paddle::platform::CPUPlace,
                    ops::TransposeMKLDNNOpKernel<float>);

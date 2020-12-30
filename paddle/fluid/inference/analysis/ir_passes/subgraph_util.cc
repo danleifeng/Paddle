@@ -18,7 +18,14 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/analysis/ir_passes/subgraph_util.h"
 #include <algorithm>
-#include <string>
+
+namespace paddle {
+namespace framework {
+namespace ir {
+class Node;
+}  // namespace ir
+}  // namespace framework
+}  // namespace paddle
 
 namespace paddle {
 namespace inference {
@@ -123,7 +130,9 @@ void RenameAndGetOutputs(
   auto add_block_var = [&](const std::string &graph_arg,
                            const std::string &block_arg) {
     auto arg_var_node = graph_var_map.find(graph_arg);
-    PADDLE_ENFORCE(arg_var_node != graph_var_map.end());
+    PADDLE_ENFORCE_NE(arg_var_node, graph_var_map.end(),
+                      platform::errors::InvalidArgument(
+                          "Can not find %s in graph_var_map", graph_arg));
     auto *var_t = block_desc->Var(block_arg);
     var_t->SetShape(arg_var_node->second->Var()->GetShape());
     var_t->SetDataType(arg_var_node->second->Var()->GetDataType());
@@ -133,7 +142,10 @@ void RenameAndGetOutputs(
     framework::proto::OpDesc *op = block_desc->Op(index)->Proto();
     framework::OpDesc op_desc(*op, nullptr);
     auto correspond_node = subgraph_nodes[index];
-    PADDLE_ENFORCE_EQ(correspond_node->Name(), op->type());
+    PADDLE_ENFORCE_EQ(correspond_node->Name(), op->type(),
+                      platform::errors::PreconditionNotMet(
+                          "We should get %s, but get %s", op->type(),
+                          correspond_node->Name()));
 
     std::unordered_map<std::string, size_t> var2id;
     std::unordered_map<std::string, framework::ir::Node *> in_vars;
@@ -177,9 +189,9 @@ void RenameAndGetOutputs(
       auto out_var_name = op_desc.Output("Output").front();
       auto filter_shape = in_vars[filter_var_name]->Var()->GetShape();
       const std::vector<int> strides =
-          boost::get<std::vector<int>>(op_desc.GetAttr("strides"));
+          BOOST_GET_CONST(std::vector<int>, op_desc.GetAttr("strides"));
       const std::vector<int> paddings =
-          boost::get<std::vector<int>>(op_desc.GetAttr("paddings"));
+          BOOST_GET_CONST(std::vector<int>, op_desc.GetAttr("paddings"));
       if (same_hierarchy_conv2d_num_map[input_var_name] > 0) {
         (*output_names_with_id)
             .insert(out_var_name + std::to_string(var2id[out_var_name]));

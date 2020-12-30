@@ -12,6 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #include <Python.h>
+
 #include <algorithm>
 #include <cstdlib>
 #include <map>
@@ -22,6 +23,8 @@ limitations under the License. */
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/framework/executor.h"
 #include "paddle/fluid/framework/feed_fetch_method.h"
 #include "paddle/fluid/framework/feed_fetch_type.h"
@@ -34,15 +37,16 @@ limitations under the License. */
 #include "paddle/fluid/framework/lod_rank_table.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/lod_tensor_array.h"
-#include "paddle/fluid/framework/op_compatible_info.h"
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/framework/parallel_executor.h"
 #include "paddle/fluid/framework/prune.h"
 #include "paddle/fluid/framework/reader.h"
 #include "paddle/fluid/framework/save_load_util.h"
 #include "paddle/fluid/framework/scope_pool.h"
 #include "paddle/fluid/framework/selected_rows.h"
+#include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/fluid/framework/trainer.h"
 #include "paddle/fluid/framework/type_defs.h"
 #include "paddle/fluid/framework/version.h"
@@ -50,25 +54,32 @@ limitations under the License. */
 #include "paddle/fluid/memory/allocation/allocator_strategy.h"
 #include "paddle/fluid/memory/allocation/mmap_allocator.h"
 #include "paddle/fluid/operators/activation_op.h"
+#include "paddle/fluid/operators/common_infer_shape_functions.h"
 #include "paddle/fluid/operators/py_func_op.h"
-#include "paddle/fluid/operators/reader/lod_tensor_blocking_queue.h"
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/cpu_info.h"
+#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/dynload/dynamic_loader.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/init.h"
+#include "paddle/fluid/platform/monitor.h"
 #include "paddle/fluid/platform/place.h"
 #include "paddle/fluid/platform/profiler.h"
 #include "paddle/fluid/pybind/box_helper_py.h"
+#include "paddle/fluid/pybind/compatible.h"
 #include "paddle/fluid/pybind/const_value.h"
 #include "paddle/fluid/pybind/data_set_py.h"
 #include "paddle/fluid/pybind/exception.h"
 #include "paddle/fluid/pybind/fleet_wrapper_py.h"
+#include "paddle/fluid/pybind/generator_py.h"
 #include "paddle/fluid/pybind/global_value_getter_setter.h"
+#include "paddle/fluid/pybind/gloo_context_py.h"
 #include "paddle/fluid/pybind/gloo_wrapper_py.h"
+#include "paddle/fluid/pybind/heter_wrapper_py.h"
 #include "paddle/fluid/pybind/imperative.h"
 #include "paddle/fluid/pybind/inference_api.h"
 #include "paddle/fluid/pybind/ir.h"
+#include "paddle/fluid/pybind/ps_gpu_wrapper_py.h"
 #include "paddle/fluid/pybind/pybind_boost_headers.h"
 
 #ifdef PADDLE_WITH_NCCL
@@ -88,28 +99,40 @@ limitations under the License. */
 #include "paddle/fluid/platform/gpu_info.h"
 #endif
 
+#ifdef PADDLE_WITH_XPU
+#include "paddle/fluid/platform/xpu_info.h"
+#endif
+
+#ifdef PADDLE_WITH_CRYPTO
+#include "paddle/fluid/pybind/crypto.h"
+#endif
+
 #ifdef PADDLE_WITH_DISTRIBUTE
-#include "paddle/fluid/pybind/communicator_py.h"
+#include "paddle/fluid/pybind/fleet_py.h"
 #endif
 
 #include "pybind11/stl.h"
 
-DEFINE_bool(reader_queue_speed_test_mode, false,
-            "If set true, the queue.pop will only get data from queue but not "
-            "remove the data from queue for speed testing");
 DECLARE_bool(use_mkldnn);
-#ifdef PADDLE_WITH_NGRAPH
-DECLARE_bool(use_ngraph);
-#endif
 
 // disable auto conversion to list in Python
 PYBIND11_MAKE_OPAQUE(paddle::framework::LoDTensorArray);
-PYBIND11_MAKE_OPAQUE(paddle::framework::LoDTensor2DArray);
+PYBIND11_MAKE_OPAQUE(paddle::framework::FetchUnmergedList);
+PYBIND11_MAKE_OPAQUE(paddle::framework::FetchList);
+PYBIND11_MAKE_OPAQUE(paddle::framework::FetchType);
 
 namespace paddle {
 namespace pybind {
 bool IsCompiledWithCUDA() {
 #ifndef PADDLE_WITH_CUDA
+  return false;
+#else
+  return true;
+#endif
+}
+
+bool IsCompiledWithXPU() {
+#ifndef PADDLE_WITH_XPU
   return false;
 #else
   return true;
@@ -124,11 +147,14 @@ bool IsCompiledWithMKLDNN() {
 #endif
 }
 
-bool IsCompiledWithNGRAPH() {
-#ifndef PADDLE_WITH_NGRAPH
+bool SupportsBfloat16() {
+#ifndef PADDLE_WITH_MKLDNN
   return false;
 #else
-  return true;
+  if (platform::MayIUse(platform::cpu_isa_t::avx512_core))
+    return true;
+  else
+    return false;
 #endif
 }
 
@@ -184,7 +210,9 @@ static T PyObjectCast(PyObject *obj) {
   try {
     return py::cast<T>(py::handle(obj));
   } catch (py::cast_error &) {
-    PADDLE_THROW("Python object is not type of %s", typeid(T).name());
+    PADDLE_THROW(platform::errors::InvalidArgument(
+        "Python object is not type of %s, the real type is %s",
+        typeid(T).name(), obj->ob_type->tp_name));
   }
 }
 
@@ -198,7 +226,8 @@ static std::vector<std::shared_ptr<imperative::VarBase>> GetVarBaseList(
   for (auto &para : state_dict) {
     PyObject *py_obj = para.second.ptr();
     if (!py_obj || py_obj == Py_None) {
-      PADDLE_THROW("Save parameter [%s] is None", para.first);
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "The parameter [%s] to save is None", para.first));
     }
     vec_res.emplace_back(
         PyObjectCast<std::shared_ptr<imperative::VarBase>>(py_obj));
@@ -214,7 +243,8 @@ static std::vector<std::string> inline GetNameList(
   PyObject *py_obj = py_handle.ptr();  // get underlying PyObject
   // Python None is not nullptr in C++!
   if (!py_obj || py_obj == Py_None) {
-    PADDLE_THROW("Save parameter list is None");
+    PADDLE_THROW(platform::errors::InvalidArgument(
+        "The parameter list to save is None"));
   }
 
   if (PyList_Check(py_obj)) {
@@ -227,14 +257,16 @@ static std::vector<std::string> inline GetNameList(
     for (size_t i = 0; i < len; ++i) {
       PyObject *py_name =
           PyObject_GetAttrString(PyList_GET_ITEM(py_obj, i), kNameField);
-      PADDLE_ENFORCE_NOT_NULL(py_name);
+      PADDLE_ENFORCE_NOT_NULL(py_name,
+                              platform::errors::InvalidArgument(
+                                  "The name of parameter to save is None"));
       vec_res.emplace_back(PyObjectCast<std::string>(py_name));
       Py_DECREF(py_name);
     }
   } else {
-    PADDLE_THROW("Set parameter should be a list");
+    PADDLE_THROW(platform::errors::InvalidArgument(
+        "The parameters to save is not a list"));
   }
-
   return vec_res;
 }
 
@@ -246,7 +278,8 @@ static void inline CreateVariableIfNotExit(
   PyObject *py_obj = py_handle.ptr();  // get underlying PyObject
   // Python None is not nullptr in C++!
   if (!py_obj || py_obj == Py_None) {
-    PADDLE_THROW("Save parameter list is None");
+    PADDLE_THROW(
+        platform::errors::InvalidArgument("The parameter list to set is None"));
   }
 
   if (PyList_Check(py_obj)) {
@@ -260,19 +293,24 @@ static void inline CreateVariableIfNotExit(
     for (size_t i = 0; i < len; ++i) {
       PyObject *py_name =
           PyObject_GetAttrString(PyList_GET_ITEM(py_obj, i), kNameField);
-      PADDLE_ENFORCE_NOT_NULL(py_name);
+      PADDLE_ENFORCE_NOT_NULL(py_name,
+                              platform::errors::InvalidArgument(
+                                  "The name of parameter to set is None"));
       auto para_name = PyObjectCast<std::string>(py_name);
       Py_DECREF(py_name);
 
       auto var = scope.FindVar(para_name);
       if (var == nullptr) {
-        PADDLE_ENFORCE_NE(exe, nullptr,
-                          "Parameter not Initialized, "
-                          "Please set argument [executor] not None "
-                          "or run startup program first");
+        PADDLE_ENFORCE_NOT_NULL(exe,
+                                platform::errors::InvalidArgument(
+                                    "Parameter not Initialized, "
+                                    "Please set argument [executor] not None "
+                                    "or run startup program first"));
         PyObject *py_var_desc =
             PyObject_GetAttrString(PyList_GET_ITEM(py_obj, i), kVarDescField);
-        PADDLE_ENFORCE_NOT_NULL(py_var_desc);
+        PADDLE_ENFORCE_NOT_NULL(
+            py_var_desc, platform::errors::InvalidArgument(
+                             "The var_desc of parameter to set is None"));
         auto var_desc = PyObjectCast<framework::VarDesc>(py_var_desc);
         Py_DECREF(py_var_desc);
         var = const_cast<framework::Scope *>(&scope)->Var(para_name);
@@ -282,7 +320,8 @@ static void inline CreateVariableIfNotExit(
       }
     }
   } else {
-    PADDLE_THROW("Set parameter should be a list");
+    PADDLE_THROW(platform::errors::InvalidArgument(
+        "The parameters to set is not a list"));
   }
 
   return;
@@ -334,6 +373,10 @@ PYBIND11_MODULE(core_noavx, m) {
   BindException(&m);
 
   m.def("set_num_threads", &platform::SetNumThreads);
+
+#ifdef PADDLE_WITH_CUDA
+  m.def("cudnn_version", &platform::CudnnVersion);
+#endif
 
   m.def("from_dlpack", [](py::capsule *dltensor) {
     DLManagedTensor *dmt = reinterpret_cast<DLManagedTensor *>(
@@ -394,10 +437,43 @@ PYBIND11_MODULE(core_noavx, m) {
     return map_output;
   });
 
-  m.def("save_op_compatible_info", [](framework::ProgramDesc &desc) {
-    framework::OpCompatibleMap op_compatible_map;
-    op_compatible_map.InitOpCompatibleMap();
-    return op_compatible_map.ConvertToProto(desc.OpCompatibleMap());
+  m.def("save_op_version_info", [](framework::ProgramDesc &desc) {
+    framework::compatible::pb::OpVersionMap pb_vmap{desc.OpVersionMap()};
+    framework::compatible::SaveOpVersions(
+        framework::compatible::OpVersionRegistrar::GetInstance()
+            .GetVersionMap(),
+        &pb_vmap);
+  });
+
+  m.def("set_printoptions", [](const py::kwargs &kwargs) {
+    auto &print_opt = framework::PrintOptions::Instance();
+    if (kwargs.contains("precision")) {
+      print_opt.precision = kwargs["precision"].cast<int>();
+    }
+    if (kwargs.contains("threshold")) {
+      print_opt.threshold = kwargs["threshold"].cast<int>();
+    }
+    if (kwargs.contains("edgeitems")) {
+      print_opt.edgeitems = kwargs["edgeitems"].cast<int>();
+    }
+    if (kwargs.contains("linewidth")) {
+      print_opt.linewidth = kwargs["linewidth"].cast<int>();
+    }
+    if (kwargs.contains("sci_mode")) {
+      print_opt.sci_mode = kwargs["sci_mode"].cast<bool>();
+    }
+
+    VLOG(4) << "Set printoptions: precision=" << print_opt.precision
+            << ", threshold=" << print_opt.threshold
+            << ", edgeitems=" << print_opt.edgeitems
+            << ", linewidth=" << print_opt.linewidth
+            << ", sci_mode=" << print_opt.sci_mode;
+  });
+
+  m.def("broadcast_shape", [](const std::vector<int64_t> &x_dim,
+                              const std::vector<int64_t> &y_dim) {
+    return vectorize(operators::details::BroadcastTwoDims(
+        make_ddim(x_dim), make_ddim(y_dim), -1));
   });
 
   m.def(
@@ -440,6 +516,9 @@ PYBIND11_MODULE(core_noavx, m) {
 
   m.def("_set_paddle_lib_path", &paddle::platform::dynload::SetPaddleLibPath);
 
+  m.def("_promote_types_if_complex_exists",
+        &paddle::framework::PromoteTypesIfComplexExists);
+
   BindImperative(&m);
 
   py::class_<Tensor>(m, "Tensor", py::buffer_protocol())
@@ -461,6 +540,10 @@ PYBIND11_MODULE(core_noavx, m) {
              self.mutable_data<float>(place);
            })
       .def("_alloc_float",
+           [](Tensor &self, paddle::platform::XPUPlace &place) {
+             self.mutable_data<float>(place);
+           })
+      .def("_alloc_float",
            [](Tensor &self, paddle::platform::CPUPlace &place) {
              self.mutable_data<float>(place);
            })
@@ -470,6 +553,10 @@ PYBIND11_MODULE(core_noavx, m) {
            })
       .def("_alloc_int",
            [](Tensor &self, paddle::platform::CPUPlace &place) {
+             self.mutable_data<int>(place);
+           })
+      .def("_alloc_int",
+           [](Tensor &self, paddle::platform::XPUPlace &place) {
              self.mutable_data<int>(place);
            })
       .def("_alloc_int",
@@ -490,6 +577,11 @@ PYBIND11_MODULE(core_noavx, m) {
              return reinterpret_cast<uintptr_t>(self.mutable_data(place, type));
            })
       .def("_mutable_data",
+           [](Tensor &self, paddle::platform::XPUPlace &place,
+              paddle::framework::proto::VarType::Type type) {
+             return reinterpret_cast<uintptr_t>(self.mutable_data(place, type));
+           })
+      .def("_mutable_data",
            [](Tensor &self, paddle::platform::CUDAPlace &place,
               paddle::framework::proto::VarType::Type type) {
              return reinterpret_cast<uintptr_t>(self.mutable_data(place, type));
@@ -502,6 +594,8 @@ PYBIND11_MODULE(core_noavx, m) {
       .def("_clear", &Tensor::clear)
       .def("set", SetTensorFromPyArray<paddle::platform::CPUPlace>,
            py::arg("array"), py::arg("place"), py::arg("zero_copy") = false)
+      .def("set", SetTensorFromPyArray<paddle::platform::XPUPlace>,
+           py::arg("array"), py::arg("place"), py::arg("zero_copy") = false)
       .def("set", SetTensorFromPyArray<paddle::platform::CUDAPlace>,
            py::arg("array"), py::arg("place"), py::arg("zero_copy") = false)
       .def("set", SetTensorFromPyArray<paddle::platform::CUDAPinnedPlace>,
@@ -511,7 +605,7 @@ PYBIND11_MODULE(core_noavx, m) {
         
         Args:
           lod (numpy.ndarray): The data to set.
-          place (CPUPlace|CUDAPlace|CUDAPinnedPlace): The place where the 
+          place (CPUPlace|CUDAPlace|XPUPlace|CUDAPinnedPlace): The place where the 
           LoDTensor is to be set.
           zero_copy (bool, optional): Whether to share memory with the input numpy array.
           This parameter only works with CPUPlace. Default: False.
@@ -574,6 +668,8 @@ PYBIND11_MODULE(core_noavx, m) {
       .def("_get_double_element", TensorGetElement<double>)
       .def("_place", [](Tensor &self) { return self.place(); })
       .def("_dtype", [](Tensor &self) { return self.type(); })
+      .def("_layout",
+           [](Tensor &self) { return DataLayoutToString(self.layout()); })
       .def("_share_data_with", &Tensor::ShareDataWith)
       .def("__getitem__", PySliceTensor, py::return_value_policy::reference)
       .def("__str__", [](const Tensor &self) {
@@ -679,7 +775,10 @@ PYBIND11_MODULE(core_noavx, m) {
              LoD new_offset_lod = ConvertToOffsetBasedLoD(new_lod);
              PADDLE_ENFORCE_EQ(
                  CheckLoD(new_offset_lod, -1), true,
-                 "the provided recursive_sequence_lengths info is invalid");
+                 platform::errors::InvalidArgument(
+                     "The provided recursive_sequence_lengths info is invalid, "
+                     "the LoD converted by recursive_sequence_lengths is %s",
+                     new_lod));
              new (&instance) LoDTensor(new_offset_lod);
            })
       .def("__init__", [](LoDTensor &instance) { new (&instance) LoDTensor(); })
@@ -697,7 +796,8 @@ PYBIND11_MODULE(core_noavx, m) {
              std::copy(lod.begin(), lod.end(), std::back_inserter(new_lod));
              PADDLE_ENFORCE_EQ(
                  CheckLoD(new_lod, vectorize(self.dims()).front()), true,
-                 "the provided lod info is invalid");
+                 platform::errors::InvalidArgument(
+                     "The provided LoD is invalid, the LoD is %s", new_lod));
              self.set_lod(new_lod);
            },
            py::arg("lod"), R"DOC(
@@ -733,7 +833,11 @@ PYBIND11_MODULE(core_noavx, m) {
              LoD new_offset_lod = ConvertToOffsetBasedLoD(new_lod);
              PADDLE_ENFORCE_EQ(
                  CheckLoD(new_offset_lod, vectorize(self.dims()).front()), true,
-                 "the provided recursive_sequence_lengths info is invalid");
+                 platform::errors::InvalidArgument(
+                     "The provided recursive_sequence_lengths info is invalid, "
+                     "the LoD converted by recursive_sequence_lengths is "
+                     "%s",
+                     new_lod));
              self.set_lod(new_offset_lod);
            },
            py::arg("recursive_sequence_lengths"), R"DOC(
@@ -970,6 +1074,10 @@ All parameter, weight, gradient are variables in Paddle.
              return self.GetMutable<LoDTensor>();
            },
            py::return_value_policy::reference)
+      .def("get_bytes",
+           [](Variable &self) {
+             return py::bytes(*self.GetMutable<std::string>());
+           })
       .def("get_lod_rank_table",
            [](Variable &self) { return self.GetMutable<LoDRankTable>(); },
            py::return_value_policy::reference)
@@ -981,6 +1089,9 @@ All parameter, weight, gradient are variables in Paddle.
       .def("get_lod_tensor_array",
            [](Variable &self) { return self.GetMutable<LoDTensorArray>(); },
            py::return_value_policy::reference)
+      .def("get_fetch_list",
+           [](Variable &self) { return self.GetMutable<FetchList>(); },
+           py::return_value_policy::reference)
 #if (defined(PADDLE_WITH_NCCL))
       .def("get_communicator",
            [](Variable &self) -> platform::Communicator * {
@@ -990,41 +1101,19 @@ All parameter, weight, gradient are variables in Paddle.
 #endif
       .def("get_reader",
            [](Variable &self) -> framework::ReaderHolder * {
-             PADDLE_ENFORCE_EQ(self.IsType<framework::ReaderHolder>(), true);
+             PADDLE_ENFORCE_EQ(
+                 self.IsType<framework::ReaderHolder>(), true,
+                 platform::errors::InvalidArgument(
+                     "The variable is not type of ReaderHolder."));
              return self.GetMutable<framework::ReaderHolder>();
            },
-           py::return_value_policy::reference);
+           py::return_value_policy::reference)
+      .def("set_scope", [](Variable &self, Scope &scope) {
+        auto scope_vec = self.GetMutable<std::vector<framework::Scope *>>();
+        scope_vec->emplace_back(&scope);
+      });
 
   BindReader(&m);
-
-  using LoDTensorBlockingQueue =
-      ::paddle::operators::reader::LoDTensorBlockingQueue;
-  using LoDTensorBlockingQueueHolder =
-      ::paddle::operators::reader::LoDTensorBlockingQueueHolder;
-
-  py::class_<LoDTensorBlockingQueue, std::shared_ptr<LoDTensorBlockingQueue>>(
-      m, "LoDTensorBlockingQueue", "")
-      .def("push",
-           [](LoDTensorBlockingQueue &self,
-              const std::vector<framework::LoDTensor> &lod_tensor_vec) {
-             pybind11::gil_scoped_release release;
-             return self.Push(lod_tensor_vec);
-           })
-      .def("size", &LoDTensorBlockingQueue::Size)
-      .def("capacity", &LoDTensorBlockingQueue::Cap)
-      .def("close", &LoDTensorBlockingQueue::Close)
-      .def("kill", &LoDTensorBlockingQueue::Kill)
-      .def("is_closed", &LoDTensorBlockingQueue::IsClosed);
-
-  m.def("init_lod_tensor_blocking_queue",
-        [](Variable &var,
-           size_t capacity) -> std::shared_ptr<LoDTensorBlockingQueue> {
-          VLOG(1) << "init_lod_tensor_blocking_queue";
-          auto *holder = var.GetMutable<LoDTensorBlockingQueueHolder>();
-          holder->InitOnce(capacity, FLAGS_reader_queue_speed_test_mode);
-          return holder->GetQueue();
-        },
-        py::return_value_policy::copy);
 
   py::class_<Scope>(m, "_Scope", R"DOC(
     Scope is an association of a name to Variable. All variables belong to Scope.
@@ -1071,7 +1160,7 @@ All parameter, weight, gradient are variables in Paddle.
       .def("find_var", &Scope::FindVar, py::arg("name"),
            R"DOC(
            Find variable named :code:`name` in the current scope or
-           its parent scope. Return None if not found.
+           its parent scope. Return None if not found. 
 
            Args:
                name (str): the variable name.
@@ -1118,7 +1207,8 @@ All parameter, weight, gradient are variables in Paddle.
         std::string str;
         PADDLE_ENFORCE_EQ(
             info.Proto().SerializeToString(&str), true,
-            "Serialize OpProto Error. This could be a bug of Paddle.");
+            platform::errors::Fatal(
+                "Serialize OpProto Error. This could be a bug of Paddle."));
         ret_values.emplace_back(str);
       }
     }
@@ -1187,8 +1277,10 @@ All parameter, weight, gradient are variables in Paddle.
       prog_with_targets.MutableBlock(t[0])->Op(t[1])->SetIsTarget(true);
     }
     proto::ProgramDesc pruned_desc;
-    Prune(*prog_with_targets.Proto(), feeded_var_names, &pruned_desc);
-    return new ProgramDesc(pruned_desc);
+    auto pruned_origin_block_id_map =
+        Prune(*prog_with_targets.Proto(), feeded_var_names, &pruned_desc);
+    return std::make_tuple(ProgramDesc(pruned_desc),
+                           pruned_origin_block_id_map);
   });
   m.def("prune_backward",
         [](const framework::ProgramDesc &program) {
@@ -1216,6 +1308,7 @@ All parameter, weight, gradient are variables in Paddle.
        "The module will return special predefined variable name in Paddle")
       .def("empty", []() { return kEmptyVarName; })
       .def("temp", []() { return kTempVarName; });
+
   // clang-format off
   py::class_<paddle::platform::DeviceContext>(m, "DeviceContext")
       .def_static("create",
@@ -1224,10 +1317,25 @@ All parameter, weight, gradient are variables in Paddle.
                     return new paddle::platform::CPUDeviceContext();
                   })
       .def_static("create",
+                  [](paddle::platform::XPUPlace& place)
+                      -> paddle::platform::DeviceContext* {
+#ifndef PADDLE_WITH_XPU
+             PADDLE_THROW(
+                 platform::errors::PermissionDenied(
+                 "Cannot use XPUPlace in CPU/GPU version, "
+                 "Please recompile or reinstall Paddle with XPU support."));
+#else
+                    return new paddle::platform::XPUDeviceContext(place);
+#endif
+                  })
+      .def_static("create",
                   [](paddle::platform::CUDAPlace& place)
                       -> paddle::platform::DeviceContext* {
 #ifndef PADDLE_WITH_CUDA
-                    PADDLE_THROW("CUDAPlace is not supported in CPU device.");
+             PADDLE_THROW(
+                 platform::errors::PermissionDenied(
+                 "Cannot use CUDAPlace in CPU only version, "
+                 "Please recompile or reinstall Paddle with CUDA support."));
 #else
                     return new paddle::platform::CUDADeviceContext(place);
 #endif
@@ -1236,8 +1344,10 @@ All parameter, weight, gradient are variables in Paddle.
                 [](paddle::platform::CUDAPinnedPlace& place)
                         -> paddle::platform::DeviceContext* {
 #ifndef PADDLE_WITH_CUDA
-                  PADDLE_THROW(
-                        "CUDAPinnedPlace is not supported in CPU device.");
+             PADDLE_THROW(
+                 platform::errors::PermissionDenied(
+                 "Cannot use CUDAPinnedPlace in CPU only version, "
+                 "Please recompile or reinstall Paddle with CUDA support."));
 #else
                   return new paddle::platform::CUDAPinnedDeviceContext(place);
 #endif
@@ -1247,9 +1357,6 @@ All parameter, weight, gradient are variables in Paddle.
   py::class_<platform::Communicator>(m, "Communicator").def(py::init<>());
 #endif
   py::class_<platform::CUDAPlace>(m, "CUDAPlace", R"DOC(
-    **Note**:
-        For multi-card tasks, please use `FLAGS_selected_gpus` environment variable to set the visible GPU device.
-        The next version will fix the problem with `CUDA_VISIBLE_DEVICES` environment variable.
 
     CUDAPlace is a descriptor of a device.
     It represents a GPU device allocated or to be allocated with Tensor or LoDTensor.
@@ -1268,8 +1375,9 @@ All parameter, weight, gradient are variables in Paddle.
     Examples:
         .. code-block:: python
 
-          import paddle.fluid as fluid
-          gpu_place = fluid.CUDAPlace(0)
+          import paddle
+
+          place = paddle.CUDAPlace(0)
 
         )DOC")
       .def("__init__",
@@ -1312,32 +1420,103 @@ All parameter, weight, gradient are variables in Paddle.
              std::exit(-1);
 #endif
            })
+#ifdef PADDLE_WITH_CUDA
+      .def("get_device_id",
+           [](const platform::CUDAPlace &self) { return self.GetDeviceId(); })
       .def("_type", &PlaceIndex<platform::CUDAPlace>)
       .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::Place>)
       .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::CUDAPlace>)
       .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::CPUPlace>)
+      .def("_equals", &IsSamePlace<platform::CUDAPlace, platform::XPUPlace>)
       .def("_equals",
            &IsSamePlace<platform::CUDAPlace, platform::CUDAPinnedPlace>)
+      .def("_get_device_id",
+           [](platform::CUDAPlace &self) -> int { return self.GetDeviceId(); })
+#endif
+      .def("__repr__", string::to_string<const platform::CUDAPlace &>)
       .def("__str__", string::to_string<const platform::CUDAPlace &>);
 
+  py::class_<platform::XPUPlace>(m, "XPUPlace", R"DOC(
+    **Note**:
+    Examples:
+        .. code-block:: python
+          import paddle.fluid as fluid
+          xpu_place = fluid.XPUPlace(0)
+        )DOC")
+      .def("__init__",
+           [](platform::XPUPlace &self, int dev_id) {
+#ifdef PADDLE_WITH_XPU
+             if (UNLIKELY(dev_id < 0)) {
+               LOG(ERROR) << string::Sprintf(
+                   "Invalid XPUPlace(%d), device id must be 0 or "
+                   "positive integer",
+                   dev_id);
+               std::exit(-1);
+             }
+             if (UNLIKELY(dev_id >= platform::GetXPUDeviceCount())) {
+               if (platform::GetXPUDeviceCount() == 0) {
+                 LOG(ERROR) << "Cannot use XPU because there is no XPU "
+                               "detected on your "
+                               "machine.";
+                 std::exit(-1);
+               } else {
+                 LOG(ERROR) << string::Sprintf(
+                     "Invalid XPUPlace(%d), must inside [0, %d), because XPU "
+                     "number on your machine is %d",
+                     dev_id, platform::GetXPUDeviceCount(),
+                     platform::GetXPUDeviceCount());
+                 std::exit(-1);
+               }
+             }
+             new (&self) platform::XPUPlace(dev_id);
+#else
+             LOG(ERROR) << string::Sprintf(
+                 "Cannot use XPU because you have installed CPU/GPU version "
+                 "PaddlePaddle.\n"
+                 "If you want to use XPU, please try to install XPU version "
+                 "PaddlePaddle by: pip install paddlepaddle-xpu\n"
+                 "If you only have CPU, please change XPUPlace(%d) to be "
+                 "CPUPlace().\n",
+                 dev_id);
+             std::exit(-1);
+#endif
+           })
+#ifdef PADDLE_WITH_XPU
+      .def("_type", &PlaceIndex<platform::XPUPlace>)
+      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::Place>)
+      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::CUDAPlace>)
+      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::CPUPlace>)
+      .def("_equals", &IsSamePlace<platform::XPUPlace, platform::XPUPlace>)
+      .def("_equals",
+           &IsSamePlace<platform::XPUPlace, platform::CUDAPinnedPlace>)
+      .def("get_device_id",
+           [](const platform::XPUPlace &self) { return self.GetDeviceId(); })
+#endif
+      .def("__repr__", string::to_string<const platform::XPUPlace &>)
+      .def("__str__", string::to_string<const platform::XPUPlace &>);
+#ifdef PADDLE_WITH_XPU
+  m.def("get_xpu_device_count", platform::GetXPUDeviceCount);
+#endif
   py::class_<paddle::platform::CPUPlace>(m, "CPUPlace", R"DOC(
     CPUPlace is a descriptor of a device.
-    It represents a CPU device allocated or to be allocated with Tensor or LoDTensor.
+    It represents a CPU device on which a tensor will be allocated and a model will run.
 
     Examples:
         .. code-block:: python
 
-          import paddle.fluid as fluid
-          cpu_place = fluid.CPUPlace()to be allocated
+          import paddle
+          cpu_place = paddle.CPUPlace()
 
         )DOC")
       .def(py::init<>())
       .def("_type", &PlaceIndex<platform::CPUPlace>)
       .def("_equals", &IsSamePlace<platform::CPUPlace, platform::Place>)
+      .def("_equals", &IsSamePlace<platform::CPUPlace, platform::XPUPlace>)
       .def("_equals", &IsSamePlace<platform::CPUPlace, platform::CUDAPlace>)
       .def("_equals", &IsSamePlace<platform::CPUPlace, platform::CPUPlace>)
       .def("_equals",
            &IsSamePlace<platform::CPUPlace, platform::CUDAPinnedPlace>)
+      .def("__repr__", string::to_string<const platform::CPUPlace &>)
       .def("__str__", string::to_string<const platform::CPUPlace &>);
 
   py::class_<paddle::platform::CUDAPinnedPlace>(m, "CUDAPinnedPlace", R"DOC(
@@ -1351,14 +1530,16 @@ All parameter, weight, gradient are variables in Paddle.
     Examples:
         .. code-block:: python
 
-          import paddle.fluid as fluid
-          place = fluid.CUDAPinnedPlace()
+          import paddle
+          place = paddle.CUDAPinnedPlace()
 
         )DOC")
       .def("__init__",
            [](platform::CUDAPinnedPlace &self) {
 #ifndef PADDLE_WITH_CUDA
-             PADDLE_THROW("Cannot use CUDAPinnedPlace in CPU only version");
+             PADDLE_THROW(platform::errors::PermissionDenied(
+                 "Cannot use CUDAPinnedPlace in CPU only version, "
+                 "Please recompile or reinstall Paddle with CUDA support."));
 #endif
              new (&self) platform::CUDAPinnedPlace();
            })
@@ -1367,9 +1548,12 @@ All parameter, weight, gradient are variables in Paddle.
       .def("_equals",
            &IsSamePlace<platform::CUDAPinnedPlace, platform::CUDAPlace>)
       .def("_equals",
+           &IsSamePlace<platform::CUDAPinnedPlace, platform::XPUPlace>)
+      .def("_equals",
            &IsSamePlace<platform::CUDAPinnedPlace, platform::CPUPlace>)
       .def("_equals",
            &IsSamePlace<platform::CUDAPinnedPlace, platform::CUDAPinnedPlace>)
+      .def("__repr__", string::to_string<const platform::CUDAPinnedPlace &>)
       .def("__str__", string::to_string<const platform::CUDAPinnedPlace &>);
 
   py::class_<platform::Place>(m, "Place")
@@ -1378,18 +1562,25 @@ All parameter, weight, gradient are variables in Paddle.
       .def("_equals", &IsSamePlace<platform::Place, platform::Place>)
       .def("_equals", &IsSamePlace<platform::Place, platform::CUDAPlace>)
       .def("_equals", &IsSamePlace<platform::Place, platform::CPUPlace>)
+      .def("_equals", &IsSamePlace<platform::Place, platform::XPUPlace>)
       .def("_equals", &IsSamePlace<platform::Place, platform::CUDAPinnedPlace>)
       .def("is_gpu_place",
            [](platform::Place &self) { return platform::is_gpu_place(self); })
       .def("is_cpu_place",
            [](platform::Place &self) { return platform::is_cpu_place(self); })
+      .def("is_xpu_place",
+           [](platform::Place &self) { return platform::is_xpu_place(self); })
       .def("is_cuda_pinned_place",
            [](platform::Place &self) {
              return platform::is_cuda_pinned_place(self);
            })
       .def("gpu_device_id",
            [](platform::Place &self) {
-             return boost::get<platform::CUDAPlace>(self).device;
+             return BOOST_GET_CONST(platform::CUDAPlace, self).device;
+           })
+      .def("xpu_device_id",
+           [](platform::Place &self) {
+             return BOOST_GET_CONST(platform::XPUPlace, self).device;
            })
       .def("set_place", [](platform::Place &self,
                            const platform::Place &other) { self = other; })
@@ -1398,13 +1589,20 @@ All parameter, weight, gradient are variables in Paddle.
              self = cpu_place;
            })
       .def("set_place",
+           [](platform::Place &self, const platform::XPUPlace &xpu_place) {
+             self = xpu_place;
+           })
+      .def("set_place",
            [](platform::Place &self, const platform::CUDAPlace &gpu_place) {
              self = gpu_place;
            })
-      .def("set_place", [](platform::Place &self,
-                           const platform::CUDAPinnedPlace &cuda_pinned_place) {
-        self = cuda_pinned_place;
-      });
+      .def("set_place",
+           [](platform::Place &self,
+              const platform::CUDAPinnedPlace &cuda_pinned_place) {
+             self = cuda_pinned_place;
+           })
+      .def("__repr__", string::to_string<const platform::Place &>)
+      .def("__str__", string::to_string<const platform::Place &>);
 
   py::class_<OperatorBase>(m, "Operator")
       .def_static(
@@ -1412,15 +1610,21 @@ All parameter, weight, gradient are variables in Paddle.
           [](py::bytes protobin) {
             proto::OpDesc desc;
             PADDLE_ENFORCE_EQ(desc.ParsePartialFromString(protobin), true,
-                              "Cannot parse user input to OpDesc");
-            PADDLE_ENFORCE_EQ(desc.IsInitialized(), true,
-                              "User OpDesc is not initialized, reason %s",
-                              desc.InitializationErrorString());
+                              platform::errors::InvalidArgument(
+                                  "Cannot parse user input to OpDesc"));
+            PADDLE_ENFORCE_EQ(
+                desc.IsInitialized(), true,
+                platform::errors::InvalidArgument(
+                    "The provided OpDesc is not initialized, the reason is: %s",
+                    desc.InitializationErrorString()));
             return OpRegistry::CreateOp(desc);
           })
       .def("run",
            [](OperatorBase &self, const Scope &scope,
               const platform::CPUPlace &place) { self.Run(scope, place); })
+      .def("run",
+           [](OperatorBase &self, const Scope &scope,
+              const platform::XPUPlace &place) { self.Run(scope, place); })
       .def("run",
            [](OperatorBase &self, const Scope &scope,
               const platform::CUDAPlace &place) { self.Run(scope, place); })
@@ -1479,7 +1683,7 @@ All parameter, weight, gradient are variables in Paddle.
       .def("run_prepared_ctx",
            [](Executor &self, ExecutorPrepareContext *ctx, Scope *scope,
               std::map<std::string, const LoDTensor *> *feed_targets,
-              std::map<std::string, LoDTensor *> *fetch_targets,
+              std::map<std::string, FetchType *> *fetch_targets,
               bool create_local_scope = true, bool create_vars = true,
               const std::string &feed_holder_name = "feed",
               const std::string &fetch_holder_name = "fetch") {
@@ -1517,17 +1721,52 @@ All parameter, weight, gradient are variables in Paddle.
   m.def("init_gflags", framework::InitGflags);
   m.def("init_glog", framework::InitGLOG);
   m.def("load_op_library", framework::LoadOpLib);
-  m.def("init_devices",
-        [](bool init_p2p) { framework::InitDevices(init_p2p); });
+  m.def("init_devices", []() { framework::InitDevices(); });
 
-  m.def("is_compiled_with_ngraph", IsCompiledWithNGRAPH);
   m.def("is_compiled_with_cuda", IsCompiledWithCUDA);
+  m.def("is_compiled_with_xpu", IsCompiledWithXPU);
   m.def("is_compiled_with_mkldnn", IsCompiledWithMKLDNN);
+  m.def("supports_bfloat16", SupportsBfloat16);
   m.def("is_compiled_with_brpc", IsCompiledWithBrpc);
   m.def("is_compiled_with_dist", IsCompiledWithDIST);
-  m.def("run_cmd", [](const std::string &cmd) -> const std::string {
-    return paddle::framework::shell_get_command_output(cmd);
+  m.def("_cuda_synchronize", [](const platform::CUDAPlace &place) {
+    platform::DeviceContextPool::Instance().Get(place)->Wait();
   });
+
+  m.def("get_float_stats", []() {
+    std::vector<paddle::platform::ExportedStatValue<float>> float_stats;
+    paddle::platform::StatRegistry<float>::Instance().publish(float_stats);
+    std::unordered_map<std::string, float> stats_map;
+    for (const auto &stat : float_stats) {
+      stats_map[stat.key] = stat.value;
+    }
+    return stats_map;
+  });
+  m.def("get_int_stats", []() {
+    std::vector<paddle::platform::ExportedStatValue<int64_t>> int_stats;
+    paddle::platform::StatRegistry<int64_t>::Instance().publish(int_stats);
+    std::unordered_map<std::string, int64_t> stats_map;
+    for (const auto &stat : int_stats) {
+      stats_map[stat.key] = stat.value;
+    }
+    return stats_map;
+  });
+  m.def("run_cmd",
+        [](const std::string &cmd, int time_out = -1,
+           int sleep_inter = -1) -> const std::string {
+          return paddle::framework::shell_get_command_output(cmd, time_out,
+                                                             sleep_inter);
+        },
+        py::arg("cmd"), py::arg("time_out") = -1, py::arg("sleep_inter") = -1);
+  m.def("shell_execute_cmd",
+        [](const std::string &cmd, int time_out = 0, int sleep_inter = 0,
+           bool redirect_stderr = false) -> std::vector<std::string> {
+          return paddle::framework::shell_execute_cmd(
+              cmd, time_out, sleep_inter, redirect_stderr);
+        },
+        py::arg("cmd"), py::arg("time_out") = 0, py::arg("sleep_inter") = 0,
+        py::arg("redirect_stderr") = false);
+
 #ifdef PADDLE_WITH_CUDA
   m.def("is_float16_supported", [](const platform::CUDAPlace &place) -> bool {
     // Only GPUs with Compute Capability >= 53 support float16
@@ -1536,7 +1775,16 @@ All parameter, weight, gradient are variables in Paddle.
 #endif
 
   m.def("set_feed_variable", framework::SetFeedVariable);
-  m.def("get_fetch_variable", framework::GetFetchVariable);
+  m.def("get_fetch_variable",
+        [](const Scope &scope, const std::string &var_name,
+           size_t index) -> py::object {
+          auto &var = framework::GetFetchVariable(scope, var_name, index);
+          if (data_is_lod_tensor(var)) {
+            return py::cast(BOOST_GET(LoDTensor, var));
+          } else {
+            return py::cast(BOOST_GET(LoDTensorArray, var));
+          }
+        });
   m.def("get_variable_tensor", framework::GetVariableTensor);
 
   m.def("_is_program_version_supported", IsProgramVersionSupported);
@@ -1575,7 +1823,10 @@ All parameter, weight, gradient are variables in Paddle.
       .def("__len__", [](LoDTensorArray &self) { return self.size(); })
       .def("__setitem__",
            [](LoDTensorArray &self, size_t i, const LoDTensor &t) {
-             PADDLE_ENFORCE_LT(i, self.size());
+             PADDLE_ENFORCE_LT(i, self.size(),
+                               platform::errors::InvalidArgument(
+                                   "The index to set is larger than the size "
+                                   "of LoDTensorArray."));
              self[i].ShareDataWith(t);
              self[i].set_lod(t.lod());
            })
@@ -1616,16 +1867,70 @@ All parameter, weight, gradient are variables in Paddle.
            },
            py::return_value_policy::take_ownership);
 
-  py::class_<LoDTensor2DArray>(m, "LoDTensor2DArray", R"DOC(
-        LoDTensor2DArray is 2-D array of LoDTensor.
+  py::class_<FetchList>(m, "FetchList", R"DOC( FetchList is a
+        vector of boost::variant<LoDTensor, LoDTensorArray>.
         )DOC")
       .def("_move_to_list",
-           [](LoDTensor2DArray &self) -> py::list {
+           [](FetchList &self) -> py::list {
+             py::list res(self.size());
+             for (size_t i = 0; i < self.size(); ++i) {
+               if (data_is_lod_tensor(self[i])) {
+                 auto &data = BOOST_GET(LoDTensor, self[i]);
+                 res[i] = py::cast(std::move(data));
+               } else {
+                 auto &data = BOOST_GET(LoDTensorArray, self[i]);
+                 py::list tmp(data.size());
+                 for (size_t j = 0; j < data.size(); ++j) {
+                   tmp[j] = py::cast(std::move(data[j]));
+                 }
+                 res[i] = std::move(tmp);
+               }
+             }
+             self.clear();
+             return res;
+           },
+           py::return_value_policy::take_ownership)
+
+      .def("append",
+           [](FetchList &self, const LoDTensor &t) {
+             self.emplace_back();
+             auto &lod_tensor = BOOST_GET(LoDTensor, self.back());
+             lod_tensor.ShareDataWith(t);
+             lod_tensor.set_lod(t.lod());
+           },
+           py::arg("var"))
+
+      .def("append",
+           [](FetchList &self, const LoDTensorArray &t) {
+             self.emplace_back();
+             auto &lod_tensor_array = BOOST_GET(LoDTensorArray, self.back());
+             for (size_t i = 0; i < t.size(); ++i) {
+               lod_tensor_array[i].ShareDataWith(t[i]);
+               lod_tensor_array[i].set_lod(t[i].lod());
+             }
+           },
+           py::arg("var"));
+
+  py::class_<FetchUnmergedList>(m, "FetchUnmergedList", R"DOC(
+        FetchUnmergedList is 2-D array of FetchType(boost::variant(LoDTensor, LoDTensorArray)).
+        )DOC")
+      .def("_move_to_list",
+           [](FetchUnmergedList &self) -> py::list {
              py::list res(self.size());
              for (size_t i = 0; i < self.size(); ++i) {
                py::list tmp(self[i].size());
                for (size_t j = 0; j < self[i].size(); ++j) {
-                 tmp[j] = py::cast(std::move(self[i][j]));
+                 if (data_is_lod_tensor(self[i][j])) {
+                   auto &var = BOOST_GET(LoDTensor, self[i][j]);
+                   tmp[j] = py::cast(std::move(var));
+                 } else {
+                   auto &var = BOOST_GET(LoDTensorArray, self[i][j]);
+                   py::list tmp_array(var.size());
+                   for (size_t k = 0; k < var.size(); ++k) {
+                     tmp_array[k] = std::move(var[k]);
+                   }
+                   tmp[j] = std::move(tmp_array);
+                 }
                }
                res[i] = std::move(tmp);
                self[i].clear();
@@ -1679,6 +1984,11 @@ All parameter, weight, gradient are variables in Paddle.
   });
 
   m.def("size_of_dtype", framework::SizeOfType);
+
+#ifdef PADDLE_WITH_CUDA
+  m.def("set_cublas_switch", platform::SetAllowTF32Cublas);
+  m.def("get_cublas_switch", platform::AllowTF32Cublas);
+#endif  // PADDLE_WITH_CUDA
 
   using VarQuantScale =
       std::unordered_map<std::string, std::pair<bool, LoDTensor>>;
@@ -1741,28 +2051,40 @@ All parameter, weight, gradient are variables in Paddle.
     ExecutionStrategy allows the user to more preciously control how to run
     the program in ParallelExecutor by setting the property.
 
+    Returns:
+        ExecutionStrategy: An ExecutionStrategy object.
+
     Examples:
         .. code-block:: python
 
-          import paddle.fluid as fluid
-          x = fluid.layers.data(name='x', shape=[13], dtype='float32')
-          y = fluid.layers.data(name='y', shape=[1], dtype='float32')
-          y_predict = fluid.layers.fc(input=x, size=1, act=None)
+          import paddle
+          import paddle.static as static
+          import paddle.nn.functional as F
 
-          cost = fluid.layers.square_error_cost(input=y_predict, label=y)
-          avg_loss = fluid.layers.mean(cost)
+          paddle.enable_static()
 
-          sgd_optimizer = fluid.optimizer.SGD(learning_rate=0.001)
+          x = static.data(name='x', shape=[None, 13], dtype='float32')
+          y = static.data(name='y', shape=[None, 1], dtype='float32')
+          y_predict = static.nn.fc(input=x, size=1, act=None)
+
+          cost = F.square_error_cost(input=y_predict, label=y)
+          avg_loss = paddle.mean(cost)
+
+          sgd_optimizer = paddle.optimizer.SGD(learning_rate=0.001)
           sgd_optimizer.minimize(avg_loss)
 
-          exec_strategy = fluid.ExecutionStrategy()
+          exec_strategy = static.ExecutionStrategy()
           exec_strategy.num_threads = 4
 
-          train_exe = fluid.ParallelExecutor(use_cuda=False,
-                                             loss_name=avg_loss.name,
-                                             exec_strategy=exec_strategy)
-
+          train_exe = static.ParallelExecutor(use_cuda=False,
+                                              loss_name=avg_loss.name,
+                                              exec_strategy=exec_strategy)
         )DOC");
+
+  py::enum_<paddle::platform::DeviceType>(m, "DeviceType", py::arithmetic())
+      .value("CPU", paddle::platform::DeviceType::CPU)
+      .value("CUDA", paddle::platform::DeviceType::CUDA)
+      .value("XPU", paddle::platform::DeviceType::XPU);
 
   exec_strategy.def(py::init())
       .def_property(
@@ -1771,7 +2093,8 @@ All parameter, weight, gradient are variables in Paddle.
           [](ExecutionStrategy &self, size_t num_threads) {
             self.num_threads_ = num_threads;
           },
-          R"DOC(The type is INT, num_threads represents the size of thread pool that
+          R"DOC(
+            The type is INT, num_threads represents the size of thread pool that
             used to run the operators of the current program in ParallelExecutor.
             If :math:`num\_threads=1`, all the operators will execute one by one,
             but the order maybe difference between iterations.
@@ -1779,16 +2102,26 @@ All parameter, weight, gradient are variables in Paddle.
             device type and device count, for GPU, :math:`num\_threads=device\_count*4`, for CPU,
             :math:`num\_threads=CPU\_NUM*4`, the explanation of:math:`CPU\_NUM` is in ParallelExecutor.
             if it is not set, ParallelExecutor will get the cpu count by calling
-            `multiprocessing.cpu_count()`. Default 0.)DOC")
+            `multiprocessing.cpu_count()`. Default 0.
+
+            Examples:
+                .. code-block:: python
+
+                    import paddle
+                    import paddle.static as static
+
+                    paddle.enable_static()
+
+                    exec_strategy = static.ExecutionStrategy()
+                    exec_strategy.num_threads = 4
+            )DOC")
       .def_property(
-          "use_cuda",
-          [](const ExecutionStrategy &self) { return self.use_cuda_; },
-          [](ExecutionStrategy &self, bool use_cuda) {
-            self.use_cuda_ = use_cuda;
-          })  // FIXME(chengduo): Doesn't add doc for 'use_cuda', use_cuda may
-      // make user confuse, because ParallelExecutor has a parameter named
-      // 'use_cuda' too, in current implementation, ParallelExecutor's
-      // 'use_cuda' will rewrite ExecutionStrategy's 'use_cuda'.
+          "_use_device",
+          [](const ExecutionStrategy &self) { return self.use_device_; },
+          [](ExecutionStrategy &self, paddle::platform::DeviceType use_device) {
+            self.use_device_ = use_device;
+          })  // NOTE(liuyuhui): Doesn't add doc for 'use_device', because
+              // use_device isn‘t exposed to users.
       .def_property(
           "allow_op_delay",
           [](const ExecutionStrategy &self) { return self.allow_op_delay_; },
@@ -1811,13 +2144,24 @@ All parameter, weight, gradient are variables in Paddle.
                 many iterations to clean up the temp variables which
                 is generated during execution. It may make the execution faster,
                 because the temp variable's shape maybe the same between two iterations.
-                Default 1.
+                Default 100.
 
-                NOTES:
-                    1. If you fetch data when calling the 'run', the ParallelExecutor
-                       will clean up the temp variables at the end of the current iteration.
-                    2. In some NLP model, it may cause the GPU memory is insufficient,
-                       in this case, you should reduce `num_iteration_per_drop_scope`.
+                .. note::
+                    1. If you fetch data when calling the 'run', the ParallelExecutor 
+                    will clean up the temp variables at the end of the current iteration. 
+                    2. In some NLP model, it may cause the GPU memory is insufficient, 
+                    in this case, you should reduce `num_iteration_per_drop_scope`.
+
+                Examples:
+                    .. code-block:: python
+
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        exec_strategy = static.ExecutionStrategy()
+                        exec_strategy.num_iteration_per_drop_scope = 10
               )DOC")
       .def_property(
           "num_iteration_per_run",
@@ -1828,7 +2172,18 @@ All parameter, weight, gradient are variables in Paddle.
             self.num_iteration_per_run_ = num_iteration_per_run;
           },
           R"DOC(This config that how many iteration the executor will run when
-                user call exe.run() in python
+                user call exe.run() in python。Default: 1.
+
+                Examples:
+                    .. code-block:: python
+
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        exec_strategy = static.ExecutionStrategy()
+                        exec_strategy.num_iteration_per_run = 10
               )DOC")
       .def_property(
           "use_thread_barrier",
@@ -1858,29 +2213,34 @@ All parameter, weight, gradient are variables in Paddle.
     BuildStrategy allows the user to more preciously control how to
     build the SSA Graph in ParallelExecutor by setting the property.
 
+    Returns:
+        BuildStrategy: An BuildStrategy object.
+
     Examples:
         .. code-block:: python
 
             import os
-            import numpy as np
-            import paddle.fluid as fluid
+            import paddle
+            import paddle.static as static
 
-            os.environ["CPU_NUM"] = '2'
-            places = fluid.cpu_places()
+            paddle.enable_static()
 
-            data = fluid.layers.data(name="x", shape=[1], dtype="float32")
-            hidden = fluid.layers.fc(input=data, size=10)
-            loss = fluid.layers.mean(hidden)
-            fluid.optimizer.SGD(learning_rate=0.01).minimize(loss)
+            os.environ['CPU_NUM'] = str(2)
+            places = static.cpu_places()
 
-            build_strategy = fluid.BuildStrategy()
+            data = static.data(name="x", shape=[None, 1], dtype="float32")
+            hidden = static.nn.fc(input=data, size=10)
+            loss = paddle.mean(hidden)
+            paddle.optimizer.SGD(learning_rate=0.01).minimize(loss)
+
+            build_strategy = static.BuildStrategy()
             build_strategy.enable_inplace = True
             build_strategy.memory_optimize = True
-            build_strategy.reduce_strategy = fluid.BuildStrategy.ReduceStrategy.Reduce
-            program = fluid.compiler.CompiledProgram(fluid.default_main_program())
+            build_strategy.reduce_strategy = static.BuildStrategy.ReduceStrategy.Reduce
+            program = static.CompiledProgram(static.default_main_program())
             program = program.with_data_parallel(loss_name=loss.name,
-                                                 build_strategy=build_strategy,
-                                                 places=places)
+                                                  build_strategy=build_strategy,
+                                                  places=places)
 )DOC");
 
   py::enum_<BuildStrategy::ReduceStrategy>(build_strategy, "ReduceStrategy")
@@ -1898,8 +2258,10 @@ All parameter, weight, gradient are variables in Paddle.
           "reduce_strategy",
           [](const BuildStrategy &self) { return self.reduce_; },
           [](BuildStrategy &self, BuildStrategy::ReduceStrategy strategy) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.reduce_ = strategy;
           },
           R"DOC((fluid.BuildStrategy.ReduceStrategy, optional): there are two reduce
@@ -1913,20 +2275,26 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
-                        build_strategy.reduce_strategy = fluid.BuildStrategy.ReduceStrategy.Reduce
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
+                        build_strategy.reduce_strategy = static.BuildStrategy.ReduceStrategy.Reduce
                   )DOC")
       .def_property(
           "gradient_scale_strategy",
           [](const BuildStrategy &self) { return self.gradient_scale_; },
           [](BuildStrategy &self,
              BuildStrategy::GradientScaleStrategy strategy) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finalized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.gradient_scale_ = strategy;
           },
-          R"DOC((fluid.BuildStrategy.GradientScaleStrategy, optional): there are three
+          R"DOC((paddle.static.BuildStrategy.GradientScaleStrategy, optional): there are three
                 ways of defining :math:`loss@grad` in ParallelExecutor, that is, CoeffNumDevice,
                 One and Customized. By default, ParallelExecutor sets the :math:`loss@grad`
                 according to the number of devices. If you want to customize :math:`loss@grad`,
@@ -1935,57 +2303,60 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        import paddle.fluid.compiler as compiler
                         import numpy
                         import os
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
 
                         use_cuda = True
-                        place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
-                        exe = fluid.Executor(place)
+                        place = paddle.CUDAPlace(0) if use_cuda else paddle.CPUPlace()
+                        exe = static.Executor(place)
 
                         # NOTE: If you use CPU to run the program, you need
-                        # to specify the CPU_NUM, otherwise, fluid will use
+                        # to specify the CPU_NUM, otherwise, paddle will use
                         # all the number of the logic core as the CPU_NUM,
                         # in that case, the batch size of the input should be
                         # greater than CPU_NUM, if not, the process will be
                         # failed by an exception.
                         if not use_cuda:
                             os.environ['CPU_NUM'] = str(2)
-                            places = fluid.cpu_places()
+                            places = static.cpu_places()
                         else:
-                            places = places = fluid.cuda_places()
+                            places = static.cuda_places()
 
-                        data = fluid.layers.data(name='X', shape=[1], dtype='float32')
-                        hidden = fluid.layers.fc(input=data, size=10)
-                        loss = fluid.layers.mean(hidden)
-                        fluid.optimizer.SGD(learning_rate=0.01).minimize(loss)
+                        data = static.data(name='X', shape=[None, 1], dtype='float32')
+                        hidden = static.nn.fc(input=data, size=10)
+                        loss = paddle.mean(hidden)
+                        paddle.optimizer.SGD(learning_rate=0.01).minimize(loss)
 
-                        fluid.default_startup_program().random_seed=1
-                        exe.run(fluid.default_startup_program())
+                        exe.run(static.default_startup_program())
 
-                        build_strategy = fluid.BuildStrategy()
+                        build_strategy = static.BuildStrategy()
                         build_strategy.gradient_scale_strategy = \
-                                 fluid.BuildStrategy.GradientScaleStrategy.Customized
-                        compiled_prog = compiler.CompiledProgram(
-                                 fluid.default_main_program()).with_data_parallel(
+                                  static.BuildStrategy.GradientScaleStrategy.Customized
+                        compiled_prog = static.CompiledProgram(
+                                  static.default_main_program()).with_data_parallel(
                                           loss_name=loss.name, build_strategy=build_strategy,
-                                          places = places)
+                                          places=places)
 
                         dev_count =  len(places)
                         x = numpy.random.random(size=(10, 1)).astype('float32')
                         loss_grad = numpy.ones((dev_count)).astype("float32") * 0.01
                         loss_grad_name = loss.name+"@GRAD"
                         loss_data = exe.run(compiled_prog,
-                                             feed={"X": x, loss_grad_name : loss_grad},
-                                             fetch_list=[loss.name, loss_grad_name])
+                                              feed={"X": x, loss_grad_name : loss_grad},
+                                              fetch_list=[loss.name, loss_grad_name])
                    )DOC")
       .def_property(
           "debug_graphviz_path",
           [](const BuildStrategy &self) { return self.debug_graphviz_path_; },
           [](BuildStrategy &self, const std::string &path) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.debug_graphviz_path_ = path;
           },
           R"DOC((str, optional): debug_graphviz_path indicates the path that
@@ -1995,10 +2366,13 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
-                        build_strategy.debug_graphviz_path = "./graph"
+                        import paddle
+                        import paddle.static as static
 
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
+                        build_strategy.debug_graphviz_path = "./graph"
                     )DOC")
       .def_property(
           "enable_sequential_execution",
@@ -2006,8 +2380,10 @@ All parameter, weight, gradient are variables in Paddle.
             return self.enable_sequential_execution_;
           },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.enable_sequential_execution_ = b;
           },
           R"DOC((bool, optional): If set True, the execution order of ops would
@@ -2016,8 +2392,12 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.enable_sequential_execution = True
           )DOC")
       .def_property(
@@ -2026,8 +2406,10 @@ All parameter, weight, gradient are variables in Paddle.
             return self.remove_unnecessary_lock_;
           },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.remove_unnecessary_lock_ = b;
           },
           R"DOC((bool, optional): If set True, some locks in GPU ops would be
@@ -2036,8 +2418,12 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.remove_unnecessary_lock = True
           )DOC")
       .def_property(
@@ -2045,7 +2431,8 @@ All parameter, weight, gradient are variables in Paddle.
           [](const BuildStrategy &self) { return self.num_trainers_; },
           [](BuildStrategy &self, int num_trainers) {
 #ifdef WIN32
-            PADDLE_THROW("Windows has NO support to distribute mode.");
+            PADDLE_THROW(platform::errors::Unavailable(
+                "Distribution mode is not supported on Windows platform."));
 #endif
             self.num_trainers_ = num_trainers;
           })
@@ -2088,8 +2475,10 @@ All parameter, weight, gradient are variables in Paddle.
             return self.fuse_elewise_add_act_ops_;
           },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.fuse_elewise_add_act_ops_ = b;
           },
           R"DOC((bool, optional): fuse_elewise_add_act_ops indicate whether
@@ -2099,17 +2488,22 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.fuse_elewise_add_act_ops = True
                      )DOC")
       .def_property(
           "fuse_bn_act_ops",
           [](const BuildStrategy &self) { return self.fuse_bn_act_ops_; },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
                               platform::errors::PreconditionNotMet(
-                                  "BuildStrategy is finlaized."));
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.fuse_bn_act_ops_ = b;
           },
           R"DOC((bool, optional): fuse_bn_act_ops indicate whether
@@ -2119,17 +2513,47 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.fuse_bn_act_ops = True
+                     )DOC")
+      .def_property(
+          "fuse_bn_add_act_ops",
+          [](const BuildStrategy &self) { return self.fuse_bn_add_act_ops_; },
+          [](BuildStrategy &self, bool b) {
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
+            self.fuse_bn_add_act_ops_ = b;
+          },
+          R"DOC((bool, optional): fuse_bn_add_act_ops indicate whether
+                to fuse batch_norm, elementwise_add and activation_op,
+                it may make the execution faster. Default is True
+
+                Examples:
+                    .. code-block:: python
+
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
+                        build_strategy.fuse_bn_add_act_ops = True
                      )DOC")
       .def_property(
           "enable_auto_fusion",
           [](const BuildStrategy &self) { return self.enable_auto_fusion_; },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
                               platform::errors::PreconditionNotMet(
-                                  "BuildStrategy is finlaized."));
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.enable_auto_fusion_ = b;
           },
           R"DOC((bool, optional): Whether to enable fusing subgraph to a
@@ -2140,8 +2564,12 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.enable_auto_fusion = True
                     )DOC")
       .def_property(
@@ -2150,8 +2578,10 @@ All parameter, weight, gradient are variables in Paddle.
             return self.fuse_relu_depthwise_conv_;
           },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.fuse_relu_depthwise_conv_ = b;
           },
           R"DOC((bool, optional): fuse_relu_depthwise_conv indicate whether
@@ -2163,8 +2593,12 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.fuse_relu_depthwise_conv = True
           )DOC")
       .def_property("fuse_broadcast_ops",
@@ -2173,8 +2607,10 @@ All parameter, weight, gradient are variables in Paddle.
                              self.fuse_broadcast_ops_ == boost::none;
                     },
                     [](BuildStrategy &self, bool b) {
-                      PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                                        "BuildStrategy is finlaized.");
+                      PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                                        platform::errors::PreconditionNotMet(
+                                            "BuildStrategy has been finlaized, "
+                                            "cannot be configured again."));
                       self.fuse_broadcast_ops_ = b;
                     },
                     R"DOC((bool, optional): fuse_broadcast_op indicates whether
@@ -2187,8 +2623,12 @@ All parameter, weight, gradient are variables in Paddle.
                       Examples:
                           .. code-block:: python
 
-                              import paddle.fluid as fluid
-                              build_strategy = fluid.BuildStrategy()
+                              import paddle
+                              import paddle.static as static
+
+                              paddle.enable_static()
+
+                              build_strategy = static.BuildStrategy()
                               build_strategy.fuse_broadcast_ops = True
                     )DOC")
       .def_property("fuse_all_optimizer_ops",
@@ -2197,16 +2637,20 @@ All parameter, weight, gradient are variables in Paddle.
                              self.fuse_all_optimizer_ops_ == boost::none;
                     },
                     [](BuildStrategy &self, bool b) {
-                      PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                                        "BuildStrategy is finlaized.");
+                      PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                                        platform::errors::PreconditionNotMet(
+                                            "BuildStrategy has been finlaized, "
+                                            "cannot be configured again."));
                       self.fuse_all_optimizer_ops_ = b;
                     })
       .def_property(
           "sync_batch_norm",
           [](const BuildStrategy &self) { return self.sync_batch_norm_; },
           [](BuildStrategy &self, bool b) {
-            PADDLE_ENFORCE_EQ(!self.IsFinalized(), true,
-                              "BuildStrategy is finlaized.");
+            PADDLE_ENFORCE_NE(self.IsFinalized(), true,
+                              platform::errors::PreconditionNotMet(
+                                  "BuildStrategy has been finlaized, cannot be "
+                                  "configured again."));
             self.sync_batch_norm_ = b;
           },
           R"DOC((bool, optional): sync_batch_norm indicates whether to use
@@ -2219,8 +2663,12 @@ All parameter, weight, gradient are variables in Paddle.
                 Examples:
                     .. code-block:: python
 
-                        import paddle.fluid as fluid
-                        build_strategy = fluid.BuildStrategy()
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
                         build_strategy.sync_batch_norm = True
                 )DOC")
       .def_property(
@@ -2239,9 +2687,9 @@ All parameter, weight, gradient are variables in Paddle.
             } else if (PyBool_Check(py_obj)) {
               self.memory_optimize_ = (py_obj == Py_True);
             } else {
-              PADDLE_THROW(
-                  "BuildStrategy.memory_optimize must be None, False or "
-                  "True");
+              PADDLE_THROW(platform::errors::InvalidArgument(
+                  "BuildStrategy.memory_optimize must be set to None, False or "
+                  "True"));
             }
           },
           R"DOC((bool, optional): memory opitimize aims to save total memory
@@ -2250,14 +2698,28 @@ All parameter, weight, gradient are variables in Paddle.
                 Default None. None means framework would choose to use or not use 
                 this strategy automatically. Currently, None means that it is 
                 enabled when GC is disabled, and disabled when GC is enabled. 
-                True means enabling and False means disabling. Default is None.)DOC")
+                True means enabling and False means disabling. Default is None.
+
+                Examples:
+                    .. code-block:: python
+
+                        import paddle
+                        import paddle.static as static
+
+                        paddle.enable_static()
+
+                        build_strategy = static.BuildStrategy()
+                        build_strategy.memory_optimize = True
+                
+                )DOC")
       .def_property(
           "is_distribution",
           [](const BuildStrategy &self) { return self.is_distribution_; },
           [](BuildStrategy &self, bool b) {
 #ifdef WIN32
             if (b) {
-              PADDLE_THROW("Windows has NO support to distribute mode.");
+              PADDLE_THROW(platform::errors::Unavailable(
+                  "Distribution mode is not supported on Windows platform."));
             }
 #else
             self.is_distribution_ = b;
@@ -2270,6 +2732,10 @@ All parameter, weight, gradient are variables in Paddle.
           "enable_inplace",
           [](const BuildStrategy &self) { return self.enable_inplace_; },
           [](BuildStrategy &self, bool b) { self.enable_inplace_ = b; })
+      .def_property(
+          "enable_addto",
+          [](const BuildStrategy &self) { return self.enable_addto_; },
+          [](BuildStrategy &self, bool b) { self.enable_addto_ = b; })
       .def_property(
           "fuse_all_reduce_ops",
           [](const BuildStrategy &self) {
@@ -2335,16 +2801,23 @@ All parameter, weight, gradient are variables in Paddle.
                ret = self.Run(fetch_tensors, return_merged);
              }
              if (return_merged) {
-               return py::cast(std::move(
-                   boost::get<paddle::framework::FeedFetchList>(ret)));
+               return py::cast(
+                   std::move(BOOST_GET(paddle::framework::FetchList, ret)));
              } else {
                return py::cast(std::move(
-                   boost::get<paddle::framework::FetchUnmergedList>(ret)));
+                   BOOST_GET(paddle::framework::FetchUnmergedList, ret)));
              }
            })
       .def("device_count", &ParallelExecutor::DeviceCount);
 
   BindFleetWrapper(&m);
+
+#ifdef PADDLE_WITH_PSLIB
+  BindHeterWrapper(&m);
+#endif
+#if (defined PADDLE_WITH_NCCL) && (defined PADDLE_WITH_PSLIB)
+  BindPSGPUWrapper(&m);
+#endif
   BindGlooWrapper(&m);
   BindBoxHelper(&m);
 #ifdef PADDLE_WITH_BOX_PS
@@ -2353,12 +2826,25 @@ All parameter, weight, gradient are variables in Paddle.
 #ifdef PADDLE_WITH_NCCL
   BindNCCLWrapper(&m);
 #endif
+#ifdef PADDLE_WITH_GLOO
+  BindGlooContext(&m);
+#endif
   BindGraph(&m);
   BindNode(&m);
   BindInferenceApi(&m);
+  BindCompatible(&m);
   BindDataset(&m);
+  BindGenerator(&m);
+#ifdef PADDLE_WITH_CRYPTO
+  BindCrypto(&m);
+#endif
+
 #ifdef PADDLE_WITH_DISTRIBUTE
-  BindCommunicator(&m);
+  BindDistFleetWrapper(&m);
+  BindPSHost(&m);
+  BindCommunicatorContext(&m);
+  BindDistCommunicator(&m);
+  BindHeterClient(&m);
 #endif
 }
 }  // namespace pybind

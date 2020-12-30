@@ -13,10 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/platform/profiler.h"
+
 #include <string>
-#ifdef PADDLE_WITH_CUDA
-#include <cuda_runtime.h>
-#endif
+
 #include "gtest/gtest.h"
 
 TEST(Event, CpuElapsedTime) {
@@ -28,6 +27,9 @@ TEST(Event, CpuElapsedTime) {
   while (counter != 1000) {
     counter++;
   }
+#ifdef _WIN32
+  Sleep(1);
+#endif
   Event stop_event(EventType::kPopRange, "test", 0);
   EXPECT_GT(start_event.CpuElapsedMs(stop_event), 0);
 }
@@ -59,7 +61,7 @@ TEST(RecordEvent, RecordEvent) {
       PushEvent(name, EventRole::kOrdinary);
       int counter = 1;
       while (counter != i * 1000) counter++;
-      PopEvent(name);
+      PopEvent(name, EventRole::kOrdinary);
     }
   }
 
@@ -109,7 +111,7 @@ TEST(RecordEvent, RecordEvent) {
 
   // Bad Usage:
   PushEvent("event_without_pop", EventRole::kOrdinary);
-  PopEvent("event_without_push");
+  PopEvent("event_without_push", EventRole::kOrdinary);
   std::vector<std::vector<Event>> events = paddle::platform::GetAllEvents();
 
   int cuda_startup_count = 0;

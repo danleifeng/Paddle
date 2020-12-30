@@ -81,15 +81,31 @@ struct Layers {
     return out;
   }
 
-  VarDesc* pool2d(VarDesc* x, bool use_cudnn) {
+  VarDesc* pool2d(VarDesc* x, bool use_cudnn,
+                  const AttributeMap* attrs = nullptr) {
     VarDesc* out = lod_tensor(unique_name());
     OpDesc* op = program_.MutableBlock(0)->AppendOp();
     op->SetType("pool2d");
     op->SetInput("X", {x->Name()});
     op->SetOutput("Out", {out->Name()});
     op->SetAttr("use_cudnn", use_cudnn);
+    if (attrs) {
+      for (auto& iter : *attrs) {
+        op->SetAttr(iter.first, iter.second);
+      }
+    }
     op->SetAttr(OpProtoAndCheckerMaker::OpRoleAttrName(),
                 static_cast<int>(OpRole::kForward));
+    return out;
+  }
+
+  VarDesc* unsqueeze2(VarDesc* x, const std::vector<int> axes) {
+    VarDesc* out = lod_tensor(unique_name());
+    OpDesc* op = program_.MutableBlock(0)->AppendOp();
+    op->SetType("unsqueeze2");
+    op->SetInput("X", {x->Name()});
+    op->SetOutput("Out", {out->Name()});
+    op->SetAttr("axes", axes);
     return out;
   }
 
@@ -188,8 +204,9 @@ struct Layers {
     return binary_op("elementwise_add", x, y, out);
   }
 
-  VarDesc* elementwise_mul(VarDesc* x, VarDesc* y, VarDesc* out = nullptr) {
-    return binary_op("elementwise_mul", x, y, out);
+  VarDesc* elementwise_mul(VarDesc* x, VarDesc* y, VarDesc* out = nullptr,
+                           const AttributeMap* attrs = nullptr) {
+    return binary_op("elementwise_mul", x, y, out, attrs);
   }
 
   VarDesc* dropout(VarDesc* x, float dropout_prob,
@@ -258,23 +275,33 @@ struct Layers {
     return out;
   }
 
-  VarDesc* transpose2(VarDesc* x, std::vector<int> axis) {
+  VarDesc* transpose2(VarDesc* x, std::vector<int> axis,
+                      bool with_xshape = false) {
     VarDesc* out = lod_tensor(unique_name());
     OpDesc* op = program_.MutableBlock(0)->AppendOp();
     op->SetType("transpose2");
     op->SetInput("X", {x->Name()});
     op->SetAttr("axis", axis);
     op->SetOutput("Out", {out->Name()});
+    if (with_xshape) {
+      VarDesc* xshape = lod_tensor(unique_name());
+      op->SetOutput("XShape", {xshape->Name()});
+    }
     return out;
   }
 
-  VarDesc* reshape2(VarDesc* x, std::vector<int> shape) {
+  VarDesc* reshape2(VarDesc* x, std::vector<int> shape,
+                    bool with_xshape = false) {
     VarDesc* out = lod_tensor(unique_name());
     OpDesc* op = program_.MutableBlock(0)->AppendOp();
     op->SetType("reshape2");
     op->SetInput("X", {x->Name()});
     op->SetAttr("shape", shape);
     op->SetOutput("Out", {out->Name()});
+    if (with_xshape) {
+      VarDesc* xshape = lod_tensor(unique_name());
+      op->SetOutput("XShape", {xshape->Name()});
+    }
     return out;
   }
 
@@ -484,7 +511,7 @@ static std::string DebugString(OpDesc* op) {
   return os.str();
 }
 
-static std::string DebugString(Node* node) {
+static std::string DebugString(const Node* node) {
   std::ostringstream os;
   if (node->IsOp() && node->Op()) {
     OpDesc* op = node->Op();
@@ -553,7 +580,7 @@ static std::string DebugString(const std::vector<Node*>& nodes) {
   for (auto* node : nodes) {
     if (node->IsOp() && node->Op()) {
       os << "  ";
-    } else if (node->IsVar() && node->Var()) {
+    } else if ((node->IsVar() && node->Var()) || node->IsCtrlVar()) {
       os << "    ";
     }
     os << DebugString(node) << "\n";
@@ -577,6 +604,17 @@ static std::string DebugString(Graph* graph) {
 
 static std::string DebugString(const std::unique_ptr<Graph>& graph) {
   return DebugString(graph.get());
+}
+
+static std::vector<ir::Node*> GetOpNodes(const std::unique_ptr<Graph>& graph,
+                                         std::string op_type) {
+  std::vector<ir::Node*> rc;
+  for (auto* node : graph->Nodes()) {
+    if (node->IsOp() && node->Op() && node->Op()->Type() == op_type) {
+      rc.push_back(node);
+    }
+  }
+  return rc;
 }
 
 static int GetNumOpNodes(const std::unique_ptr<Graph>& graph,

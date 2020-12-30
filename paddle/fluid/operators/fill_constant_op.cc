@@ -14,6 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/fill_constant_op.h"
 #include <string>
+#include "paddle/fluid/framework/op_version_registry.h"
 namespace paddle {
 namespace operators {
 
@@ -22,10 +23,19 @@ class FillConstantOp : public framework::OperatorWithKernel {
   using framework::OperatorWithKernel::OperatorWithKernel;
 
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasOutput("Out"), true,
-                      "Output(Out) of FillConstantOp should not be null.");
+    OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "FillConstant");
 
     auto& shape = ctx->Attrs().Get<std::vector<int64_t>>("shape");
+    if (!ctx->HasInput("ShapeTensor") && !ctx->HasInputs("ShapeTensorList")) {
+      for (size_t i = 0; i < shape.size(); ++i) {
+        PADDLE_ENFORCE_GE(
+            shape[i], 0,
+            platform::errors::InvalidArgument(
+                "Each value of attribute 'shape' is expected to be no less "
+                "than 0. But recieved: shape[%u] = %d; shape = [%s].",
+                i, shape[i], framework::make_ddim(shape)));
+      }
+    }
 
     if (shape.empty() && ctx->HasInput("ShapeTensor")) {
       auto shape_dims = ctx->GetInputDim("ShapeTensor");
@@ -42,21 +52,22 @@ class FillConstantOp : public framework::OperatorWithKernel {
   }
 
  protected:
+  framework::OpKernelType GetKernelTypeForVar(
+      const std::string& var_name, const framework::Tensor& tensor,
+      const framework::OpKernelType& expected_kernel_type) const override {
+    if (var_name == "ShapeTensor" || var_name == "ShapeTensorList") {
+      return expected_kernel_type;
+    } else {
+      return framework::OpKernelType(expected_kernel_type.data_type_,
+                                     tensor.place(), tensor.layout());
+    }
+  }
+
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
     return framework::OpKernelType(
         framework::proto::VarType::Type(ctx.Attr<int>("dtype")),
         ctx.GetPlace());
-  }
-
-  framework::OpKernelType GetKernelTypeForVar(
-      const std::string& var_name, const Tensor& tensor,
-      const framework::OpKernelType& expected_kernel_type) const override {
-    if (var_name == "ShapeTensor" || var_name == "ShapeTensorList") {
-      return expected_kernel_type;
-    }
-    return framework::OpKernelType(expected_kernel_type.data_type_,
-                                   tensor.place(), tensor.layout());
   }
 };
 
@@ -64,9 +75,8 @@ class FillConstantOpVarTypeInference : public framework::VarTypeInference {
  public:
   void operator()(framework::InferVarTypeContext* ctx) const override {
     auto data_type = static_cast<framework::proto::VarType::Type>(
-        boost::get<int>(ctx->GetAttr("dtype")));
-    auto& out_var_name = ctx->Output("Out").front();
-    ctx->SetDataType(out_var_name, data_type);
+        BOOST_GET_CONST(int, ctx->GetAttr("dtype")));
+    ctx->SetOutputDataType("Out", data_type);
   }
 };
 
@@ -80,6 +90,11 @@ class FillConstantOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<std::vector<int64_t>>("shape",
                                   "(vector<int64_t>) The shape of the output")
         .SetDefault({});
+    AddInput("ValueTensor",
+             "(Tensor, optional) If provided, fill_constant Op will use this "
+             "as value to set the output Tensor, this has a higher priority "
+             "than attr(str_value), the shape of this tensor MUST BE [1].")
+        .AsDispensable();
     AddInput("ShapeTensor",
              "(Tensor<int>), optional). The shape of the output."
              "It has a higher priority than Attr(shape).")
@@ -128,4 +143,15 @@ REGISTER_OP_CPU_KERNEL(fill_constant, ops::FillConstantKernel<float>,
                        ops::FillConstantKernel<int64_t>,
                        ops::FillConstantKernel<int>,
                        ops::FillConstantKernel<bool>,
-                       ops::FillConstantKernel<paddle::platform::float16>);
+                       ops::FillConstantKernel<paddle::platform::float16>,
+                       ops::FillConstantKernel<paddle::platform::complex64>,
+                       ops::FillConstantKernel<paddle::platform::complex128>);
+
+REGISTER_OP_VERSION(fill_constant)
+    .AddCheckpoint(
+        R"ROC(
+      Upgrade fill_constant, add a new input [ValueTensor].
+    )ROC",
+        paddle::framework::compatible::OpVersionDesc().NewInput(
+            "ValueTensor",
+            "In order to support new feature tensor support of Value"));

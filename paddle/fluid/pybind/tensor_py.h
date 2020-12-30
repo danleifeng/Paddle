@@ -19,11 +19,14 @@ limitations under the License. */
 #include <memory>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
+#include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/memory/memcpy.h"
 #include "paddle/fluid/operators/math/concat_and_split.h"
 #include "paddle/fluid/operators/strided_memcpy.h"
+#include "paddle/fluid/platform/bfloat16.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/float16.h"
 #include "pybind11/numpy.h"
@@ -38,6 +41,9 @@ namespace detail {
 // import numpy as np
 // print np.dtype(np.float16).num  # 23
 constexpr int NPY_FLOAT16_ = 23;
+constexpr int NPY_UINT16_ = 4;
+constexpr int NPY_COMPLEX64 = 14;
+constexpr int NPY_COMPLEX128 = 15;
 
 // Note: Since float16 is not a builtin type in C++, we register
 // paddle::platform::float16 as numpy.float16.
@@ -54,7 +60,62 @@ struct npy_format_descriptor<paddle::platform::float16> {
     // https://docs.python.org/3/library/struct.html#format-characters.
     return "e";
   }
-  static PYBIND11_DESCR name() { return _("float16"); }
+  static constexpr auto name = _("float16");
+};
+
+// Note: Since bfloat16 is not a builtin type in C++ and in numpy,
+// we register paddle::platform::bfloat16 as numpy.uint16.
+template <>
+struct npy_format_descriptor<paddle::platform::bfloat16> {
+  static py::dtype dtype() {
+    handle ptr = npy_api::get().PyArray_DescrFromType_(NPY_UINT16_);
+    return reinterpret_borrow<py::dtype>(ptr);
+  }
+  static std::string format() {
+    // Note: "H" represents UINT16.
+    // Details at:
+    // https://docs.python.org/3/library/struct.html#format-characters.
+    return "H";
+  }
+  static constexpr auto name = _("bfloat16");
+};
+
+// we register paddle::platform::complex64 as numpy.complex64.
+template <>
+struct npy_format_descriptor<paddle::platform::complex64> {
+  static py::dtype dtype() {
+    handle ptr = npy_api::get().PyArray_DescrFromType_(NPY_COMPLEX64);
+    return reinterpret_borrow<py::dtype>(ptr);
+  }
+
+  static std::string format() {
+    // Note: "F" represents complex64.
+    // Details at:
+    // https://stackoverflow.com/questions/13997087/what-are-the-available-datatypes-for-dtype-with-numpys-loadtxt-an-genfromtx
+    // for k, v in np.sctypeDict.iteritems():
+    //     print '{0:14s} : {1:40s}'.format(str(k), v)
+    return "F";
+  }
+  static constexpr auto name = _("complext64");
+};
+
+// we register paddle::platform::complex128 as numpy.complex128.
+template <>
+struct npy_format_descriptor<paddle::platform::complex128> {
+  static py::dtype dtype() {
+    handle ptr = npy_api::get().PyArray_DescrFromType_(NPY_COMPLEX128);
+    return reinterpret_borrow<py::dtype>(ptr);
+  }
+
+  static std::string format() {
+    // Note: "D" represents complex128.
+    // Details at:
+    // https://stackoverflow.com/questions/13997087/what-are-the-available-datatypes-for-dtype-with-numpys-loadtxt-an-genfromtx
+    // for k, v in np.sctypeDict.iteritems():
+    //     print '{0:14s} : {1:40s}'.format(str(k), v)
+    return "D";
+  }
+  static constexpr auto name = _("complext128");
 };
 
 }  // namespace detail
@@ -102,6 +163,9 @@ struct ValidDTypeToPyArrayChecker {
   }
 
 DECLARE_VALID_DTYPE_TO_PY_ARRAY(platform::float16);
+DECLARE_VALID_DTYPE_TO_PY_ARRAY(platform::bfloat16);
+DECLARE_VALID_DTYPE_TO_PY_ARRAY(platform::complex64);
+DECLARE_VALID_DTYPE_TO_PY_ARRAY(platform::complex128);
 DECLARE_VALID_DTYPE_TO_PY_ARRAY(float);
 DECLARE_VALID_DTYPE_TO_PY_ARRAY(double);
 DECLARE_VALID_DTYPE_TO_PY_ARRAY(bool);
@@ -117,31 +181,50 @@ inline std::string TensorDTypeToPyDTypeStr(
   if (type == proto_type) {                                                 \
     if (std::is_same<T, platform::float16>::value) {                        \
       return "e";                                                           \
+    } else if (std::is_same<T, platform::bfloat16>::value) {                \
+      /* NumPy character code of uint16 due to no support for bfloat16 */   \
+      return "H";                                                           \
+    } else if (std::is_same<T, platform::complex64>::value) {               \
+      return "F";                                                           \
+    } else if (std::is_same<T, platform::complex128>::value) {              \
+      return "D";                                                           \
     } else {                                                                \
       constexpr auto kIsValidDType = ValidDTypeToPyArrayChecker<T>::kValue; \
-      PADDLE_ENFORCE_EQ(kIsValidDType, true,                                \
-                        "This type of tensor cannot be expose to Python");  \
+      PADDLE_ENFORCE_EQ(                                                    \
+          kIsValidDType, true,                                              \
+          platform::errors::Unimplemented(                                  \
+              "This type [%s] of tensor cannot be expose to Python",        \
+              typeid(T).name()));                                           \
       return py::format_descriptor<T>::format();                            \
     }                                                                       \
   }
 
   _ForEachDataType_(TENSOR_DTYPE_TO_PY_DTYPE);
 #undef TENSOR_DTYPE_TO_PY_DTYPE
-  PADDLE_THROW("Unsupported data type %d", static_cast<int>(type));
+  PADDLE_THROW(platform::errors::Unimplemented(
+      "Unsupported tensor data type: %s", framework::DataTypeToString(type)));
 }
 
 }  // namespace details
 
 template <typename T>
 T TensorGetElement(const framework::Tensor &self, size_t offset) {
-  PADDLE_ENFORCE_LT(offset, self.numel());
+  PADDLE_ENFORCE_LT(offset, self.numel(),
+                    platform::errors::InvalidArgument(
+                        "The offset exceeds the size of tensor."));
   T b = static_cast<T>(0);
   if (platform::is_cpu_place(self.place())) {
     b = self.data<T>()[offset];
-#ifdef PADDLE_WITH_CUDA
-  } else {
+  } else if (platform::is_xpu_place(self.place())) {
+#ifdef PADDLE_WITH_XPU
     const T *a = self.data<T>();
-    auto p = boost::get<platform::CUDAPlace>(self.place());
+    auto p = BOOST_GET_CONST(platform::XPUPlace, self.place());
+    paddle::memory::Copy(platform::CPUPlace(), &b, p, a + offset, sizeof(T));
+#endif
+  } else if (platform::is_gpu_place(self.place())) {
+#ifdef PADDLE_WITH_CUDA
+    const T *a = self.data<T>();
+    auto p = BOOST_GET_CONST(platform::CUDAPlace, self.place());
     paddle::memory::Copy(platform::CPUPlace(), &b, p, a + offset, sizeof(T),
                          nullptr);
 #endif
@@ -151,12 +234,20 @@ T TensorGetElement(const framework::Tensor &self, size_t offset) {
 
 template <typename T>
 void TensorSetElement(framework::Tensor *self, size_t offset, T elem) {
-  PADDLE_ENFORCE_LT(offset, self->numel());
+  PADDLE_ENFORCE_LT(offset, self->numel(),
+                    platform::errors::InvalidArgument(
+                        "The offset exceeds the size of tensor."));
   if (platform::is_cpu_place(self->place())) {
     self->mutable_data<T>(self->place())[offset] = elem;
+  } else if (platform::is_xpu_place(self->place())) {
+#ifdef PADDLE_WITH_XPU
+    auto p = BOOST_GET_CONST(platform::XPUPlace, self->place());
+    T *a = self->mutable_data<T>(p);
+    paddle::memory::Copy(p, a + offset, platform::CPUPlace(), &elem, sizeof(T));
+#endif
+  } else if (platform::is_gpu_place(self->place())) {
 #ifdef PADDLE_WITH_CUDA
-  } else {
-    auto p = boost::get<platform::CUDAPlace>(self->place());
+    auto p = BOOST_GET_CONST(platform::CUDAPlace, self->place());
     T *a = self->mutable_data<T>(p);
     paddle::memory::Copy(p, a + offset, platform::CPUPlace(), &elem, sizeof(T),
                          nullptr);
@@ -185,6 +276,16 @@ void SetTensorFromPyArrayT(
       auto dst = self->mutable_data<T>(place);
       std::memcpy(dst, array.data(), array.nbytes());
     }
+  } else if (paddle::platform::is_xpu_place(place)) {
+#ifdef PADDLE_WITH_XPU
+    auto dst = self->mutable_data<T>(place);
+    xpu_memcpy(dst, array.data(), array.nbytes(),
+               XPUMemcpyKind::XPU_HOST_TO_DEVICE);
+#else
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "Cannot use XPUPlace in CPU/GPU version, "
+        "Please recompile or reinstall Paddle with XPU support."));
+#endif
   } else {
 #ifdef PADDLE_WITH_CUDA
     auto dst = self->mutable_data<T>(place);
@@ -194,13 +295,16 @@ void SetTensorFromPyArrayT(
       paddle::platform::GpuMemcpySync(dst, array.data(), array.nbytes(),
                                       cudaMemcpyHostToDevice);
     } else {
-      PADDLE_THROW(
-          "Incompatible place type: Tensor.set() supports CPUPlace, CUDAPlace "
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "Incompatible place type: Tensor.set() supports "
+          "CPUPlace, CUDAPlace "
           "and CUDAPinnedPlace, but got %s!",
-          place);
+          place));
     }
 #else
-    PADDLE_THROW("Not supported GPU, please compile WITH_GPU option");
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "Cannot use CUDAPlace or CUDAPinnedPlace in CPU only version, "
+        "Please recompile or reinstall Paddle with CUDA support."));
 #endif
   }
 }
@@ -226,20 +330,27 @@ void SetTensorFromPyArray(framework::Tensor *self, const py::object &obj,
   } else if (py::isinstance<py::array_t<paddle::platform::float16>>(array)) {
     SetTensorFromPyArrayT<paddle::platform::float16, P>(self, array, place,
                                                         zero_copy);
+  } else if (py::isinstance<py::array_t<paddle::platform::complex64>>(array)) {
+    SetTensorFromPyArrayT<paddle::platform::complex64, P>(self, array, place,
+                                                          zero_copy);
+  } else if (py::isinstance<py::array_t<paddle::platform::complex128>>(array)) {
+    SetTensorFromPyArrayT<paddle::platform::complex128, P>(self, array, place,
+                                                           zero_copy);
   } else if (py::isinstance<py::array_t<uint16_t>>(array)) {
-    // TODO(cql): temporary keeping uint16, which is used for casting float16
-    // before. It should be depracated later.
-    SetTensorFromPyArrayT<paddle::platform::float16, P>(self, array, place,
-                                                        zero_copy);
+    // since there is still no support for bfloat16 in NumPy,
+    // uint16 is used for casting bfloat16
+    SetTensorFromPyArrayT<paddle::platform::bfloat16, P>(self, array, place,
+                                                         zero_copy);
   } else if (py::isinstance<py::array_t<bool>>(array)) {
     SetTensorFromPyArrayT<bool, P>(self, array, place, zero_copy);
   } else {
-    PADDLE_THROW(
-        "Incompatible data or style type: tensor.set() supports bool, float16, "
-        "float32, "
-        "float64, "
-        "int8, int16, int32, int64 and uint8, uint16, but got %s!",
-        array.dtype());
+    // obj may be any type, obj.cast<py::array>() may be failed,
+    // then the array.dtype will be string of unknown meaning,
+    PADDLE_THROW(platform::errors::InvalidArgument(
+        "Input object type error or incompatible array data type. "
+        "tensor.set() supports array with bool, float16, float32, "
+        "float64, int8, int16, int32, int64, uint8 or uint16, "
+        "please check your input or input array data type."));
   }
 }
 
@@ -339,14 +450,21 @@ inline framework::Tensor *_getTensor(const framework::Tensor &self,
   output->Resize(ddim);
   auto place = self.place();
   if (platform::is_cpu_place(place)) {
-    output->mutable_data(boost::get<platform::CPUPlace>(place), self.type());
-#ifdef PADDLE_WITH_CUDA
+    output->mutable_data(BOOST_GET_CONST(platform::CPUPlace, place),
+                         self.type());
+  } else if (platform::is_xpu_place(place)) {
+#ifdef PADDLE_WITH_XPU
+    output->mutable_data(BOOST_GET_CONST(platform::XPUPlace, place),
+                         self.type());
+#endif
   } else {
+#ifdef PADDLE_WITH_CUDA
     if (platform::is_cuda_pinned_place(place)) {
-      output->mutable_data(boost::get<platform::CUDAPinnedPlace>(place),
+      output->mutable_data(BOOST_GET_CONST(platform::CUDAPinnedPlace, place),
                            self.type());
     } else if ((platform::is_gpu_place(place))) {
-      output->mutable_data(boost::get<platform::CUDAPlace>(place), self.type());
+      output->mutable_data(BOOST_GET_CONST(platform::CUDAPlace, place),
+                           self.type());
     }
 #endif
   }
@@ -387,7 +505,8 @@ void _sliceDapper(const framework::Tensor *in, framework::Tensor *out,
       _sliceCompute<T, 9>(in, out, ctx, axes, starts);
       break;
     default:
-      PADDLE_THROW("dim size not exepected, current is %d", size);
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "The dim size should be 1 to 9, current is %d", size));
       break;
   }
 }
@@ -435,6 +554,12 @@ inline framework::Tensor *_sliceTensor(const framework::Tensor &self,
   switch (src_type) {
     case framework::proto::VarType::FP16:
       return _sliceAndConcat<paddle::platform::float16>(self, obj, dim);
+    case framework::proto::VarType::BF16:
+      return _sliceAndConcat<paddle::platform::bfloat16>(self, obj, dim);
+    case framework::proto::VarType::COMPLEX64:
+      return _sliceAndConcat<paddle::platform::complex64>(self, obj, dim);
+    case framework::proto::VarType::COMPLEX128:
+      return _sliceAndConcat<paddle::platform::complex128>(self, obj, dim);
     case framework::proto::VarType::FP32:
       return _sliceAndConcat<float>(self, obj, dim);
     case framework::proto::VarType::FP64:
@@ -452,7 +577,9 @@ inline framework::Tensor *_sliceTensor(const framework::Tensor &self,
     case framework::proto::VarType::UINT8:
       return _sliceAndConcat<uint8_t>(self, obj, dim);
     default:
-      PADDLE_THROW("Not support type %d", src_type);
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "Not support tensor type: %s",
+          framework::DataTypeToString(src_type)));
   }
 }
 
@@ -498,6 +625,7 @@ inline py::array TensorToPyArray(const framework::Tensor &tensor,
     return py::array();
   }
   bool is_gpu_tensor = platform::is_gpu_place(tensor.place());
+  bool is_xpu_tensor = platform::is_xpu_place(tensor.place());
   const auto &tensor_dims = tensor.dims();
   auto tensor_dtype = tensor.type();
   size_t sizeof_dtype = framework::SizeOfType(tensor_dtype);
@@ -516,42 +644,77 @@ inline py::array TensorToPyArray(const framework::Tensor &tensor,
 
   std::string py_dtype_str = details::TensorDTypeToPyDTypeStr(tensor.type());
 
-  if (!is_gpu_tensor) {
+  if (!is_gpu_tensor && !is_xpu_tensor) {
     if (!need_deep_copy) {
-      return py::array(py::buffer_info(
-          const_cast<void *>(tensor_buf_ptr), sizeof_dtype, py_dtype_str,
-          static_cast<size_t>(tensor.dims().size()), py_dims, py_strides));
+      auto base = py::cast(std::move(tensor));
+      return py::array(py::dtype(py_dtype_str.c_str()), py_dims, py_strides,
+                       const_cast<void *>(tensor_buf_ptr), base);
     } else {
       py::array py_arr(py::dtype(py_dtype_str.c_str()), py_dims, py_strides);
-      PADDLE_ENFORCE_EQ(py_arr.writeable(), true,
-                        platform::errors::InvalidArgument(
-                            "PyArray must be writable, otherwise memory leak "
-                            "or double free would occur"));
-      PADDLE_ENFORCE_EQ(py_arr.owndata(), true,
-                        platform::errors::InvalidArgument(
-                            "PyArray must own data, otherwise memory leak "
-                            "or double free would occur"));
+      PADDLE_ENFORCE_EQ(
+          py_arr.writeable(), true,
+          platform::errors::InvalidArgument(
+              "PyArray is not writable, in which case memory leak "
+              "or double free would occur"));
+      PADDLE_ENFORCE_EQ(
+          py_arr.owndata(), true,
+          platform::errors::InvalidArgument(
+              "PyArray does not own data, in which case  memory leak "
+              "or double free would occur"));
       platform::CPUPlace place;
       size_t copy_bytes = sizeof_dtype * numel;
       paddle::memory::Copy(place, py_arr.mutable_data(), place, tensor_buf_ptr,
                            copy_bytes);
       return py_arr;
     }
-  }
+  } else if (is_xpu_tensor) {
+#ifdef PADDLE_WITH_XPU
+    py::array py_arr(py::dtype(py_dtype_str.c_str()), py_dims, py_strides);
+    PADDLE_ENFORCE_EQ(py_arr.writeable(), true,
+                      platform::errors::InvalidArgument(
+                          "PyArray is not writable, in which case memory leak "
+                          "or double free would occur"));
+    PADDLE_ENFORCE_EQ(
+        py_arr.owndata(), true,
+        platform::errors::InvalidArgument(
+            "PyArray does not own data, in which case  memory leak "
+            "or double free would occur"));
 
-#ifdef PADDLE_WITH_CUDA
-  py::array py_arr(py::dtype(py_dtype_str.c_str()), py_dims, py_strides);
-  PADDLE_ENFORCE(py_arr.writeable() && py_arr.owndata(),
-                 "PyArray must be writable and own data, otherwise memory leak "
-                 "or double free would occur");
-
-  size_t copy_bytes = sizeof_dtype * numel;
-  paddle::platform::GpuMemcpySync(py_arr.mutable_data(), tensor_buf_ptr,
-                                  copy_bytes, cudaMemcpyDeviceToHost);
-  return py_arr;
+    size_t copy_bytes = sizeof_dtype * numel;
+    auto p = BOOST_GET_CONST(platform::XPUPlace, tensor.place());
+    paddle::memory::Copy(platform::CPUPlace(), py_arr.mutable_data(), p,
+                         tensor_buf_ptr, copy_bytes);
+    return py_arr;
 #else
-  PADDLE_THROW("CUDAPlace is not supported when not compiled with CUDA");
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "Cannot use XPUPlace in CPU/GPU version, "
+        "Please recompile or reinstall Paddle with XPU support."));
 #endif
+  } else if (is_gpu_tensor) {
+#ifdef PADDLE_WITH_CUDA
+    py::array py_arr(py::dtype(py_dtype_str.c_str()), py_dims, py_strides);
+    PADDLE_ENFORCE_EQ(py_arr.writeable(), true,
+                      platform::errors::InvalidArgument(
+                          "PyArray is not writable, in which case memory leak "
+                          "or double free would occur"));
+    PADDLE_ENFORCE_EQ(
+        py_arr.owndata(), true,
+        platform::errors::InvalidArgument(
+            "PyArray does not own data, in which case  memory leak "
+            "or double free would occur"));
+
+    size_t copy_bytes = sizeof_dtype * numel;
+    paddle::platform::GpuMemcpySync(py_arr.mutable_data(), tensor_buf_ptr,
+                                    copy_bytes, cudaMemcpyDeviceToHost);
+    return py_arr;
+#else
+    PADDLE_THROW(platform::errors::PermissionDenied(
+        "Cannot use CUDAPlace in CPU only version, "
+        "Please recompile or reinstall Paddle with CUDA support."));
+#endif
+  }
+  PADDLE_THROW(platform::errors::Unimplemented("Place is not supported"));
+  return py::array();
 }
 
 }  // namespace pybind

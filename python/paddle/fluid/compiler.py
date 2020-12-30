@@ -18,7 +18,7 @@ import six
 import sys
 from .. import compat as cpt
 from . import framework
-from .framework import cuda_places, cpu_places
+from .framework import cuda_places, cpu_places, xpu_places
 
 from . import core
 
@@ -28,6 +28,7 @@ ExecutionStrategy = core.ParallelExecutor.ExecutionStrategy
 BuildStrategy = core.ParallelExecutor.BuildStrategy
 InferNativeConfig = core.NativeConfig
 InferAnalysisConfig = core.AnalysisConfig
+DeviceType = core.DeviceType
 
 
 def _place_obj(place):
@@ -86,21 +87,23 @@ def _has_optimizer_in_control_flow(program):
 
 class CompiledProgram(object):
     """
+    :api_attr: Static Graph
+    
     The CompiledProgram is used to transform a program or graph for
     various optimizations according to the configuration of build_strategy,
     for example, the operators' fusion in the computation graph, memory
     optimization during the execution of the computation graph, etc.
     For more information about build_strategy, please refer to
-    :code:`fluid.BuildStrategy`.
+    :code:`paddle.static.BuildStrategy`.
 
     Args:
-        program_or_graph (Graph|Program): This parameter is the Program or Graph
+        program_or_graph (Graph|Program): This argument is the Program or Graph
             being executed.
-        build_strategy(BuildStrategy): This parameter is used to compile the
+        build_strategy(BuildStrategy): This argument is used to compile the
             program or graph with the specified options, such as operators' fusion
             in the computational graph and memory optimization during the execution
             of the computational graph. For more information about build_strategy,
-            please refer to :code:`fluid.BuildStrategy`. The default is None.
+            please refer to :code:`paddle.static.BuildStrategy`. The default is None.
 
     Returns:
         CompiledProgram
@@ -108,28 +111,28 @@ class CompiledProgram(object):
     Example:
         .. code-block:: python
 
-          import paddle.fluid as fluid
-          import paddle.fluid.compiler as compiler
-          import numpy
-          import os
+            import numpy
+            import paddle
+            import paddle.static as static
 
-          place = fluid.CUDAPlace(0) # fluid.CPUPlace()
-          exe = fluid.Executor(place)
+            paddle.enable_static()
 
-          data = fluid.data(name='X', shape=[None, 1], dtype='float32')
-          hidden = fluid.layers.fc(input=data, size=10)
-          loss = fluid.layers.mean(hidden)
-          fluid.optimizer.SGD(learning_rate=0.01).minimize(loss)
+            place = paddle.CUDAPlace(0) # paddle.CPUPlace()
+            exe = static.Executor(place)
 
-          fluid.default_startup_program().random_seed=1
-          exe.run(fluid.default_startup_program())
-          compiled_prog = compiler.CompiledProgram(
-                   fluid.default_main_program())
+            data = static.data(name='X', shape=[None, 1], dtype='float32')
+            hidden = static.nn.fc(x=data, size=10)
+            loss = paddle.mean(hidden)
+            paddle.optimizer.SGD(learning_rate=0.01).minimize(loss)
 
-          x = numpy.random.random(size=(10, 1)).astype('float32')
-          loss_data, = exe.run(compiled_prog,
-                               feed={"X": x},
-                               fetch_list=[loss.name])
+            exe.run(static.default_startup_program())
+            compiled_prog = static.CompiledProgram(
+                static.default_main_program())
+
+            x = numpy.random.random(size=(10, 1)).astype('float32')
+            loss_data, = exe.run(compiled_prog,
+                                feed={"X": x},
+                                fetch_list=[loss.name])
     """
 
     def __init__(self, program_or_graph, build_strategy=None):
@@ -142,8 +145,9 @@ class CompiledProgram(object):
             self._graph = core.Graph(program_or_graph.desc)
             self._program = program_or_graph
         else:
-            raise ValueError("Wrong program_to_graph type: %s" %
-                             type(program_or_graph))
+            raise TypeError(
+                "The type of program_to_graph parameter is wrong, expected Graph or Program, but received %s"
+                % type(program_or_graph))
 
         self._scope = None
         self._place = None
@@ -169,13 +173,16 @@ class CompiledProgram(object):
         exec_strategy to set some optimizations that can be applied during the construction
         and computation of the Graph, such as reducing the number of AllReduce operations,
         specifying the size of the thread pool used in the computation Graph running the model,
-        and so on. **Note: If build_strategy is specified when building CompiledProgram and calling
-        with_data_parallel, build_strategy in CompiledProgram will be overwritten, therefore,
-        if it is data parallel training, it is recommended to set build_strategy when calling
-        with_data_parallel interface.**
+        and so on. 
+        
+        .. note::
+            If build_strategy is specified when building CompiledProgram and calling 
+            with_data_parallel, build_strategy in CompiledProgram will be overwritten, therefore, 
+            if it is data parallel training, it is recommended to set build_strategy when calling 
+            with_data_parallel interface.
 
         Args:
-            loss_name (str): This parameter is the name of the loss variable of the model.
+            loss_name (str): This parameter is the name of the loss Tensor of the model.
                 **Note: If it is model training, you must set loss_name, otherwise the
                 result may be problematic**. The default is None.
             build_strategy(BuildStrategy): This parameter is used to compile the
@@ -192,7 +199,7 @@ class CompiledProgram(object):
                 specified by share_vars_from. This parameter needs to be set when model testing
                 is required during model training, and the data parallel mode is used for
                 training and testing. Since CompiledProgram will only distribute parameter
-                variables to other devices when it is first executed, the CompiledProgram
+                Tensors to other devices when it is first executed, the CompiledProgram
                 specified by share_vars_from must be run before the current CompiledProgram.
                 The default is None.
             places(list(CUDAPlace)|list(CPUPlace)|None): This parameter specifies the device
@@ -214,43 +221,58 @@ class CompiledProgram(object):
         Example:
             .. code-block:: python
 
-              import paddle.fluid as fluid
-              import paddle.fluid.compiler as compiler
-              import numpy
-              import os
+                import numpy
+                import os
+                import paddle
+                import paddle.static as static
 
-              use_cuda = True
-              place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
+                paddle.enable_static()
 
-              # NOTE: If you use CPU to run the program, you need
-              # to specify the CPU_NUM, otherwise, fluid will use
-              # all the number of the logic core as the CPU_NUM,
-              # in that case, the batch size of the input should be
-              # greater than CPU_NUM, if not, the process will be
-              # failed by an exception.
-              if not use_cuda:
-                  os.environ['CPU_NUM'] = str(2)
+                use_cuda = True
+                place = paddle.CUDAPlace(0) if use_cuda else paddle.CPUPlace()
+                parallel_places = [paddle.CUDAPlace(0), paddle.CUDAPlace(1)] if use_cuda else [paddle.CPUPlace()] * 2
 
-              exe = fluid.Executor(place)
+                # NOTE: If you use CPU to run the program, you need
+                # to specify the CPU_NUM, otherwise, paddle will use
+                # all the number of the logic core as the CPU_NUM,
+                # in that case, the batch size of the input should be
+                # greater than CPU_NUM, if not, the process will be
+                # failed by an exception.
+                if not use_cuda:
+                    os.environ['CPU_NUM'] = str(2)
 
-              data = fluid.data(name='X', shape=[None, 1], dtype='float32')
-              hidden = fluid.layers.fc(input=data, size=10)
-              loss = fluid.layers.mean(hidden)
-              fluid.optimizer.SGD(learning_rate=0.01).minimize(loss)
+                exe = static.Executor(place)
 
-              fluid.default_startup_program().random_seed=1
-              exe.run(fluid.default_startup_program())
-              compiled_prog = compiler.CompiledProgram(
-                       fluid.default_main_program()).with_data_parallel(
-                                loss_name=loss.name)
+                data = static.data(name='X', shape=[None, 1], dtype='float32')
+                hidden = static.nn.fc(x=data, size=10)
+                loss = paddle.mean(hidden)
 
-              x = numpy.random.random(size=(10, 1)).astype('float32')
-              loss_data, = exe.run(compiled_prog,
-                                   feed={"X": x},
-                                   fetch_list=[loss.name])
+                test_program = static.default_main_program().clone(for_test=True)
+                paddle.optimizer.SGD(learning_rate=0.01).minimize(loss)
+
+                exe.run(static.default_startup_program())
+                compiled_train_prog = static.CompiledProgram(
+                    static.default_main_program()).with_data_parallel(
+                            loss_name=loss.name, places=parallel_places)
+                # NOTE: if not set share_vars_from=compiled_train_prog,
+                # the parameters used in test process are different with 
+                # the parameters used by train process
+                compiled_test_prog = static.CompiledProgram(
+                    test_program).with_data_parallel(
+                            share_vars_from=compiled_train_prog,
+                            places=parallel_places)
+
+                train_data = numpy.random.random(size=(10, 1)).astype('float32')
+                loss_data, = exe.run(compiled_train_prog,
+                                feed={"X": train_data},
+                                fetch_list=[loss.name])
+                test_data = numpy.random.random(size=(10, 1)).astype('float32')
+                loss_data, = exe.run(compiled_test_prog,
+                                feed={"X": test_data},
+                                fetch_list=[loss.name])
         """
-        assert not self._is_data_parallel, "Already compiled with parallel."
-        assert not self._is_inference, "Cannot compile both data parallel and inference"
+        assert not self._is_data_parallel, "Already compiled with parallel, cannot be recompiled."
+        assert not self._is_inference, "Cannot compile with both data parallel and inference."
         self._is_data_parallel = True
         # FIXME(zcd): Currently, the build_strategy can be set during creating
         # CompiledProgram or calling with_data_parallel, and it may be confusing,
@@ -263,7 +285,7 @@ class CompiledProgram(object):
         self._places = places
 
         if _has_backward_op(self._graph):
-            assert self._loss_name is not None, "The loss_name should be set here."
+            assert self._loss_name is not None, "The loss name of CompiledProgram is None. The loss name should be set if CompiledProgram contains backward part."
 
         if self._places is not None:
             if not isinstance(self._places, (list, tuple)):
@@ -279,8 +301,8 @@ class CompiledProgram(object):
         Returns:
             self
         """
-        assert not self._is_data_parallel, "Cannot compile both data parallel and inference"
-        assert not self._is_inference, "Already compiled with inference"
+        assert not self._is_data_parallel, "Cannot compile with both data parallel and inference"
+        assert not self._is_inference, "Already compiled with inference, cannot be recompiled."
 
         assert any([
             isinstance(config, InferNativeConfig),
@@ -291,30 +313,29 @@ class CompiledProgram(object):
         return self
 
     def _with_distributed(self):
-        raise NotImplementedError()
+        raise NotImplementedError(
+            "Subclass of CompiledProgram should implement _with_distributed method."
+        )
 
-    def _compile_data_parallel(self, places, use_cuda=False, scope=None):
+    def _compile_data_parallel(self, places, use_device, scope=None):
         if self._share_vars_from:
             if scope:
                 sys.stderr.write("share_vars_from is set, scope is ignored.\n")
-            if not self._is_data_parallel:
-                raise ValueError(
-                    "Currently, only data parallel mode need share_vars_from.")
             if not self._share_vars_from._is_data_parallel:
-                raise ValueError("share_vars_from is not data parallel. Cannot "
-                                 "share vars from it.")
+                raise ValueError(
+                    "The shared Program is not data parallel, cannot "
+                    "share variables from it.")
             if self._share_vars_from._executor is None:
                 raise ValueError(
-                    "share_vars_from is not compiled and run, so there is no "
-                    "var to share.")
+                    "The shared Program is not compiled and executed, so there is no "
+                    "variables to share.")
             self._local_scopes = self._share_vars_from._executor.local_scopes()
         else:
             assert scope is not None, ""
             self._local_scopes = []
 
         assert isinstance(places, tuple) or isinstance(places, list), \
-            "Currently , The places type only should be list or tuple, \n" \
-            "but the input type is {}.".format(type(places))
+            "Currently , The places type can only be list or tuple, but the input type is {}.".format(type(places))
 
         if self._build_strategy is None:
             self._build_strategy = BuildStrategy()
@@ -322,15 +343,22 @@ class CompiledProgram(object):
 
         if self._exec_strategy is None:
             self._exec_strategy = ExecutionStrategy()
-        self._exec_strategy.use_cuda = use_cuda
+        self._exec_strategy._use_device = use_device
 
         if self._exec_strategy.num_threads == 0:
-            if self._exec_strategy.use_cuda:
+            if self._exec_strategy._use_device == DeviceType.CUDA:
                 # Experiments on se-resnext shows that too many threads hurt
                 # performance. Worth tunning for other models in the future.
                 self._exec_strategy.num_threads = len(places) * 4
+            elif self._exec_strategy._use_device == DeviceType.XPU:
+                # Currently only single thread is supported in Kunlun XPU.
+                self._exec_strategy.num_threads = 1
             else:
                 self._exec_strategy.num_threads = len(places) * 2
+
+        if self._exec_strategy._use_device == DeviceType.XPU:
+            assert self._exec_strategy.num_threads == 1, \
+                "Currently only single thread is supported in Kunlun XPU."
 
         if self._build_strategy.num_trainers > 1:
             assert self._is_data_parallel, \
@@ -345,7 +373,7 @@ class CompiledProgram(object):
             tps = self._program._trainers_endpoints
 
             assert self._build_strategy.num_trainers == len(
-                tps), "num_trainers == len(end_points)"
+                tps), "The trainer numbers is not equal to endpoint numbers."
             self._build_strategy.trainers_endpoints = tps
 
         if self._program:
@@ -357,11 +385,11 @@ class CompiledProgram(object):
             self._build_strategy.enable_sequential_execution = True
 
         if self._program is not None and self._program._enable_dgc:
-            assert use_cuda, "DGC only used under cuda"
+            assert self._exec_strategy._use_device == DeviceType.CUDA, "DGC only used under CUDA environment."
             assert self._build_strategy.num_trainers * len(
-                places) > 1, "DGC is not useful for single card training"
+                places) > 1, "DGC is not avaliable for single card training."
             assert self._build_strategy.reduce_strategy == BuildStrategy.ReduceStrategy.AllReduce, "DGC \
-                only used for AllReduce BuildStrategy"
+                only can be used for AllReduce BuildStrategy."
 
             # DGC doesn't support fuse for now, close fuse.
             self._build_strategy.fuse_all_reduce_ops = False
@@ -402,9 +430,9 @@ class CompiledProgram(object):
         """
         if self._compiled:
             if scope and self._scope != scope:
-                raise ValueError("Cannot compile with different scope")
+                raise ValueError("Cannot compile program with different scope.")
             if place and not self._place._equals(place):
-                raise ValueError("Cannot compile with different place")
+                raise ValueError("Cannot compile program with different place.")
             return self
         self._compiled = True
 
@@ -427,11 +455,14 @@ class CompiledProgram(object):
                 raise NotImplementedError(
                     "If optimizer is used in control flow, "
                     "training on multi-places is not supported now.")
-
+            if isinstance(self._place, core.CUDAPlace):
+                use_device = DeviceType.CUDA
+            elif isinstance(self._place, core.XPUPlace):
+                use_device = DeviceType.XPU
+            else:
+                use_device = DeviceType.CPU
             self._executor = self._compile_data_parallel(
-                use_cuda=isinstance(self._place, core.CUDAPlace),
-                scope=self._scope,
-                places=self._places)
+                use_device=use_device, scope=self._scope, places=self._places)
         return self
 
     def _get_places(self, place, place_list):
@@ -439,9 +470,13 @@ class CompiledProgram(object):
         if has_set_place:
             for p in place_list:
                 assert p._type() == place._type(), \
-                    "Place type not match. You may set the wrong type of places"
+                    "Place type not match. You may set wrong type of places."
         else:
-            place_list = cuda_places() if isinstance(
-                place, core.CUDAPlace) else cpu_places()
-        assert place_list, "no place for execution"
+            if isinstance(place, core.CUDAPlace):
+                place_list = cuda_places()
+            elif isinstance(place, core.XPUPlace):
+                place_list = xpu_places()
+            else:
+                place_list = cpu_places()
+        assert place_list, "No places for execution."
         return place_list

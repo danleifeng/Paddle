@@ -13,19 +13,16 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/ir/subgraph_detector.h"
-#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include "paddle/fluid/framework/ir/graph_helper.h"
-#include "paddle/fluid/framework/ir/graph_pattern_detector.h"
-#include "paddle/fluid/framework/ir/node.h"
-
-DECLARE_bool(use_ngraph);
 
 namespace paddle {
 namespace framework {
 namespace ir {
+
+class Graph;
+class Node;
 
 std::pair<std::vector<Node *>, std::vector<Node *>>
 ExtractInputAndOutputOfSubGraph(std::vector<Node *> &graph) {  // NOLINT
@@ -311,7 +308,8 @@ std::vector<std::vector<Node *>> SubgraphDetector::ExtractSubGraphs() {
     BriefNode *brief_node = itr.second;
 
     if (!Agent(brief_node->node).marked()) {
-      VLOG(4) << brief_node->node->id() << " node not a trt candidate.";
+      VLOG(4) << brief_node->node->id() << " node named "
+              << brief_node->node->Name() << " is not a trt candidate.";
       continue;
     }
 
@@ -397,11 +395,6 @@ void RemoveIntermediateOutputInSubgraph(const std::vector<Node *> &subgraph,
       if (num_used > 0) valid_output.insert(output);
     }
   }
-
-  // In use for ngraph subgraph pass for parallel executor,
-  // this will remove all nodes, bypass this and let ngraph
-  // subgraph pass to process outputs
-  if (FLAGS_use_ngraph && valid_output.size() == 0) return;
 
   outputs->assign(valid_output.begin(), valid_output.end());
 }

@@ -17,6 +17,7 @@ from __future__ import print_function
 import os
 import unittest
 import numpy as np
+import paddle
 import paddle.fluid.core as core
 from paddle.fluid.op import Operator
 import paddle.fluid as fluid
@@ -606,6 +607,82 @@ class TestBatchNormOpError(unittest.TestCase):
             # float16 only can be set on GPU place
             x2 = fluid.layers.data(name='x2', shape=[3, 4, 5, 6], dtype="int32")
             self.assertRaises(TypeError, fluid.layers.batch_norm, x2)
+
+
+class TestDygraphBatchNormAPIError(unittest.TestCase):
+    def test_errors(self):
+        with program_guard(Program(), Program()):
+            batch_norm = fluid.dygraph.BatchNorm(10)
+            # the input of BatchNorm must be Variable.
+            x1 = fluid.create_lod_tensor(
+                np.array([-1, 3, 5, 5]), [[1, 1, 1, 1]], fluid.CPUPlace())
+            self.assertRaises(TypeError, batch_norm, x1)
+
+            # the input dtype of BatchNorm must be float16 or float32 or float64
+            # float16 only can be set on GPU place
+            x2 = fluid.layers.data(name='x2', shape=[3, 4, 5, 6], dtype="int32")
+            self.assertRaises(TypeError, batch_norm, x2)
+
+
+class TestDygraphBatchNormTrainableStats(unittest.TestCase):
+    def test_dygraph(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda() and core.op_support_gpu("batch_norm"):
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            shape = [4, 10, 4, 4]
+
+            def compute(x, is_test, trainable_statistics):
+                with fluid.dygraph.guard(p):
+                    bn = fluid.dygraph.BatchNorm(
+                        shape[1],
+                        is_test=is_test,
+                        trainable_statistics=trainable_statistics)
+                    y = bn(fluid.dygraph.to_variable(x))
+                return y.numpy()
+
+            x = np.random.randn(*shape).astype("float32")
+            y1 = compute(x, False, False)
+            y2 = compute(x, True, True)
+            self.assertTrue(np.allclose(y1, y2))
+
+    def test_static(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda() and core.op_support_gpu("batch_norm"):
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            exe = fluid.Executor(p)
+            shape = [4, 10, 16, 16]
+
+            def compute(x_np, is_test, trainable_statistics):
+                with program_guard(Program(), Program()):
+                    bn = fluid.dygraph.BatchNorm(
+                        shape[1],
+                        is_test=is_test,
+                        trainable_statistics=trainable_statistics)
+                    x = fluid.data(name='x', shape=x_np.shape, dtype=x_np.dtype)
+                    y = bn(x)
+                    exe.run(fluid.default_startup_program())
+                    r = exe.run(feed={'x': x_np}, fetch_list=[y])[0]
+                return r
+
+            x = np.random.randn(*shape).astype("float32")
+            y1 = compute(x, False, False)
+            y2 = compute(x, True, True)
+            self.assertTrue(np.allclose(y1, y2))
+
+
+class TestDygraphBatchNormOpenReserveSpace(unittest.TestCase):
+    def test_reservespace(self):
+        with program_guard(Program(), Program()):
+            paddle.enable_static()
+            x = np.random.random(size=(3, 10, 3, 7)).astype('float32')
+            x = fluid.data(name='x', shape=x.shape, dtype=x.dtype)
+            # Set this FLAG, the BatchNorm API will pass "reserve_space" argument into batch_norm op.
+            os.environ['FLAGS_cudnn_batchnorm_spatial_persistent'] = '1'
+            batch_norm = fluid.dygraph.BatchNorm(7, data_layout="NHWC")
+            hidden1 = batch_norm(x)
+            os.environ['FLAGS_cudnn_batchnorm_spatial_persistent'] = '0'
 
 
 if __name__ == '__main__':

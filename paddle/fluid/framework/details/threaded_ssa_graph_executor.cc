@@ -13,11 +13,12 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/details/threaded_ssa_graph_executor.h"
+
 #include "paddle/fluid/framework/ir/graph_helper.h"
 #include "paddle/fluid/platform/profiler.h"
 
 #ifdef PADDLE_WITH_DISTRIBUTE
-#include "paddle/fluid/operators/distributed/communicator.h"
+#include "paddle/fluid/distributed/service/communicator.h"
 #endif
 
 namespace paddle {
@@ -72,7 +73,7 @@ inline FetchResultType ThreadedSSAGraphExecutor::RunImpl(
   std::unordered_set<VarHandleBase *> fetch_dependencies;
   FetchResultType fetch_data;
   if (return_merged) {
-    fetch_data = FeedFetchList(fetch_tensors.size());
+    fetch_data = FetchList(fetch_tensors.size());
   } else {
     fetch_data = FetchUnmergedList(fetch_tensors.size());
   }
@@ -138,7 +139,10 @@ inline FetchResultType ThreadedSSAGraphExecutor::RunImpl(
         }
       }
     }
-    PADDLE_ENFORCE(ready_ops.empty());
+    PADDLE_ENFORCE_EQ(
+        ready_ops.empty(), true,
+        platform::errors::Fatal("After the execution of computation graph, "
+                                "there are unexecuted operators left."));
   }
 
   // Wait FetchOps.
@@ -165,9 +169,8 @@ void ThreadedSSAGraphExecutor::InsertFetchOps(
     FetchResultType *fetch_data, bool return_merged) {
   std::unordered_map<std::string, std::vector<VarHandleBase *>> fetched_vars;
   std::unordered_set<VarHandleBase *> local_ready_vars;
-  std::unordered_set<std::string> fetch_tensor_set(fetch_tensors.begin(),
-                                                   fetch_tensors.end());
-  for (auto &fetch_var_name : fetch_tensor_set) {
+
+  for (auto &fetch_var_name : fetch_tensors) {
     for (auto &var_map : graph_->Get<details::GraphVars>(details::kGraphVars)) {
       auto it = var_map.find(fetch_var_name);
       if (it != var_map.end()) {
@@ -186,8 +189,13 @@ void ThreadedSSAGraphExecutor::InsertFetchOps(
             "Possible reasons are:\n"
             "  1. The variable to be fetched is not defined in main program.\n"
             "  2. The variable to be fetched is not an input or output of any "
-            "operator.",
-            var_name));
+            "operator.\n"
+            "  3. Confirm that you have used the fetch `Variable` format "
+            "instead of the string literal('%s') in `fetch_list` parameter "
+            "when using `executor.run` method. In other words, the format of "
+            "`executor.run(fetch_list=[fetch_var])`(fetch_var is a Variable) "
+            "is recommended.",
+            var_name, var_name));
 
     auto &vars = fetched_var_it->second;
 
@@ -226,7 +234,11 @@ void ThreadedSSAGraphExecutor::InsertFetchOps(
       ready_ops->insert(static_cast<OpHandleBase *>(op));
     }
   }
-  PADDLE_ENFORCE_EQ(local_ready_vars.size(), 0);
+  PADDLE_ENFORCE_EQ(
+      local_ready_vars.size(), 0,
+      platform::errors::Fatal(
+          "The number of ready variables should be 0, but got %d.",
+          local_ready_vars.size()));
 }
 
 void ThreadedSSAGraphExecutor::InsertPendingOp(
@@ -272,7 +284,9 @@ void ThreadedSSAGraphExecutor::PrepareOpDeps() {
     }
   }
   op_deps_->num_ops_ = ready_ops.size() + pending_ops.size();
-  PADDLE_ENFORCE_GT(op_deps_->num_ops_, 0, "The graph doesn't have operators.");
+  PADDLE_ENFORCE_GT(
+      op_deps_->num_ops_, 0,
+      platform::errors::InvalidArgument("The graph doesn't have operators."));
 
   for (auto ready_var : ready_vars) {
     pending_vars.erase(ready_var);
@@ -334,7 +348,7 @@ bool ThreadedSSAGraphExecutor::RunOpSync(OpHandleBase *op) {
   try {
     VLOG(10) << op << " " << op->Name() << " : " << op->DebugString();
     if (LIKELY(!strategy_.dry_run_)) {
-      op->Run(strategy_.use_cuda_);
+      op->Run(strategy_.use_device_);
     }
     VLOG(10) << op << " " << op->Name() << " Done ";
     return true;
@@ -348,14 +362,11 @@ void ThreadedSSAGraphExecutor::ExecutionFinal(
     std::vector<OpHandleBase *> *fetch_ops) {
 #ifdef PADDLE_WITH_DISTRIBUTE
   if (strategy_.thread_barrier_) {
-    operators::distributed::Communicator::GetInstance()
-        ->BarrierTriggerDecrement();
+    paddle::distributed::Communicator::GetInstance()->BarrierTriggerDecrement();
   }
 #endif
-
   VLOG(3) << "caught exception " << exception_holder_.Type() << ", rethrow it";
   ClearFetchOp(graph_, fetch_ops);
-
   exception_holder_.ReThrow();
 }
 

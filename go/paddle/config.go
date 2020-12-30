@@ -14,8 +14,8 @@
 
 package paddle
 
-// #cgo CFLAGS: -Ipaddle_c/paddle/include
-// #cgo LDFLAGS: -Lpaddle_c/paddle/lib -lpaddle_fluid_c
+// #cgo CFLAGS: -I${SRCDIR}/../paddle_c/paddle/include
+// #cgo LDFLAGS: -L${SRCDIR}/../paddle_c/paddle/lib -lpaddle_fluid_c
 // #include <stdbool.h>
 // #include <stdlib.h>
 // #include <paddle_c_api.h>
@@ -94,6 +94,10 @@ func (config *AnalysisConfig) MemoryPoolInitSizeMb() int {
 	return int(C.PD_MemoryPoolInitSizeMb(config.c))
 }
 
+func (config *AnalysisConfig) FractionOfGpuMemoryForPool() float32 {
+	return float32(C.PD_FractionOfGpuMemoryForPool(config.c))
+}
+
 func (config *AnalysisConfig) EnableCudnn() {
 	C.PD_EnableCUDNN(config.c)
 }
@@ -138,16 +142,12 @@ func (config *AnalysisConfig) SwitchIrDebug(x bool) {
 	C.PD_SwitchIrDebug(config.c, C.bool(x))
 }
 
-func (config *AnalysisConfig) EnableNgraph() {
-	C.PD_EnableNgraph(config.c)
-}
-
-func (config *AnalysisConfig) NgraphEnabled() bool {
-	return ConvertCBooleanToGo(C.PD_NgraphEnabled(config.c))
-}
-
 func (config *AnalysisConfig) EnableMkldnn() {
 	C.PD_EnableMKLDNN(config.c)
+}
+
+func (config *AnalysisConfig) MkldnnEnabled() bool {
+	return ConvertCBooleanToGo(C.PD_MkldnnEnabled(config.c))
 }
 
 func (config *AnalysisConfig) SetCpuMathLibraryNumThreads(n int) {
@@ -162,10 +162,17 @@ func (config *AnalysisConfig) EnableMkldnnQuantizer() {
 	C.PD_EnableMkldnnQuantizer(config.c)
 }
 
+func (config *AnalysisConfig) EnableMkldnnBfloat16() {
+	C.PD_EnableMkldnnBfloat16(config.c)
+}
+
 func (config *AnalysisConfig) MkldnnQuantizerEnabled() bool {
 	return ConvertCBooleanToGo(C.PD_MkldnnQuantizerEnabled(config.c))
 }
 
+func (config *AnalysisConfig) MkldnnBfloat16Enabled() bool {
+	return ConvertCBooleanToGo(C.PD_MkldnnBfloat16Enabled(config.c))
+}
 // SetModelBuffer
 // ModelFromMemory
 

@@ -43,6 +43,8 @@ class ParallelExecutorPrivate;
 
 using details::BuildStrategy;
 using details::ExecutionStrategy;
+namespace p = paddle::platform;
+using DeviceType = paddle::platform::DeviceType;
 
 class ParallelExecutor {
   DISABLE_COPY_AND_ASSIGN(ParallelExecutor);
@@ -79,6 +81,8 @@ class ParallelExecutor {
 
   FetchResultType Run(const std::vector<std::string> &fetch_tensors,
                       bool return_merged = true);
+
+  const ir::Graph &Graph() const;
 
  private:
   // broadcast the parameters from the 0th device.

@@ -16,12 +16,14 @@ from __future__ import print_function
 
 import unittest
 
+import paddle
 import paddle.fluid.framework as framework
 import paddle.fluid.optimizer as optimizer
 import paddle.fluid.regularizer as regularizer
+import paddle.fluid.clip as clip
 import paddle.compat as cpt
 from paddle.fluid.backward import append_backward
-from paddle.fluid.transpiler.details import program_to_code
+paddle.enable_static()
 
 
 class TestDGCMomentumOptimizer(unittest.TestCase):
@@ -70,13 +72,14 @@ class TestDGCMomentumOptimizer(unittest.TestCase):
             learning_rate=learning_rate,
             momentum=0.2,
             rampup_begin_step=0,
-            local_grad_clip_norm=1.0,
             num_trainers=2,
-            regularization=regularization)
+            regularization=regularization,
+            grad_clip=clip.GradientClipByNorm(1.0))
 
         if use_recompute:
             dgc_momentum_optimizer = optimizer.RecomputeOptimizer(
                 dgc_momentum_optimizer)
+            dgc_momentum_optimizer._set_checkpoints([])
             dgc_momentum_optimizer.get_accumulators = dgc_momentum_optimizer._optimizer.get_accumulators
             dgc_momentum_optimizer.get_velocity_str = dgc_momentum_optimizer._optimizer.get_velocity_str
 
@@ -85,13 +88,17 @@ class TestDGCMomentumOptimizer(unittest.TestCase):
         block.append_op(
             type="mean", inputs={"X": mul_out}, outputs={"Out": mean_out})
         # params_grads = append_backward(mean_out)
-        params_grads = dgc_momentum_optimizer.backward(mean_out)
+        params_grads = dgc_momentum_optimizer.backward(
+            mean_out, startup_program=init_program)
+
+        with framework.program_guard(program, init_program):
+            opts = dgc_momentum_optimizer.apply_gradients(params_grads)
+
         accumulator_count = 1 if name == "momentum" else 2
         self.assertEqual(len(params_grads), 1)
         self.assertEqual(
             len(dgc_momentum_optimizer.get_accumulators()), accumulator_count)
-        with framework.program_guard(program, init_program):
-            opts = dgc_momentum_optimizer.apply_gradients(params_grads)
+
         self.assertEqual(len(opts), 2)
         sgd_op = opts[-1]
         self.assertEqual([op.type for op in opts], ["scale", name])
@@ -107,8 +114,11 @@ class TestDGCMomentumOptimizer(unittest.TestCase):
         self.assertTrue(mul_x.name in velocity_acc)
 
         # Check init_program
+        # dgc not apply include: lr, dgc(count, nranks, begin step), (u,)
+        # dgc apply include: lr, dgc(count, nranks, begin_step), (u,v,k,encode,gather)
+        init_ops_count = 5 if name == "momentum" else 9
         init_ops = init_program.global_block().ops
-        self.assertEqual(len(init_ops), 1)
+        self.assertEqual(len(init_ops), init_ops_count)
         self.assertEqual(init_ops[0].type, "fill_constant")
         self.assertAlmostEqual(init_ops[0].attr('value'), learning_rate)
 
@@ -120,9 +130,15 @@ class TestDGCMomentumOptimizer(unittest.TestCase):
                 self.assertAlmostEqual(op.attr('regular_coeff'), coeff)
                 print("dgc regular_coeff=" + str(coeff))
 
-        # for local test debug
-        #with open("test_dgc_optimizer_" + name + str(use_recompute) + ".log", "w") as f:
-        #    program_to_code(program, fout=f)
+    def test_tpyeError(self):
+        # the type of DGCMomentumOptimizer(grad_clip=) must be 'GradientClipByNorm'
+        with self.assertRaises(TypeError):
+            dgc_momentum_optimizer = self.MockDGCMomentum(
+                learning_rate=0.01,
+                momentum=0.2,
+                rampup_begin_step=0,
+                num_trainers=2,
+                grad_clip=clip.GradientClipByGlobalNorm(1.0))
 
     def test_momentum_without_dgc(self):
         self.check_dgc_momentum_optimizer(

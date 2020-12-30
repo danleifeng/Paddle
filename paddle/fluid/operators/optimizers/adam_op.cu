@@ -38,7 +38,8 @@ __global__ void AdamKernelREG(T beta1, T beta2, T epsilon, T beta1_pow_,
     T mom2 = moment2[id];
     mom1 = beta1 * mom1 + (static_cast<T>(1.0) - beta1) * g;
     mom2 = beta2 * mom2 + (static_cast<T>(1.0) - beta2) * g * g;
-    p -= lr * (mom1 / (sqrt(mom2) + epsilon));
+    p -= lr * (mom1 /
+               (sqrt(mom2) + epsilon * sqrt(static_cast<T>(1.0) - beta2_pow)));
 
     moment1_out[id] = mom1;
     moment2_out[id] = mom2;
@@ -68,7 +69,8 @@ __global__ void AdamKernelMEM(T beta1, T beta2, T epsilon, const T* beta1_pow_,
     T mom2 = moment2[id];
     mom1 = beta1 * mom1 + (static_cast<T>(1.0) - beta1) * g;
     mom2 = beta2 * mom2 + (static_cast<T>(1.0) - beta2) * g * g;
-    p -= lr * (mom1 / (sqrt(mom2) + epsilon));
+    p -= lr * (mom1 /
+               (sqrt(mom2) + epsilon * sqrt(static_cast<T>(1.0) - beta2_pow)));
 
     moment1_out[id] = mom1;
     moment2_out[id] = mom2;
@@ -105,7 +107,8 @@ __global__ void SparseAdamCUDAKernelREG(
       T g = row_idx >= 0 ? grad_[row_idx * row_numel + id % row_numel] : 0;
       mom1 = beta1 * mom1 + (1 - beta1) * g;
       mom2 = beta2 * mom2 + (1 - beta2) * g * g;
-      p -= lr * (mom1 / (sqrt(mom2) + epsilon));
+      p -= lr * (mom1 / (sqrt(mom2) +
+                         epsilon * sqrt(static_cast<T>(1.0) - beta2_pow)));
 
       // Write back to global memory
       mom1_out_[id] = mom1;
@@ -128,7 +131,6 @@ class AdamOpCUDAKernel : public framework::OpKernel<T> {
                           framework::ToTypeName(param_var->Type())));
 
     using paddle::framework::LoDTensor;
-    using paddle::operators::detail::Ref;
 
     int64_t min_row_size_to_use_multithread =
         ctx.Attr<int64_t>("min_row_size_to_use_multithread");
@@ -152,11 +154,19 @@ class AdamOpCUDAKernel : public framework::OpKernel<T> {
     T beta1 = static_cast<T>(ctx.Attr<float>("beta1"));
     if (ctx.HasInput("Beta1Tensor")) {
       auto* beta1_tensor = ctx.Input<framework::Tensor>("Beta1Tensor");
+      PADDLE_ENFORCE_EQ(beta1_tensor->numel(), 1,
+                        platform::errors::InvalidArgument(
+                            "Input(Beta1Tensor) size must be 1, but get %d",
+                            beta1_tensor->numel()));
       beta1 = static_cast<T>(GetAttrFromTensor(beta1_tensor));
     }
     T beta2 = static_cast<T>(ctx.Attr<float>("beta2"));
     if (ctx.HasInput("Beta2Tensor")) {
       auto* beta2_tensor = ctx.Input<framework::Tensor>("Beta2Tensor");
+      PADDLE_ENFORCE_EQ(beta2_tensor->numel(), 1,
+                        platform::errors::InvalidArgument(
+                            "Input(Beta2Tensor) size must be 1, but get %d",
+                            beta2_tensor->numel()));
       beta2 = static_cast<T>(GetAttrFromTensor(beta2_tensor));
     }
     VLOG(3) << "beta1_pow.numel() : " << beta1_pow->numel()

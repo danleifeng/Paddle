@@ -20,7 +20,7 @@ limitations under the License. */
 #include <vector>
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/detail/safe_ref.h"
+#include "paddle/fluid/operators/layout_utils.h"
 #include "paddle/fluid/operators/math/blas.h"
 #include "paddle/fluid/operators/math/depthwise_conv.h"
 #include "paddle/fluid/operators/math/im2col.h"
@@ -42,10 +42,13 @@ inline int ConvOutputSize(int input_size, int filter_size, int dilation,
   int output_size = (input_size + 2 * padding - dkernel) / stride + 1;
   PADDLE_ENFORCE_GT(
       output_size, 0,
-      "Due to the settings of padding(%d), filter_size(%d), dilation(%d) and "
-      "stride(%d), the output size is less than 0, please check "
-      "again. Input_size:%d",
-      padding, filter_size, dilation, stride, input_size);
+      platform::errors::InvalidArgument(
+          "The output's size is expected to be greater than 0. "
+          "But recieved: output's size is %d. The output's size is computed by "
+          "((input_size + 2 * padding - (dilation * (filter_size - 1) + 1)) / "
+          "stride + 1), where input_size is %d, padding is %d, "
+          "filter_size is %d, dilation is %d, stride is %d.",
+          output_size, input_size, padding, filter_size, dilation, stride));
 
   return output_size;
 }
@@ -54,13 +57,16 @@ inline int ConvOutputSize(int input_size, int filter_size, int dilation,
                           int padding_1, int padding_2, int stride) {
   const int dkernel = dilation * (filter_size - 1) + 1;
   int output_size = (input_size + padding_1 + padding_2 - dkernel) / stride + 1;
-  PADDLE_ENFORCE_GT(output_size, 0,
-                    "Due to the settings of padding(%d, %d), filter_size(%d), "
-                    "dilation(%d) and "
-                    "stride(%d), the output size is less than 0, please check "
-                    "again. Input_size:%d",
-                    padding_1, padding_2, filter_size, dilation, stride,
-                    input_size);
+  PADDLE_ENFORCE_GT(
+      output_size, 0,
+      platform::errors::InvalidArgument(
+          "The output's size is expected to be greater than 0. "
+          "But recieved: output's size is %d. The output's size is computed by "
+          "((input_size + padding_1 + padding_2 - (dilation * (filter_size - "
+          "1) + 1)) / stride + 1), where input_size is %d, padding is "
+          "(%d, %d), filter_size is %d, dilation is %d, stride is %d.",
+          output_size, input_size, padding_1, padding_2, filter_size, dilation,
+          stride));
 
   return output_size;
 }
@@ -82,7 +88,13 @@ inline void UpdatePaddingAndDilation(std::vector<T>* paddings,
   } else {
     PADDLE_ENFORCE_EQ(
         data_dims.size() * 2, paddings->size(),
-        "Paddings size should be the same or twice as the input data size.");
+        platform::errors::InvalidArgument(
+            "Attribute padding's size should be the same or twice as the "
+            "input's dimension. "
+            "But recieved: padding's size is %d, padding is [%s]; input's "
+            "dimension is %d, input's shape is [%s].",
+            paddings->size(), framework::make_ddim(*paddings), data_dims.size(),
+            data_dims));
   }
 
   // when padding_algorithm is "VALID" or "SAME"
@@ -127,102 +139,6 @@ inline bool IsExpand(const std::vector<int64_t>& filter_dim,
   return !(filter_1 && strides_1 && padding_0 && dilation_1);
 }
 
-template <typename DeviceContext, typename T>
-inline void ResizeToChannelFirst(const framework::ExecutionContext& context,
-                                 const Tensor* input,
-                                 Tensor* transformed_input) {
-  int dim = input->dims().size() - 2;
-  if (dim == 3) {
-    // input
-    transformed_input->Resize(input->dims());
-
-    auto in_dims_vec = framework::vectorize(input->dims());
-    in_dims_vec[1] = input->dims()[4];
-    in_dims_vec[2] = input->dims()[1];
-    in_dims_vec[3] = input->dims()[2];
-    in_dims_vec[4] = input->dims()[3];
-    transformed_input->Resize(framework::make_ddim(in_dims_vec));
-    transformed_input->mutable_data<T>(context.GetPlace());
-
-  } else if (dim == 2) {
-    // input
-    transformed_input->Resize(input->dims());
-
-    auto in_dims_vec = framework::vectorize(input->dims());
-    in_dims_vec[1] = input->dims()[3];
-    in_dims_vec[2] = input->dims()[1];
-    in_dims_vec[3] = input->dims()[2];
-    transformed_input->Resize(framework::make_ddim(in_dims_vec));
-    transformed_input->mutable_data<T>(context.GetPlace());
-  }
-}
-
-template <typename DeviceContext, typename T>
-inline void ResizeToChannelLast(const framework::ExecutionContext& context,
-                                const Tensor* input,
-                                Tensor* transformed_input) {
-  int dim = input->dims().size() - 2;
-  if (dim == 3) {
-    // input
-    transformed_input->Resize(input->dims());
-
-    auto in_dims_vec = framework::vectorize(input->dims());
-    in_dims_vec[1] = input->dims()[2];
-    in_dims_vec[2] = input->dims()[3];
-    in_dims_vec[3] = input->dims()[4];
-    in_dims_vec[4] = input->dims()[1];
-    transformed_input->Resize(framework::make_ddim(in_dims_vec));
-    transformed_input->mutable_data<T>(context.GetPlace());
-
-  } else if (dim == 2) {
-    // input
-    transformed_input->Resize(input->dims());
-
-    auto in_dims_vec = framework::vectorize(input->dims());
-    in_dims_vec[1] = input->dims()[2];
-    in_dims_vec[2] = input->dims()[3];
-    in_dims_vec[3] = input->dims()[1];
-    transformed_input->Resize(framework::make_ddim(in_dims_vec));
-    transformed_input->mutable_data<T>(context.GetPlace());
-  }
-}
-
-template <typename DeviceContext, typename T>
-inline void TransToChannelFirst(const framework::ExecutionContext& context,
-                                const Tensor* input,
-                                Tensor* transformed_input) {
-  int dim = input->dims().size() - 2;
-  if (dim == 3) {
-    auto& dev_ctx = context.template device_context<DeviceContext>();
-    std::vector<int> axis{0, 4, 1, 2, 3};
-    math::Transpose<DeviceContext, T, 5> trans5;
-    trans5(dev_ctx, *input, transformed_input, axis);
-
-  } else if (dim == 2) {
-    auto& dev_ctx = context.template device_context<DeviceContext>();
-    std::vector<int> axis{0, 3, 1, 2};
-    math::Transpose<DeviceContext, T, 4> trans4;
-    trans4(dev_ctx, *input, transformed_input, axis);
-  }
-}
-
-template <typename DeviceContext, typename T>
-inline void TransToChannelLast(const framework::ExecutionContext& context,
-                               const Tensor* input, Tensor* transformed_input) {
-  int dim = input->dims().size() - 2;
-  if (dim == 3) {
-    auto& dev_ctx = context.template device_context<DeviceContext>();
-    std::vector<int> axis{0, 2, 3, 4, 1};
-    math::Transpose<DeviceContext, T, 5> trans5;
-    trans5(dev_ctx, *input, transformed_input, axis);
-
-  } else if (dim == 2) {
-    auto& dev_ctx = context.template device_context<DeviceContext>();
-    std::vector<int> axis{0, 2, 3, 1};
-    math::Transpose<DeviceContext, T, 4> trans4;
-    trans4(dev_ctx, *input, transformed_input, axis);
-  }
-}
 // Define Op classes in .h file so that other conv
 // operator implementations can reuse the code.
 class Conv2DOpMaker : public framework::OpProtoAndCheckerMaker {
@@ -243,19 +159,29 @@ class Conv3DOpMaker : public framework::OpProtoAndCheckerMaker {
 
 class ConvOpInferVarType : public framework::PassInDtypeAndVarTypeToOutput {
  protected:
-  std::unordered_map<std::string, std::string> GetInputOutputWithSameType()
+  std::unordered_map<std::string, std::string>& GetInputOutputWithSameType()
       const override {
-    return std::unordered_map<std::string, std::string>{
+    static std::unordered_map<std::string, std::string> m{
         {"Input", /*->*/ "Output"}};
+    return m;
   }
 };
 
 class ConvOp : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
-  void InferShape(framework::InferShapeContext* ctx) const override;
+  void InferShape(framework::InferShapeContext* ctx) const override {
+    std::vector<int64_t> output_shape = ComputeOutputShape(ctx);
+
+    OP_INOUT_CHECK(ctx->HasOutput("Output"), "Output", "Output", "Conv");
+    ctx->SetOutputDim("Output", framework::make_ddim(output_shape));
+    ctx->ShareLoD("Input", "Output");
+  }
 
  protected:
+  std::vector<int64_t> ComputeOutputShape(
+      framework::InferShapeContext* ctx) const;
+
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override;
 
@@ -664,8 +590,9 @@ class GemmConvDoubleGradKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     auto& dev_ctx = ctx.template device_context<platform::CPUDeviceContext>();
-    PADDLE_ENFORCE_EQ(platform::is_cpu_place(ctx.GetPlace()), true,
-                      "It must use CPUPlace.");
+    PADDLE_ENFORCE_EQ(
+        platform::is_cpu_place(ctx.GetPlace()), true,
+        paddle::platform::errors::PreconditionNotMet("It must use CPUPlace."));
     const Tensor* X = ctx.Input<Tensor>("Input");
     const Tensor* dY = ctx.Input<Tensor>("DOutput");
     const Tensor* ddX = ctx.Input<Tensor>("DDInput");
@@ -674,9 +601,8 @@ class GemmConvDoubleGradKernel : public framework::OpKernel<T> {
     Tensor* ddY = ctx.Output<Tensor>("DDOutput");
     Tensor* dW = ctx.Output<Tensor>("DFilter");
     Tensor* dX = ctx.Output<Tensor>("DInput");
-    Tensor W = detail::Ref(ctx.Input<Tensor>("Filter"),
-                           "Cannot find input Filter(%s) in scope)",
-                           ctx.InputNames("Filter")[0]);
+    Tensor W = GET_DATA_SAFELY(ctx.Input<Tensor>("Filter"), "Input", "Filter",
+                               "GemmConvDoubleGrad");
     if (!ddY && !dW && !dX) return;
 
     const int groups = ctx.Attr<int>("groups");
@@ -962,11 +888,20 @@ class DepthwiseConvKernel : public framework::OpKernel<T> {
       PADDLE_ENFORCE_EQ(
           output->dims()[output->dims().size() - 1] %
               input->dims()[input->dims().size() - 1],
-          0, "The output channels must be a multiple of the input channels");
+          0, platform::errors::InvalidArgument(
+                 "ShapeError: The output channels must be a multiple of the "
+                 "input channels. But receivced output channel number is %d "
+                 "and input channel number is %d",
+                 output->dims()[output->dims().size() - 1],
+                 input->dims()[input->dims().size() - 1]));
     } else {
       PADDLE_ENFORCE_EQ(
           output->dims()[1] % input->dims()[1], 0,
-          "The output channels must be a multiple of the input channels");
+          platform::errors::InvalidArgument(
+              "ShapeError: The output channels must be a multiple of the "
+              "input channels. But receivced output channel number is %d "
+              "and input channel number is %d",
+              output->dims()[1], input->dims()[1]));
     }
     // transform tensor
     Tensor transformed_input(input->type());

@@ -14,7 +14,10 @@
 
 from __future__ import print_function
 
+import paddle
+import paddle.fluid as fluid
 import paddle.fluid.core as core
+from paddle.fluid import Program, program_guard
 import paddle.compat as cpt
 import unittest
 import numpy as np
@@ -59,6 +62,23 @@ class TestFillAnyLikeOpValue3(TestFillAnyLikeOp):
         self.value = 1e-100
 
 
+class TestFillAnyLikeOpType(TestFillAnyLikeOp):
+    def setUp(self):
+        self.op_type = "fill_any_like"
+        self.dtype = np.int32
+        self.value = 0.0
+        self.init()
+        self.inputs = {'X': np.random.random((219, 232)).astype(self.dtype)}
+        self.attrs = {
+            'value': self.value,
+            'dtype': int(core.VarDesc.VarType.FP32)
+        }
+        self.outputs = {
+            'Out':
+            self.value * np.ones_like(self.inputs["X"]).astype(np.float32)
+        }
+
+
 class TestFillAnyLikeOpOverflow(TestFillAnyLikeOp):
     def init(self):
         self.value = 1e100
@@ -67,7 +87,7 @@ class TestFillAnyLikeOpOverflow(TestFillAnyLikeOp):
         exception = None
         try:
             self.check_output(check_dygraph=False)
-        except core.EnforceNotMet as ex:
+        except ValueError as ex:
             exception = ex
         self.assertIsNotNone(exception)
 
@@ -78,4 +98,5 @@ class TestFillAnyLikeOpFloat16(TestFillAnyLikeOp):
 
 
 if __name__ == "__main__":
+    paddle.enable_static()
     unittest.main()

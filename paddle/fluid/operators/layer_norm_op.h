@@ -14,7 +14,9 @@ limitations under the License. */
 
 #pragma once
 
+#include <algorithm>
 #include <vector>
+
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/operators/elementwise/elementwise_op_function.cu.h"
@@ -25,6 +27,14 @@ limitations under the License. */
 #include "paddle/fluid/operators/jit/kernels.h"
 #endif
 #include "paddle/fluid/operators/math/math_function.h"
+
+namespace paddle {
+namespace platform {
+class CPUDeviceContext;
+class CUDADeviceContext;
+class DeviceContext;
+}  // namespace platform
+}  // namespace paddle
 
 namespace paddle {
 namespace operators {
