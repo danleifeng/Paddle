@@ -21,8 +21,9 @@ limitations under the License. */
 
 #include <boost/any.hpp>
 
-#include "paddle/fluid/extension/include/dll_decl.h"
-#include "paddle/fluid/extension/include/tensor.h"
+#include "ext_dll_decl.h"   // NOLINT
+#include "ext_exception.h"  // NOLINT
+#include "ext_tensor.h"     // NOLINT
 
 /**
  * Op Meta Info Related Define.
@@ -38,6 +39,8 @@ class PD_DLL_DECL OpMetaInfoHelper;
 
 using Tensor = paddle::Tensor;
 
+///////////////// Util Marco Define ////////////////
+
 #define PD_DISABLE_COPY_AND_ASSIGN(classname)      \
  private:                                          \
   classname(const classname&) = delete;            \
@@ -45,54 +48,56 @@ using Tensor = paddle::Tensor;
   classname& operator=(const classname&) = delete; \
   classname& operator=(classname&&) = delete
 
-#if defined _WIN32
-#define HANDLE_THE_ERROR try {
-#define END_HANDLE_THE_ERROR            \
-  }                                     \
-  catch (const std::exception& e) {     \
-    std::cerr << e.what() << std::endl; \
-    throw e;                            \
-  }
-#else
-#define HANDLE_THE_ERROR
-#define END_HANDLE_THE_ERROR
-#endif
-
-#define PD_THROW(err_msg)              \
-  do {                                 \
-    HANDLE_THE_ERROR                   \
-    throw std::runtime_error(err_msg); \
-    END_HANDLE_THE_ERROR               \
-  } while (0)
+#define STATIC_ASSERT_GLOBAL_NAMESPACE(uniq_name, msg)                        \
+  struct __test_global_namespace_##uniq_name##__ {};                          \
+  static_assert(std::is_same<::__test_global_namespace_##uniq_name##__,       \
+                             __test_global_namespace_##uniq_name##__>::value, \
+                msg)
 
 ///////////////// Util Define and Function ////////////////
 
-inline std::string Grad(const std::string& var_name) {
+constexpr char kGradTensorSuffix[] = "@GRAD";
+constexpr char kTensorVectorSuffix[] = "@VECTOR";
+
+// Used for Construct Grad Tensor name
+inline std::string Grad(const std::string& t_name) {
   std::string result;
-  result.reserve(var_name.size() + 5U);
-  result += var_name;
-  result += "@GRAD";
+  result.reserve(t_name.size() + 5U);
+  result += t_name;
+  result += kGradTensorSuffix;
+  return result;
+}
+
+// Used for Construct std::vector<Tensor> name
+inline std::string Vec(const std::string& t_name) {
+  std::string result;
+  result.reserve(t_name.size() + 7U);
+  result += t_name;
+  result += kTensorVectorSuffix;
   return result;
 }
 
 ////////////////////// Kernel Function (PD_KERNEL) ////////////////////////
 
 // Record Op kernel core function
-using KernelFunc = std::vector<Tensor> (*)(std::vector<Tensor> inputs,
-                                           std::vector<boost::any> attrs);
+using KernelFunc = std::vector<Tensor> (*)(
+    std::vector<Tensor> inputs, std::vector<std::vector<Tensor>> vec_inputs,
+    std::vector<boost::any> attrs);
 
 #define PD_SPECIALIZE_ComputeCallHelper(attr_type)                          \
   template <typename... Tail>                                               \
   struct ComputeCallHelper<attr_type, Tail...> {                            \
-    template <int in_idx, int attr_idx, typename... PreviousArgs>           \
+    template <int in_idx, int vec_in_idx, int attr_idx,                     \
+              typename... PreviousArgs>                                     \
     static Return Compute(std::vector<Tensor> inputs,                       \
+                          std::vector<std::vector<Tensor>> vec_inputs,      \
                           std::vector<boost::any> attrs,                    \
                           const PreviousArgs&... pargs) {                   \
       try {                                                                 \
         attr_type arg = boost::any_cast<attr_type>(attrs[attr_idx]);        \
-        return ComputeCallHelper<Tail...>::template Compute<in_idx,         \
-                                                            attr_idx + 1>(  \
-            inputs, attrs, pargs..., arg);                                  \
+        return ComputeCallHelper<Tail...>::template Compute<                \
+            in_idx, vec_in_idx, attr_idx + 1>(inputs, vec_inputs, attrs,    \
+                                              pargs..., arg);               \
       } catch (boost::bad_any_cast&) {                                      \
         PD_THROW(                                                           \
             "Attribute cast error in custom operator. Expected " #attr_type \
@@ -110,9 +115,10 @@ struct KernelFuncImpl;
 template <typename Return, typename... Args, Return (*impl_fn)(Args...)>
 struct KernelFuncImpl<Return (*)(Args...), impl_fn> {
   static Return Compute(std::vector<Tensor> inputs,
+                        std::vector<std::vector<Tensor>> vec_inputs,
                         std::vector<boost::any> attrs) {
-    return ComputeCallHelper<Args..., TypeTag<int>>::template Compute<0, 0>(
-        inputs, attrs);
+    return ComputeCallHelper<Args..., TypeTag<int>>::template Compute<0, 0, 0>(
+        inputs, vec_inputs, attrs);
   }
 
  private:
@@ -122,15 +128,32 @@ struct KernelFuncImpl<Return (*)(Args...), impl_fn> {
   // for Tensor input
   template <typename... Tail>
   struct ComputeCallHelper<const Tensor&, Tail...> {
-    template <int in_idx, int attr_idx, typename... PreviousArgs>
+    template <int in_idx, int vec_in_idx, int attr_idx,
+              typename... PreviousArgs>
     static Return Compute(std::vector<Tensor> inputs,
+                          std::vector<std::vector<Tensor>> vec_inputs,
                           std::vector<boost::any> attrs,
                           const PreviousArgs&... pargs) {
-      static_assert(attr_idx == 0,
-                    "Input tensor should appear before attributes.");
       const Tensor& arg = inputs[in_idx];
-      return ComputeCallHelper<Tail...>::template Compute<in_idx + 1, attr_idx>(
-          inputs, attrs, pargs..., arg);
+      return ComputeCallHelper<Tail...>::template Compute<in_idx + 1,
+                                                          vec_in_idx, attr_idx>(
+          inputs, vec_inputs, attrs, pargs..., arg);
+    }
+  };
+
+  // for std::vector<Tensor> input
+  template <typename... Tail>
+  struct ComputeCallHelper<const std::vector<Tensor>&, Tail...> {
+    template <int in_idx, int vec_in_idx, int attr_idx,
+              typename... PreviousArgs>
+    static Return Compute(std::vector<Tensor> inputs,
+                          std::vector<std::vector<Tensor>> vec_inputs,
+                          std::vector<boost::any> attrs,
+                          const PreviousArgs&... pargs) {
+      const std::vector<Tensor>& arg = vec_inputs[vec_in_idx];
+      return ComputeCallHelper<Tail...>::template Compute<
+          in_idx, vec_in_idx + 1, attr_idx>(inputs, vec_inputs, attrs, pargs...,
+                                            arg);
     }
   };
 
@@ -151,8 +174,9 @@ struct KernelFuncImpl<Return (*)(Args...), impl_fn> {
   // end: base template
   template <typename T>
   struct ComputeCallHelper<TypeTag<T>> {
-    template <int in_idx, int attr_idx>
+    template <int in_idx, int vec_in_idx, int attr_idx>
     static Return Compute(std::vector<Tensor> inputs,
+                          std::vector<std::vector<Tensor>> vec_inputs,
                           std::vector<boost::any> attrs, const Args&... args) {
       return impl_fn(args...);
     }
@@ -166,40 +190,62 @@ struct KernelFuncImpl<Return (*)(Args...), impl_fn> {
 
 // Record Op infershape core function
 using InferShapeFunc = std::vector<std::vector<int64_t>> (*)(
-    std::vector<std::vector<int64_t>> input_shapes);
+    std::vector<std::vector<int64_t>> input_shapes,
+    std::vector<std::vector<std::vector<int64_t>>> vec_input_shapes);
 
 template <typename F, F f>
 struct InferShapeFuncImpl;
 
 template <typename Return, typename... Args, Return (*impl_fn)(Args...)>
 struct InferShapeFuncImpl<Return (*)(Args...), impl_fn> {
-  static Return InferShape(std::vector<std::vector<int64_t>> input_shapes) {
-    return InferShapeCallHelper<Args..., TypeTag<int>>::template InferShape<0>(
-        input_shapes);
+  static Return InferShape(
+      std::vector<std::vector<int64_t>> input_shapes,
+      std::vector<std::vector<std::vector<int64_t>>> vec_input_shapes) {
+    return InferShapeCallHelper<Args..., TypeTag<int>>::template InferShape<0,
+                                                                            0>(
+        input_shapes, vec_input_shapes);
   }
 
  private:
   template <typename... RemainingArgs>
   struct InferShapeCallHelper;
 
-  // only one type input: std::vector<int64_t>
   template <typename... Tail>
   struct InferShapeCallHelper<std::vector<int64_t>, Tail...> {
-    template <int in_idx, typename... PreviousArgs>
-    static Return InferShape(std::vector<std::vector<int64_t>> input_shapes,
-                             const PreviousArgs&... pargs) {
+    template <int in_idx, int vec_in_idx, typename... PreviousArgs>
+    static Return InferShape(
+        std::vector<std::vector<int64_t>> input_shapes,
+        std::vector<std::vector<std::vector<int64_t>>> vec_input_shapes,
+        const PreviousArgs&... pargs) {
       std::vector<int64_t> arg = input_shapes[in_idx];
-      return InferShapeCallHelper<Tail...>::template InferShape<in_idx + 1>(
-          input_shapes, pargs..., arg);
+      return InferShapeCallHelper<Tail...>::template InferShape<in_idx + 1,
+                                                                vec_in_idx>(
+          input_shapes, vec_input_shapes, pargs..., arg);
+    }
+  };
+
+  template <typename... Tail>
+  struct InferShapeCallHelper<std::vector<std::vector<int64_t>>, Tail...> {
+    template <int in_idx, int vec_in_idx, typename... PreviousArgs>
+    static Return InferShape(
+        std::vector<std::vector<int64_t>> input_shapes,
+        std::vector<std::vector<std::vector<int64_t>>> vec_input_shapes,
+        const PreviousArgs&... pargs) {
+      std::vector<std::vector<int64_t>> arg = vec_input_shapes[vec_in_idx];
+      return InferShapeCallHelper<Tail...>::template InferShape<in_idx,
+                                                                vec_in_idx + 1>(
+          input_shapes, vec_input_shapes, pargs..., arg);
     }
   };
 
   // end: base template
   template <typename T>
   struct InferShapeCallHelper<TypeTag<T>> {
-    template <int in_idx>
-    static Return InferShape(std::vector<std::vector<int64_t>> input_shapes,
-                             const Args&... args) {
+    template <int in_idx, int vec_in_idx>
+    static Return InferShape(
+        std::vector<std::vector<int64_t>> input_shapes,
+        std::vector<std::vector<std::vector<int64_t>>> vec_input_shapes,
+        const Args&... args) {
       return impl_fn(args...);
     }
   };
@@ -211,41 +257,63 @@ struct InferShapeFuncImpl<Return (*)(Args...), impl_fn> {
 /////////////// InferDataType Function (PD_INFER_DTYPE) ///////////////
 
 // Record Op Infer dtype core function
-using InferDtypeFunc =
-    std::vector<DataType> (*)(std::vector<DataType> input_dtypes);
+using InferDtypeFunc = std::vector<DataType> (*)(
+    std::vector<DataType> input_dtypes,
+    std::vector<std::vector<DataType>> vec_input_dtypes);
 
 template <typename F, F f>
 struct InferDtypeFuncImpl;
 
 template <typename Return, typename... Args, Return (*impl_fn)(Args...)>
 struct InferDtypeFuncImpl<Return (*)(Args...), impl_fn> {
-  static Return InferDtype(std::vector<DataType> input_dtypes) {
-    return InferDtypeCallHelper<Args..., TypeTag<int>>::template InferDtype<0>(
-        input_dtypes);
+  static Return InferDtype(
+      std::vector<DataType> input_dtypes,
+      std::vector<std::vector<DataType>> vec_input_dtypes) {
+    return InferDtypeCallHelper<Args..., TypeTag<int>>::template InferDtype<0,
+                                                                            0>(
+        input_dtypes, vec_input_dtypes);
   }
 
  private:
   template <typename... RemainingArgs>
   struct InferDtypeCallHelper;
 
-  // Only one type input now: DataType
   template <typename... Tail>
   struct InferDtypeCallHelper<DataType, Tail...> {
-    template <int in_idx, typename... PreviousArgs>
-    static Return InferDtype(std::vector<DataType> input_dtypes,
-                             const PreviousArgs&... pargs) {
+    template <int in_idx, int vec_in_idx, typename... PreviousArgs>
+    static Return InferDtype(
+        std::vector<DataType> input_dtypes,
+        std::vector<std::vector<DataType>> vec_input_dtypes,
+        const PreviousArgs&... pargs) {
       DataType arg = input_dtypes[in_idx];
-      return InferDtypeCallHelper<Tail...>::template InferDtype<in_idx + 1>(
-          input_dtypes, pargs..., arg);
+      return InferDtypeCallHelper<Tail...>::template InferDtype<in_idx + 1,
+                                                                vec_in_idx>(
+          input_dtypes, vec_input_dtypes, pargs..., arg);
+    }
+  };
+
+  template <typename... Tail>
+  struct InferDtypeCallHelper<std::vector<DataType>, Tail...> {
+    template <int in_idx, int vec_in_idx, typename... PreviousArgs>
+    static Return InferDtype(
+        std::vector<DataType> input_dtypes,
+        std::vector<std::vector<DataType>> vec_input_dtypes,
+        const PreviousArgs&... pargs) {
+      std::vector<DataType> arg = vec_input_dtypes[vec_in_idx];
+      return InferDtypeCallHelper<Tail...>::template InferDtype<in_idx,
+                                                                vec_in_idx + 1>(
+          input_dtypes, vec_input_dtypes, pargs..., arg);
     }
   };
 
   // end: base template
   template <typename T>
   struct InferDtypeCallHelper<TypeTag<T>> {
-    template <int in_idx>
-    static Return InferDtype(std::vector<DataType> input_dtypes,
-                             const Args&... args) {
+    template <int in_idx, int vec_in_idx>
+    static Return InferDtype(
+        std::vector<DataType> input_dtypes,
+        std::vector<std::vector<DataType>> vec_input_dtypes,
+        const Args&... args) {
       return impl_fn(args...);
     }
   };
@@ -288,9 +356,9 @@ class PD_DLL_DECL OpMetaInfo {
   std::vector<std::string> attrs_;
 
   // 2. func info
-  KernelFunc kernel_fn_;
-  InferShapeFunc infer_shape_fn_;
-  InferDtypeFunc infer_dtype_fn_;
+  KernelFunc kernel_fn_{nullptr};
+  InferShapeFunc infer_shape_fn_{nullptr};
+  InferDtypeFunc infer_dtype_fn_{nullptr};
 };
 
 //////////////// Op Meta Info Map /////////////////
@@ -321,20 +389,22 @@ class PD_DLL_DECL OpMetaInfoMap {
 
 class PD_DLL_DECL OpMetaInfoBuilder {
  public:
-  explicit OpMetaInfoBuilder(std::string&& name);
+  explicit OpMetaInfoBuilder(std::string&& name, size_t index);
   OpMetaInfoBuilder& Inputs(std::vector<std::string>&& inputs);
   OpMetaInfoBuilder& Outputs(std::vector<std::string>&& outputs);
   OpMetaInfoBuilder& Attrs(std::vector<std::string>&& attrs);
   OpMetaInfoBuilder& SetKernelFn(KernelFunc func);
   OpMetaInfoBuilder& SetInferShapeFn(InferShapeFunc func);
   OpMetaInfoBuilder& SetInferDtypeFn(InferDtypeFunc func);
-  OpMetaInfoBuilder& SetBackwardOp(const std::string& bwd_op_name);
 
  private:
   // Forward Op name
   std::string name_;
-  // Point to the currently constructed op meta info
+  // ref current info ptr
   OpMetaInfo* info_ptr_;
+  // The current op meta info index in vector
+  // - 0: op, 1: grad_op, 2: grad_grad_op
+  size_t index_;
 };
 
 /////////////////////// Op register API /////////////////////////
@@ -350,14 +420,25 @@ void LoadCustomOperatorLib(const std::string& dso_name);
 
 /////////////////////// Op register Macro /////////////////////////
 
-#define PD_BUILD_OP_WITH_COUNTER(op_name, counter)                  \
-  static ::paddle::OpMetaInfoBuilder __op_meta_info_##counter##__ = \
-      ::paddle::OpMetaInfoBuilder(op_name)
+#define PD_BUILD_OP(op_name)                                                   \
+  STATIC_ASSERT_GLOBAL_NAMESPACE(                                              \
+      __reg_op__##op_name, "PD_BUILD_OP must be called in global namespace."); \
+  static ::paddle::OpMetaInfoBuilder __op_meta_info_##op_name##__ =            \
+      ::paddle::OpMetaInfoBuilder(#op_name, 0)
 
-#define PD_BUILD_OP_INNER(op_name, counter) \
-  PD_BUILD_OP_WITH_COUNTER(op_name, counter)
+#define PD_BUILD_GRAD_OP(op_name)                                        \
+  STATIC_ASSERT_GLOBAL_NAMESPACE(                                        \
+      __reg_grad_op__##op_name,                                          \
+      "PD_BUILD_GRAD_OP must be called in global namespace.");           \
+  static ::paddle::OpMetaInfoBuilder __grad_op_meta_info_##op_name##__ = \
+      ::paddle::OpMetaInfoBuilder(#op_name, 1)
 
-#define PD_BUILD_OP(op_name) PD_BUILD_OP_INNER(op_name, __COUNTER__)
+#define PD_BUILD_DOUBLE_GRAD_OP(op_name)                                      \
+  STATIC_ASSERT_GLOBAL_NAMESPACE(                                             \
+      __reg_grad_grad_op__##op_name,                                          \
+      "PD_BUILD_DOUBLE_GRAD_OP must be called in global namespace.");         \
+  static ::paddle::OpMetaInfoBuilder __grad_grad_op_meta_info_##op_name##__ = \
+      ::paddle::OpMetaInfoBuilder(#op_name, 2)
 
 }  // namespace paddle
 
