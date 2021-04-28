@@ -15,6 +15,21 @@ limitations under the License. */
 #include "paddle/fluid/operators/collective/c_allreduce_op.h"
 
 namespace paddle {
+namespace framework {
+class OpDesc;
+template <typename T>
+class EmptyGradOpMaker;
+}  // namespace framework
+namespace imperative {
+class OpBase;
+}  // namespace imperative
+namespace platform {
+struct CPUPlace;
+struct float16;
+}  // namespace platform
+}  // namespace paddle
+
+namespace paddle {
 namespace operators {
 
 class CAllReduceMaxOpMaker : public CAllReduceOpMaker {
@@ -22,14 +37,19 @@ class CAllReduceMaxOpMaker : public CAllReduceOpMaker {
   std::string GetName() const override { return "Max"; }
 };
 
+DECLARE_INPLACE_OP_INFERER(AllreduceMaxInplaceInferer, {"X", "Out"});
+
 }  // namespace operators
 }  // namespace paddle
 
 namespace ops = paddle::operators;
 namespace plat = paddle::platform;
 
-REGISTER_OP_WITHOUT_GRADIENT(c_allreduce_max, ops::CAllReduceOp,
-                             ops::CAllReduceMaxOpMaker);
+REGISTER_OPERATOR(
+    c_allreduce_max, ops::CAllReduceOp, ops::CAllReduceMaxOpMaker,
+    paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
+    paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
+    ops::AllreduceMaxInplaceInferer)
 
 REGISTER_OP_CPU_KERNEL(c_allreduce_max,
                        ops::CAllReduceOpCPUKernel<ops::kRedMax, float>,

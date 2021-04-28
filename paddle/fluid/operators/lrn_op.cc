@@ -169,17 +169,25 @@ class LRNOp : public framework::OperatorWithKernel {
 
  protected:
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE(ctx->HasInput("X"), "Input(X) of LRNOp should not be null.");
-    PADDLE_ENFORCE(ctx->HasOutput("Out"),
-                   "Output(Out) of LRNOp should not be null.");
-    PADDLE_ENFORCE(ctx->HasOutput("MidOut"),
-                   "MidOut(Out) of LRNOp should not be null.");
+    OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "LRN");
+    OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "LRN");
+    OP_INOUT_CHECK(ctx->HasOutput("MidOut"), "Output", "MidOut", "LRN");
 
     auto x_dim = ctx->GetInputDim("X");
-    PADDLE_ENFORCE_EQ(x_dim.size(), 4, "Input(X)'rank of LRNOp should be 4.");
+    PADDLE_ENFORCE_EQ(x_dim.size(), 4, platform::errors::InvalidArgument(
+                                           "Input(input) rank should be 4, "
+                                           "but received input rank (%d) != 4",
+                                           x_dim.size()));
 
     int n = ctx->Attrs().Get<int>("n");
-    PADDLE_ENFORCE(n > 0 && n % 2 == 1, "n should be positive odd value");
+    PADDLE_ENFORCE_GT(n, 0UL, platform::errors::InvalidArgument(
+                                  "Argument(n) should be positive, "
+                                  "but received n(%d) not greater than 0",
+                                  n));
+    PADDLE_ENFORCE_EQ(n % 2, 1UL, platform::errors::InvalidArgument(
+                                      "Argument(n) should be odd value, "
+                                      "but received n(%d) is not an odd value",
+                                      n));
 
     ctx->SetOutputDim("Out", x_dim);
     ctx->ShareLoD("X", /*->*/ "Out");
@@ -191,16 +199,16 @@ class LRNOp : public framework::OperatorWithKernel {
     framework::LibraryType library_{framework::LibraryType::kPlain};
     // TODO(pzelazko-intel): enable MKLDNN layout when it's ready
     framework::DataLayout layout_ = framework::DataLayout::kAnyLayout;
+    auto data_type = OperatorWithKernel::IndicateVarDataType(ctx, "X");
 #ifdef PADDLE_WITH_MKLDNN
     if (library_ == framework::LibraryType::kPlain &&
-        platform::CanMKLDNNBeUsed(ctx)) {
+        this->CanMKLDNNBeUsed(ctx, data_type)) {
       library_ = framework::LibraryType::kMKLDNN;
       layout_ = framework::DataLayout::kMKLDNN;
     }
 #endif
-    return framework::OpKernelType(
-        OperatorWithKernel::IndicateVarDataType(ctx, "X"), ctx.GetPlace(),
-        layout_, library_);
+    return framework::OpKernelType(data_type, ctx.GetPlace(), layout_,
+                                   library_);
   }
 
   framework::OpKernelType GetKernelTypeForVar(
@@ -317,10 +325,10 @@ class LRNOpGrad : public framework::OperatorWithKernel {
 
  protected:
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE(ctx->HasInput("X"), "Input(X) should not be null");
-    PADDLE_ENFORCE(ctx->HasInput("MidOut"), "Input(MidOut) should not be null");
-    PADDLE_ENFORCE(ctx->HasInput(framework::GradVarName("Out")),
-                   "Input(Out@GRAD) should not be null");
+    OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "LRNGrad");
+    OP_INOUT_CHECK(ctx->HasInput("MidOut"), "Input", "MidOu", "LRNGrad");
+    OP_INOUT_CHECK(ctx->HasInput(framework::GradVarName("Out")), "Input",
+                   "Out@GRAD", "LRNGrad");
 
     auto x_dims = ctx->GetInputDim("X");
     ctx->SetOutputDim(framework::GradVarName("X"), x_dims);
@@ -331,16 +339,16 @@ class LRNOpGrad : public framework::OperatorWithKernel {
     framework::LibraryType library_{framework::LibraryType::kPlain};
     // TODO(pzelazko-intel): enable MKLDNN layout when it's ready
     framework::DataLayout layout_ = framework::DataLayout::kAnyLayout;
+    auto data_type = OperatorWithKernel::IndicateVarDataType(ctx, "X");
 #ifdef PADDLE_WITH_MKLDNN
     if (library_ == framework::LibraryType::kPlain &&
-        platform::CanMKLDNNBeUsed(ctx)) {
+        this->CanMKLDNNBeUsed(ctx, data_type)) {
       library_ = framework::LibraryType::kMKLDNN;
       layout_ = framework::DataLayout::kMKLDNN;
     }
 #endif
-    return framework::OpKernelType(
-        OperatorWithKernel::IndicateVarDataType(ctx, "X"), ctx.GetPlace(),
-        layout_, library_);
+    return framework::OpKernelType(data_type, ctx.GetPlace(), layout_,
+                                   library_);
   }
 
   framework::OpKernelType GetKernelTypeForVar(

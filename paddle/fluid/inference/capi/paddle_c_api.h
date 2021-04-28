@@ -19,11 +19,11 @@
 #include <stdio.h>
 
 #if defined(_WIN32)
-#ifdef PADDLE_ON_INFERENCE
+#ifdef PADDLE_DLL_INFERENCE
 #define PADDLE_CAPI_EXPORT __declspec(dllexport)
 #else
 #define PADDLE_CAPI_EXPORT __declspec(dllimport)
-#endif  // PADDLE_ON_INFERENCE
+#endif  // PADDLE_DLL_INFERENCE
 #else
 #define PADDLE_CAPI_EXPORT __attribute__((visibility("default")))
 #endif  // _WIN32
@@ -165,11 +165,18 @@ PADDLE_CAPI_EXPORT extern void PD_EnableUseGpu(PD_AnalysisConfig* config,
                                                int memory_pool_init_size_mb,
                                                int device_id);
 
+PADDLE_CAPI_EXPORT extern void PD_EnableXpu(PD_AnalysisConfig* config,
+                                            int l3_workspace_size);
+
 PADDLE_CAPI_EXPORT extern void PD_DisableGpu(PD_AnalysisConfig* config);
 
 PADDLE_CAPI_EXPORT extern bool PD_UseGpu(const PD_AnalysisConfig* config);
 
+PADDLE_CAPI_EXPORT extern bool PD_UseXpu(const PD_AnalysisConfig* config);
+
 PADDLE_CAPI_EXPORT extern int PD_GpuDeviceId(const PD_AnalysisConfig* config);
+
+PADDLE_CAPI_EXPORT extern int PD_XpuDeviceId(const PD_AnalysisConfig* config);
 
 PADDLE_CAPI_EXPORT extern int PD_MemoryPoolInitSizeMb(
     const PD_AnalysisConfig* config);
@@ -215,11 +222,6 @@ typedef struct PD_MaxInputShape {
 PADDLE_CAPI_EXPORT extern void PD_SwitchIrDebug(PD_AnalysisConfig* config,
                                                 bool x);
 
-PADDLE_CAPI_EXPORT extern void PD_EnableNgraph(PD_AnalysisConfig* config);
-
-PADDLE_CAPI_EXPORT extern bool PD_NgraphEnabled(
-    const PD_AnalysisConfig* config);
-
 PADDLE_CAPI_EXPORT extern void PD_EnableMKLDNN(PD_AnalysisConfig* config);
 
 PADDLE_CAPI_EXPORT extern void PD_SetMkldnnCacheCapacity(
@@ -238,6 +240,12 @@ PADDLE_CAPI_EXPORT extern void PD_EnableMkldnnQuantizer(
     PD_AnalysisConfig* config);
 
 PADDLE_CAPI_EXPORT extern bool PD_MkldnnQuantizerEnabled(
+    const PD_AnalysisConfig* config);
+
+PADDLE_CAPI_EXPORT extern void PD_EnableMkldnnBfloat16(
+    PD_AnalysisConfig* config);
+
+PADDLE_CAPI_EXPORT extern bool PD_MkldnnBfloat16Enabled(
     const PD_AnalysisConfig* config);
 
 PADDLE_CAPI_EXPORT extern void PD_SetModelBuffer(PD_AnalysisConfig* config,

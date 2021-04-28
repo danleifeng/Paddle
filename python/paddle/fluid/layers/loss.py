@@ -16,12 +16,13 @@ from __future__ import print_function
 
 import numpy as np
 from functools import partial, reduce
+from paddle.utils import deprecated
 from . import nn
 from .layer_function_generator import templatedoc
 from ..layer_helper import LayerHelper
-from ..framework import Variable, in_dygraph_mode
+from ..framework import Variable, in_dygraph_mode, static_only
 from .. import core
-from ..data_feeder import check_variable_and_dtype
+from ..data_feeder import check_variable_and_dtype, check_type
 from ..param_attr import ParamAttr
 from ..initializer import NumpyArrayInitializer, Constant
 from .. import core
@@ -56,7 +57,9 @@ def center_loss(input,
                 alpha,
                 param_attr,
                 update_center=True):
-    """
+    r"""
+    :api_attr: Static Graph
+
     **Center loss Cost layer**
     
     This OP accepts input (deep features,the output of the last hidden layer)
@@ -86,6 +89,8 @@ def center_loss(input,
         .. code-block:: python
 
           import paddle.fluid as fluid 
+          import paddle
+          paddle.enable_static()
 
           input = fluid.data(name='x',shape=[20,30],dtype='float32')
           label = fluid.data(name='y',shape=[20,1],dtype='int64')
@@ -101,6 +106,10 @@ def center_loss(input,
     """
     helper = LayerHelper('center_loss', **locals())
     dtype = helper.input_dtype()
+    check_variable_and_dtype(input, 'input', ['float32', 'float64'],
+                             'center_loss')
+    check_variable_and_dtype(label, 'label', ['int32', 'int64'], 'center_loss')
+
     centers_shape = [num_classes, input.shape[1]]
     centers_param = helper.create_parameter(
         attr=param_attr, shape=centers_shape, dtype=dtype)
@@ -108,6 +117,8 @@ def center_loss(input,
 
     if isinstance(alpha, Variable):
         alpha_param = alpha
+        check_variable_and_dtype(alpha, 'alpha', ['float32', 'float64'],
+                                 'center_loss')
     else:
         assert isinstance(alpha, float)
         alpha_param = helper.create_variable(
@@ -140,7 +151,8 @@ def center_loss(input,
 
 
 def bpr_loss(input, label, name=None):
-    """
+    r"""
+
     **Bayesian Personalized Ranking Loss Operator**
 
     This operator belongs to pairwise ranking loss. Label is the desired item.
@@ -167,6 +179,9 @@ def bpr_loss(input, label, name=None):
         .. code-block:: python
 
           import paddle.fluid as fluid
+          import paddle
+
+          paddle.enable_static()
 
           neg_size = 10
           label = fluid.data(
@@ -177,6 +192,8 @@ def bpr_loss(input, label, name=None):
     """
     helper = LayerHelper('bpr_loss', **locals())
     out = helper.create_variable_for_type_inference(dtype=input.dtype)
+    check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64'],
+                             'bpr_loss')
     helper.append_op(
         type='bpr_loss',
         inputs={'X': [input],
@@ -186,7 +203,11 @@ def bpr_loss(input, label, name=None):
 
 
 def cross_entropy(input, label, soft_label=False, ignore_index=kIgnoreIndex):
-    """
+    r"""
+    :alias_main: paddle.nn.functional.cross_entropy
+	:alias: paddle.nn.functional.cross_entropy,paddle.nn.functional.loss.cross_entropy
+	:old_api: paddle.fluid.layers.cross_entropy
+
     This operator computes the cross entropy between input and label. It
     supports both hard-label and and soft-label cross entropy computation.
 
@@ -238,12 +259,12 @@ def cross_entropy(input, label, soft_label=False, ignore_index=kIgnoreIndex):
     if not soft_label:
         return cross_entropy2(input, label, ignore_index)
 
+    if in_dygraph_mode():
+        return core.ops.cross_entropy(input, label, "soft_label", soft_label,
+                                      "ignore_index", ignore_index)
+
     inputs = {'X': [input], 'Label': [label]}
     attrs = {"soft_label": soft_label, "ignore_index": ignore_index}
-
-    if in_dygraph_mode():
-        outs = core.ops.cross_entropy(inputs, attrs)
-        return outs['Y'][0]
 
     check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64'],
                              'cross_entropy')
@@ -255,13 +276,13 @@ def cross_entropy(input, label, soft_label=False, ignore_index=kIgnoreIndex):
 
 
 def cross_entropy2(input, label, ignore_index=kIgnoreIndex):
+    if in_dygraph_mode():
+        loss, _, _ = core.ops.cross_entropy2(input, label, 'ignore_index',
+                                             ignore_index)
+        return loss
+
     inputs = {'X': [input], 'Label': [label]}
     attrs = {'ignore_index': ignore_index}
-
-    if in_dygraph_mode():
-        outs = core.ops.cross_entropy2(inputs, attrs)
-        return outs['Y'][0]
-
     check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64'],
                              'cross_entropy2')
     helper = LayerHelper('cross_entropy2', **locals())
@@ -279,7 +300,8 @@ def cross_entropy2(input, label, ignore_index=kIgnoreIndex):
 
 
 def square_error_cost(input, label):
-    """
+    r"""
+
     This op accepts input predictions and target label and returns the
     squared error cost.
 
@@ -290,50 +312,36 @@ def square_error_cost(input, label):
         Out = (input - label)^2
 
     Parameters:
-        input (Variable): Input tensor, the data type should be float32.
-        label (Variable): Label tensor, the data type should be float32.
+        input (Tensor): Input tensor, the data type should be float32.
+        label (Tensor): Label tensor, the data type should be float32.
 
     Returns:
-        The tensor variable storing the element-wise squared error \
+        The tensor storing the element-wise squared error \
                   difference between input and label.
 
-    Return type: Variable.
+    Return type: Tensor.
 
     Examples:
 
         .. code-block:: python
 
-	    # declarative mode
-	    import paddle.fluid as fluid
-	    import numpy as np
-	    input = fluid.data(name="input", shape=[1])
-	    label = fluid.data(name="label", shape=[1])
-	    output = fluid.layers.square_error_cost(input,label)
-	    place = fluid.CPUPlace()
-	    exe = fluid.Executor(place)
-	    exe.run(fluid.default_startup_program())
- 
-	    input_data = np.array([1.5]).astype("float32")
-	    label_data = np.array([1.7]).astype("float32")
-	    output_data = exe.run(fluid.default_main_program(),
-                feed={"input":input_data, "label":label_data},
-                fetch_list=[output],
-                return_numpy=True)
- 
-	    print(output_data)
-	    # [array([0.04000002], dtype=float32)]
-	    
-	    # imperative mode
-	    import paddle.fluid.dygraph as dg
+            import paddle
+            input = paddle.to_tensor([1.1, 1.9])
+            label = paddle.to_tensor([1.0, 2.0])
+            output = paddle.nn.functional.square_error_cost(input, label)
+            print(output)
+            # [0.01, 0.01]
 
-	    with dg.guard(place) as g:
-    		input = dg.to_variable(input_data)
-    		label = dg.to_variable(label_data)
-    		output = fluid.layers.square_error_cost(input, label)
-    		print(output.numpy())
-	        
-	        # [0.04000002]
     """
+    if in_dygraph_mode():
+        minus_out = core.ops.elementwise_sub(input, label)
+        square_out = core.ops.square(minus_out)
+        return square_out
+
+    check_variable_and_dtype(input, "input", ['float32', 'float64'],
+                             'square_error_cost')
+    check_variable_and_dtype(label, "label", ['float32', 'float64'],
+                             'square_error_cost')
     helper = LayerHelper('square_error_cost', **locals())
     minus_out = helper.create_variable_for_type_inference(dtype=input.dtype)
     helper.append_op(
@@ -369,9 +377,7 @@ def edit_distance(input,
 
     So the edit distance between A and B is 3.
 
-    The input is a LoDTensor or Tensor.
-    If it is a LoDTensor, The separation is specified by the LoD information.
-    If it is a Tensor, The input_length and label_length should be supported.
+    The input is a Tensor, the input_length and label_length should be supported.
 
     The `batch_size` of labels should be same as `input`.
 
@@ -380,59 +386,36 @@ def edit_distance(input,
     the edit distance value will be divided by the length of label.
 
     Parameters:
-        input(Variable): The input variable which is a tensor or LoDTensor, its rank should be equal to 2 and its data type should be int64.
-        label(Variable): The label variable which is a tensor or LoDTensor, its rank should be equal to 2 and its data type should be int64.
+        input(Tensor): The input tensor, its rank should be equal to 2 and its data type should be int64.
+        label(Tensor): The label tensor, its rank should be equal to 2 and its data type should be int64.
         normalized(bool, default True): Indicated whether to normalize the edit distance.
         ignored_tokens(list<int>, default None): Tokens that will be removed before
                                      calculating edit distance.
-        input_length(Variable): The length for each sequence in `input` if it's of Tensor type, it should have shape `(batch_size, )` and its data type should be int64.
-        label_length(Variable): The length for each sequence in `label` if it's of Tensor type, it should have shape `(batch_size, )` and its data type should be int64.
+        input_length(Tensor): The length for each sequence in `input` if it's of Tensor type, it should have shape `(batch_size, )` and its data type should be int64.
+        label_length(Tensor): The length for each sequence in `label` if it's of Tensor type, it should have shape `(batch_size, )` and its data type should be int64.
         NOTE: To be avoid unexpected result, the value of every elements in input_length and label_length should be equal to the value of the second dimension of input and label. For example, The input: [[1,2,3,4],[5,6,7,8],[9,10,11,12]], the shape of input is [3,4] and the input_length should be [4,4,4]
         NOTE: This Api is different from fluid.metrics.EditDistance
 
     Returns:
 	Tuple:
 
-        distance(Variable): edit distance result, its data type is float32, and its shape is (batch_size, 1).
-        sequence_num(Variable): sequence number, its data type is float32, and its shape is (1,).
+        distance(Tensor): edit distance result, its data type is float32, and its shape is (batch_size, 1).
+        sequence_num(Tensor): sequence number, its data type is float32, and its shape is (1,).
 
     Examples:
         .. code-block:: python
-            
-            import paddle.fluid as fluid
-            import numpy as np
 
-            # using LoDTensor
-            x_lod = fluid.data(name='x_lod', shape=[None,1], dtype='int64', lod_level=1)
-            y_lod = fluid.data(name='y_lod', shape=[None,1], dtype='int64', lod_level=1)
-            distance_lod, seq_num_lod = fluid.layers.edit_distance(input=x_lod, label=y_lod)
+            import paddle
+            import paddle.nn.functional as F
 
-            # using Tensor
-            input_data = np.array([[1,2,3],[4,5,6],[4,4,4],[1,1,1]]).astype('int64')
-            label_data = np.array([[1,3,4,1],[4,5,8,1],[7,7,7,1],[1,1,1,1]]).astype('int64')
-            input_len = np.array([3,3,3,3]).astype('int64')
-            label_len = np.array([4,4,4,4]).astype('int64')
+            input = paddle.to_tensor([[1,2,3],[4,5,6],[4,4,4],[1,1,1]], dtype='int64')
+            label = paddle.to_tensor([[1,3,4,1],[4,5,8,1],[7,7,7,1],[1,1,1,1]], dtype='int64')
+            input_len = paddle.to_tensor([3,3,3,3], dtype='int64')
+            label_len = paddle.to_tensor([4,4,4,4], dtype='int64')
 
-            input_t = fluid.data(name='input', shape=[None,3], dtype='int64')
-            label_t = fluid.data(name='label', shape=[None,4], dtype='int64')
-            input_len_t = fluid.data(name='input_length', shape=[None], dtype='int64')
-            label_len_t = fluid.data(name='label_length', shape=[None], dtype='int64')
+            distance, sequence_num = F.loss.edit_distance(input=input, label=label, input_length=input_len, label_length=label_len, normalized=False)
 
-            distance, sequence_num = fluid.layers.edit_distance(input=input_t, label=label_t, input_length=input_len_t, label_length=label_len_t,normalized=False)
-
-            # print(input_data.shape, label_data.shape)
-            # ((4,3), (4,4))
-
-            place = fluid.CPUPlace()
-            exe = fluid.Executor(place)
-            exe.run(fluid.default_startup_program())
-            dis, seq_num = exe.run(fluid.default_main_program(),
-                                   feed={"input":input_data,
-                                         "label":label_data,
-                                         "input_length": input_len,
-                                         "label_length": label_len},
-            fetch_list=[distance,sequence_num])
-            # print(dis)
+            # print(distance)
             # [[3.]
             #  [2.]
             #  [4.]
@@ -443,10 +426,12 @@ def edit_distance(input,
             #  [1.  ]
             #  [0.25]
             #
-            # print(seq_num)
+            # print(sequence_num)
             # [4]
 
     """
+    check_variable_and_dtype(input, 'input', ['int64'], 'edit_distance')
+    check_variable_and_dtype(label, 'label', ['int64'], 'edit_distance')
     helper = LayerHelper("edit_distance", **locals())
 
     # remove some tokens from input and labels
@@ -469,7 +454,7 @@ def edit_distance(input,
         label = erased_label
 
     this_inputs = {"Hyps": [input], "Refs": [label]}
-    if input_length and label_length:
+    if input_length is not None and label_length is not None:
         this_inputs['HypsLength'] = [input_length]
         this_inputs['RefsLength'] = [label_length]
 
@@ -509,7 +494,7 @@ def warpctc(input,
          (not including the blank label). When it is a 3-D Tensor, its shape 
          is `[max_logit_length, batch_size, num_classes + 1]`,
          where `max_logit_length` is the longest length of
-         input logit sequence. The data type must be float32.
+         input logit sequence. The data type should be float32 or float64.
        label (Variable): The ground truth of variable-length sequence,
          which must be a 2-D Tensor with LoD information or a 3-D Tensor without
          LoD information, needs to be consistent with the coressponding input. 
@@ -539,6 +524,7 @@ def warpctc(input,
         .. code-block:: python
 
             # using LoDTensor
+            import paddle
             import paddle.fluid as fluid
             import numpy as np
 
@@ -549,6 +535,7 @@ def warpctc(input,
             # class num
             class_num = 5
 
+            paddle.enable_static()
             logits = fluid.data(name='logits',shape=[None, class_num+1],
                                  dtype='float32',lod_level=1)
             label = fluid.data(name='label', shape=[None, 1],
@@ -570,6 +557,7 @@ def warpctc(input,
         .. code-block:: python
 
             # using Tensor
+            import paddle
             import paddle.fluid as fluid
             import numpy as np
 
@@ -581,6 +569,7 @@ def warpctc(input,
             batch_size = 16
             # class num
             class_num = 5
+            paddle.enable_static()
             logits = fluid.data(name='logits',
                            shape=[max_seq_length, batch_size, class_num+1],
                            dtype='float32')
@@ -605,9 +594,30 @@ def warpctc(input,
                                   fetch_list=[cost.name])
             print(output)
     """
+    if in_dygraph_mode():
+        if input_length is None or label_length is None:
+            raise ValueError(
+                "input_length and label_length must not be None in dygraph mode!"
+            )
+        grad, loss_out = core.ops.warpctc(
+            input,
+            label,
+            input_length,
+            label_length,
+            'blank',
+            blank,
+            'norm_by_times',
+            norm_by_times, )
+        return loss_out
     helper = LayerHelper('warpctc', **locals())
+    check_variable_and_dtype(input, 'input', ['float32', 'float64'], "warpctc")
+    check_variable_and_dtype(label, 'label', ['int32'], "warpctc")
     this_inputs = {'Logits': [input], 'Label': [label]}
-    if input_length and label_length:
+    if input_length is not None and label_length is not None:
+        check_variable_and_dtype(input_length, 'LogitsLength', ['int64'],
+                                 "warpctc")
+        check_variable_and_dtype(label_length, 'LabelLength', ['int64'],
+                                 "warpctc")
         this_inputs['LogitsLength'] = [input_length]
         this_inputs['LabelLength'] = [label_length]
 
@@ -629,6 +639,7 @@ def warpctc(input,
 # FIXME(wuyi): let docstring_checker.py understand @autodoc.
 # For now, the comments in c++ use types like Tensor, but in python side
 # the type is often "Variable", and arguments may vary.
+@static_only
 @templatedoc(op_type="nce")
 def nce(input,
         label,
@@ -643,15 +654,17 @@ def nce(input,
         seed=0,
         is_sparse=False):
     """
+    :api_attr: Static Graph
+
     ${comment}
 
     Args:
-        input (Variable): Input variable, 2-D tensor with shape [batch_size, dim], 
+        input (Tensor): Input tensor, 2-D tensor with shape [batch_size, dim], 
             and data type is float32 or float64.
-        label (Variable): Input label, 2-D tensor with shape [batch_size, num_true_class],
+        label (Tensor): Input label, 2-D tensor with shape [batch_size, num_true_class],
             and data type is int64.
         num_total_classes (int):${num_total_classes_comment}.
-        sample_weight (Variable|None): A Variable of shape [batch_size, 1]
+        sample_weight (Tensor|None): A Tensor of shape [batch_size, 1]
             storing a weight for each sample. The default weight for each
             sample is 1.0.
         param_attr (ParamAttr|None): To specify the weight parameter attribute. 
@@ -675,46 +688,48 @@ def nce(input,
             the weight@GRAD and bias@GRAD will be changed to SelectedRows. Default False.
 
     Returns:
-        Variable: The output nce loss.
+        Tensor: The output nce loss.
 
     Examples:
         .. code-block:: python
 
 
-            import paddle.fluid as fluid
+            import paddle
             import numpy as np
+
+            paddle.enable_static()
 
             window_size = 5
             words = []
-            for i in xrange(window_size):
-                words.append(fluid.data(
+            for i in range(window_size):
+                words.append(paddle.static.data(
                     name='word_{0}'.format(i), shape=[-1, 1], dtype='int64'))
 
             dict_size = 10000
             label_word = int(window_size / 2) + 1
 
             embs = []
-            for i in xrange(window_size):
+            for i in range(window_size):
                 if i == label_word:
                     continue
 
-                emb = fluid.layers.embedding(input=words[i], size=[dict_size, 32],
-                                   param_attr='embed', is_sparse=True)
+                emb = paddle.static.nn.embedding(input=words[i], size=[dict_size, 32],
+                                    param_attr='embed', is_sparse=True)
                 embs.append(emb)
 
-            embs = fluid.layers.concat(input=embs, axis=1)
-            loss = fluid.layers.nce(input=embs, label=words[label_word],
-                      num_total_classes=dict_size, param_attr='nce.w_0',
-                      bias_attr='nce.b_0')
+            embs = paddle.concat(x=embs, axis=1)
+            loss = paddle.static.nn.nce(input=embs, label=words[label_word],
+                        num_total_classes=dict_size, param_attr='nce.w_0',
+                        bias_attr='nce.b_0')
 
-             #or use custom distribution
-             dist = np.array([0.05,0.5,0.1,0.3,0.05])
-             loss = fluid.layers.nce(input=embs, label=words[label_word],
-                       num_total_classes=5, param_attr='nce.w_1',
-                       bias_attr='nce.b_1',
-                       num_neg_samples=3,
-                       sampler="custom_dist",
-                       custom_dist=dist)
+            #or use custom distribution
+            dist = np.array([0.05,0.5,0.1,0.3,0.05])
+            loss = paddle.static.nn.nce(input=embs, label=words[label_word],
+                    num_total_classes=5, param_attr='nce.w_1',
+                    bias_attr='nce.b_1',
+                    num_neg_samples=3,
+                    sampler="custom_dist",
+                    custom_dist=dist)
     """
     helper = LayerHelper('nce', **locals())
     check_variable_and_dtype(input, 'input', ['float32', 'float64'], 'nce')
@@ -854,6 +869,8 @@ def hsigmoid(input,
              is_custom=False,
              is_sparse=False):
     """
+    :api_attr: Static Graph
+    
     The hierarchical sigmoid organizes the classes into a complete binary tree to reduce the computational complexity
     and speed up the model training, especially the training of language model.
     Each leaf node of the complete binary tree represents a class(word) and each non-leaf node acts as a binary classifier.
@@ -923,6 +940,8 @@ def hsigmoid(input,
                 value=0.05), bias_attr=fluid.initializer.Constant(value=.0))
             # out = [[0.62792355], [0.62792355], [0.62792355], [0.62792355]]
     """
+    check_variable_and_dtype(input, 'input', ['float32', 'float64'], 'hsigmoid')
+    check_variable_and_dtype(label, 'label', ['int64'], 'hsigmoid')
 
     helper = LayerHelper('hierarchical_sigmoid', **locals())
     dtype = helper.input_dtype()
@@ -1144,7 +1163,8 @@ def softmax_with_cross_entropy(logits,
                                numeric_stable_mode=True,
                                return_softmax=False,
                                axis=-1):
-    """
+    r"""
+
     This operator implements the cross entropy loss function with softmax. This function 
     combines the calculation of the softmax operation and the cross entropy loss function 
     to provide a more numerically stable gradient.
@@ -1188,8 +1208,8 @@ def softmax_with_cross_entropy(logits,
     and then cross entropy loss is calculated by softmax and label.
 
     Args:
-        logits (Variable): A multi-dimension ``Tensor`` , and the data type is float32 or float64. The input tensor of unscaled log probabilities.
-        label (Variable): The ground truth  ``Tensor`` , data type is the same
+        logits (Tensor): A multi-dimension ``Tensor`` , and the data type is float32 or float64. The input tensor of unscaled log probabilities.
+        label (Tensor): The ground truth  ``Tensor`` , data type is the same
             as the ``logits`` . If :attr:`soft_label` is set to :attr:`True`, 
             Label is a ``Tensor``  in the same shape with :attr:`logits`. 
             If :attr:`soft_label` is set to :attr:`True`, Label is a ``Tensor`` 
@@ -1215,7 +1235,7 @@ def softmax_with_cross_entropy(logits,
                               is the rank of input :attr:`logits`. Default: -1.
 
     Returns:
-        ``Variable`` or Tuple of two ``Variable`` : Return the cross entropy loss if \
+        ``Tensor`` or Tuple of two ``Tensor`` : Return the cross entropy loss if \
                                                     `return_softmax` is False, otherwise the tuple \
                                                     (loss, softmax), softmax is in the same shape \
                                                     with input logits and cross entropy loss is in \
@@ -1225,29 +1245,34 @@ def softmax_with_cross_entropy(logits,
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
+            import paddle
+            import numpy as np
 
-            data = fluid.data(name='data', shape=[-1, 128], dtype='float32')
-            label = fluid.data(name='label', shape=[-1, 1], dtype='int64')
-            fc = fluid.layers.fc(input=data, size=100)
-            out = fluid.layers.softmax_with_cross_entropy(
-                logits=fc, label=label)
+            data = np.random.rand(128).astype("float32")
+            label = np.random.rand(1).astype("int64")
+            data = paddle.to_tensor(data)
+            label = paddle.to_tensor(label)
+            linear = paddle.nn.Linear(128, 100)
+            x = linear(data)
+            out = paddle.nn.functional.softmax_with_cross_entropy(logits=x, label=label)
+            print(out)
     """
+    if in_dygraph_mode():
+        softmax, loss = core.ops.softmax_with_cross_entropy(
+            logits, label, 'soft_label', soft_label, 'ignore_index',
+            ignore_index, 'numeric_stable_mode', numeric_stable_mode, 'axis',
+            axis)
+        if not return_softmax:
+            return loss
+        else:
+            return loss, softmax
+
     attrs = {
         'soft_label': soft_label,
         'ignore_index': ignore_index,
         'numeric_stable_mode': numeric_stable_mode,
         'axis': axis
     }
-
-    if in_dygraph_mode():
-        inputs = {'Logits': [logits], 'Label': [label]}
-        outs = core.ops.softmax_with_cross_entropy(inputs, attrs)
-        if not return_softmax:
-            return outs['Loss'][0]
-        else:
-            return outs['Loss'][0], outs['Softmax'][0]
-
     helper = LayerHelper('softmax_with_cross_entropy', **locals())
     softmax = helper.create_variable_for_type_inference(dtype=logits.dtype)
     loss = helper.create_variable_for_type_inference(dtype=logits.dtype)
@@ -1266,7 +1291,8 @@ def softmax_with_cross_entropy(logits,
 
 
 def rank_loss(label, left, right, name=None):
-    """
+    r"""
+
     This operator implements the sort loss layer in the RankNet model. RankNet is a pairwise ranking model 
     with a training sample consisting of a pair of documents (A and B), The label (P) 
     indicates whether A is ranked higher than B or not. Please refer to more details: 
@@ -1303,6 +1329,8 @@ def rank_loss(label, left, right, name=None):
         .. code-block:: python
 
             import paddle.fluid as fluid
+            import paddle
+            paddle.enable_static()
             label = fluid.data(name="label", shape=[-1, 1], dtype="float32")
             left = fluid.data(name="left", shape=[-1, 1], dtype="float32")
             right = fluid.data(name="right", shape=[-1, 1], dtype="float32")
@@ -1310,15 +1338,9 @@ def rank_loss(label, left, right, name=None):
 
     """
     helper = LayerHelper('rank_loss', **locals())
-
-    if not (isinstance(label, Variable)):
-        raise ValueError("The label should be a Variable")
-
-    if not (isinstance(left, Variable)):
-        raise ValueError("The left should be a Variable")
-
-    if not (isinstance(right, Variable)):
-        raise ValueError("The right should be a Variable")
+    check_variable_and_dtype(label, 'label', ['float32'], "rank_loss")
+    check_variable_and_dtype(left, 'left', ['float32'], "rank_loss")
+    check_variable_and_dtype(right, 'right', ['float32'], "rank_loss")
 
     out = helper.create_variable_for_type_inference("float32")
 
@@ -1332,7 +1354,7 @@ def rank_loss(label, left, right, name=None):
 
 
 def margin_rank_loss(label, left, right, margin=0.1, name=None):
-    """
+    r"""
     Margin Ranking Loss Layer for ranking problem,
     which compares left score and right score passed in.
     The ranking loss can be defined as following equation:
@@ -1367,12 +1389,9 @@ def margin_rank_loss(label, left, right, margin=0.1, name=None):
            out = fluid.layers.margin_rank_loss(label, left, right)
     """
     helper = LayerHelper('margin_rank_loss', **locals())
-    if not isinstance(label, Variable):
-        raise ValueError("The label should be a Variable.")
-    if not isinstance(left, Variable):
-        raise ValueError("The left should be a Variable.")
-    if not isinstance(right, Variable):
-        raise ValueError("The right should be a Variable.")
+    check_variable_and_dtype(label, 'label', ['float32'], 'margin_rank_loss')
+    check_variable_and_dtype(label, 'left', ['float32'], 'margin_rank_loss')
+    check_variable_and_dtype(label, 'right', ['float32'], 'margin_rank_loss')
     out = helper.create_variable_for_type_inference(left.dtype)
     act = helper.create_variable_for_type_inference(left.dtype)
     helper.append_op(
@@ -1393,12 +1412,18 @@ def sigmoid_cross_entropy_with_logits(x,
                                       name=None,
                                       normalize=False):
     """
+
     ${comment}
 
     Args:
-        x(${x_type}): ${x_comment}
-        label(${label_type}): ${label_comment}
-        ignore_index(int): ${ignore_index_comment}
+        x(Tensor): a 2-D tensor with shape N x D, where N is the batch size and
+                D is the number of classes. This input is a tensor of logits computed
+                by the previous operator. Logits are unscaled log probabilities given
+                as log(p/(1-p)) The data type should be float32 or float64.
+        label (Tensor): a 2-D tensor of the same type and shape as X.
+                This input is a tensor of probabalistic labels for each logit.
+        ignore_index(int): Specifies a target value that is ignored and 
+                does not contribute to the input gradient.
         name(str|None): The default value is None.  Normally there is
             no need for user to set this property.  For more information,
             please refer to :ref:`api_guide_Name`
@@ -1406,31 +1431,26 @@ def sigmoid_cross_entropy_with_logits(x,
             targets != ignore_index.
 
     Returns:
-        out(${out_type}): ${out_comment}
+        out(Tensor): ${out_comment}
 
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
-            input = fluid.data(
-                name='data', shape=[10], dtype='float32')
-            label = fluid.data(
-                name='data', shape=[10], dtype='float32')
-            loss = fluid.layers.sigmoid_cross_entropy_with_logits(
-                x=input,
-                label=label,
-                ignore_index=-1,
-                normalize=True) # or False
-            # loss = fluid.layers.reduce_sum(loss) # summation of loss
+
+            import paddle
+
+            input = paddle.rand(shape=[10], dtype='float32')
+            label = paddle.rand(shape=[10], dtype='float32')
+            loss = paddle.fluid.layers.sigmoid_cross_entropy_with_logits(input, label, 
+                                                            ignore_index=-1, normalize=True)
+            print(loss)
     """
+    check_variable_and_dtype(x, 'input', ['float16', 'float32', 'float64'],
+                             'sigmoid_cross_entropy_with_logits')
 
     helper = LayerHelper("sigmoid_cross_entropy_with_logits", **locals())
 
-    if name is None:
-        out = helper.create_variable_for_type_inference(dtype=x.dtype)
-    else:
-        out = helper.create_variable(
-            name=name, dtype=x.dtype, persistable=False)
+    out = helper.create_variable_for_type_inference(dtype=x.dtype)
 
     helper.append_op(
         type="sigmoid_cross_entropy_with_logits",
@@ -1447,6 +1467,7 @@ def teacher_student_sigmoid_loss(input,
                                  soft_max_up_bound=15.0,
                                  soft_max_lower_bound=-15.0):
     """
+
     **Teacher Student Log Loss Layer**
 
     This layer accepts input predictions and target label and returns the
@@ -1473,7 +1494,8 @@ def teacher_student_sigmoid_loss(input,
         .. code-block:: python
           
           import paddle.fluid as fluid
-
+          import paddle
+          paddle.enable_static()
           batch_size = 64
           label = fluid.data(
                     name="label", shape=[batch_size, 1], dtype="int64")
@@ -1482,6 +1504,13 @@ def teacher_student_sigmoid_loss(input,
           cost = fluid.layers.teacher_student_sigmoid_loss(input=similarity, label=label)
 
     """
+    check_variable_and_dtype(input, "input",
+                             ['float32', 'float64', 'int32', 'int64'],
+                             'teacher_student_sigmoid_loss')
+    check_variable_and_dtype(label, "label",
+                             ['float32', 'float64', 'int32', 'int64'],
+                             'teacher_student_sigmoid_loss')
+
     helper = LayerHelper('teacher_student_sigmoid_loss', **locals())
     out = helper.create_variable(dtype=input.dtype)
     helper.append_op(
@@ -1495,7 +1524,7 @@ def teacher_student_sigmoid_loss(input,
 
 
 def huber_loss(input, label, delta):
-    """
+    r"""
     This operator computes the Huber loss between input and label.
     Huber loss is commonly used in regression tasks. Compared to square_error_cost, Huber loss is more robust and less sensitivity to outliers.
 
@@ -1511,8 +1540,8 @@ def huber_loss(input, label, delta):
 
 
     Args:
-        input (Variable): Predicted data, 2D-Tensor with the shape of [batch_size, 1]. The data type should be float32 or float64.
-        label (Variable): Ground truth label, 2D-Tensor with the shape of [batch_size, 1]. The data type should be float32 or float64.
+        input (Variable): Predicted data, 2D-Tensor with the shape of [batch_size, 1]. The data type should be float32.
+        label (Variable): Ground truth label, 2D-Tensor with the shape of [batch_size, 1]. The data type should be float32.
         delta (float): The threshold for Huber loss, which is used to control the balance between the linear error and square error. The data type should be float32.
 
     Returns:
@@ -1541,6 +1570,10 @@ def huber_loss(input, label, delta):
         print(HuberLoss)  #[[1.5], [0.5], [0.5], [0. ]], dtype=float32
     """
     helper = LayerHelper('huber_loss', **locals())
+    check_variable_and_dtype(input, 'input', ['float32', 'float64'],
+                             'huber_loss')
+    check_variable_and_dtype(label, 'label', ['float32', 'float64'],
+                             'huber_loss')
     residual = helper.create_variable_for_type_inference(
         dtype=helper.input_dtype())
     out = helper.create_variable_for_type_inference(dtype=helper.input_dtype())
@@ -1554,31 +1587,55 @@ def huber_loss(input, label, delta):
     return out
 
 
+@deprecated(since="2.0.0", update_to="paddle.nn.functional.kl_div")
 @templatedoc()
 def kldiv_loss(x, target, reduction='mean', name=None):
     """
+
     ${comment}
 
     Args:
-        x (Variable): ${x_comment}
-        target (Variable): ${target_comment}
-        reduction (Variable): ${reduction_comment}
+        x (Tensor): ${x_comment}
+        target (Tensor): ${target_comment}
+        reduction (Tensor): ${reduction_comment}
         name(str, optional): For detailed information, please refer
                              to :ref:`api_guide_Name`. Usually name is no need to set and
                              None by default.
 
     Returns:
-        Variable(Tensor): The KL divergence loss. The data type is same as input tensor
+        Tensor: The KL divergence loss. The data type is same as input tensor
 
     Examples:
         .. code-block:: python
 
+            import paddle
             import paddle.fluid as fluid
-            x = fluid.data(name='x', shape=[None,4,2,2], dtype='float32')
-            target = fluid.layers.data(name='target', shape=[4,2,2], dtype='float32')
+            
+            x = paddle.rand(shape=[3,4,2,2], dtype='float32')
+            target = paddle.rand(shape=[3,4,2,2], dtype='float32')
+
+            # 'batchmean' reduction, loss shape will be [1]
             loss = fluid.layers.kldiv_loss(x=x, target=target, reduction='batchmean')
+            print(loss.shape) # shape=[1]
+            
+            # 'mean' reduction, loss shape will be [1]
+            loss = fluid.layers.kldiv_loss(x=x, target=target, reduction='mean')
+            print(loss.shape) # shape=[1]
+            
+            # 'sum' reduction, loss shape will be [1]
+            loss = fluid.layers.kldiv_loss(x=x, target=target, reduction='sum')
+            print(loss.shape) # shape=[1]
+            
+            # 'none' reduction, loss shape is same with X shape
+            loss = fluid.layers.kldiv_loss(x=x, target=target, reduction='none')
+            print(loss.shape) # shape=[3, 4, 2, 2]
+
     """
     helper = LayerHelper('kldiv_loss', **locals())
+    check_variable_and_dtype(x, 'x', ['float32', 'float64'], 'kldiv_loss')
+    check_variable_and_dtype(target, 'target', ['float32', 'float64'],
+                             'kldiv_loss')
+    check_type(reduction, 'reduction', str, 'kldiv_loss')
     loss = helper.create_variable_for_type_inference(dtype=x.dtype)
     helper.append_op(
         type='kldiv_loss',
@@ -1594,46 +1651,53 @@ from .control_flow import equal
 
 
 def npair_loss(anchor, positive, labels, l2_reg=0.002):
-    '''
-  **Npair Loss Layer**
+    """ 
+  
+    Npair loss requires paired data. Npair loss has two parts: the first part is L2
+    regularizer on the embedding vector; the second part is cross entropy loss which
+    takes the similarity matrix of anchor and positive as logits.
+  
+    For more information, please refer to:
+    `Improved Deep Metric Learning with Multi class N pair Loss Objective <http://www.nec-labs.com/uploads/images/Department-Images/MediaAnalytics/papers/nips16_npairmetriclearning.pdf>`_
+  
+    Args:
+      anchor(Tensor): embedding vector for the anchor image. shape=[batch_size, embedding_dims], 
+                        the data type is float32 or float64.
+      positive(Tensor): embedding vector for the positive image. shape=[batch_size, embedding_dims], 
+                        the data type is float32 or float64.
+      labels(Tensor): 1-D tensor. shape=[batch_size], the data type is float32 or float64 or int64.
+      l2_reg(float32): L2 regularization term on embedding vector, default: 0.002.
 
-  Read `Improved Deep Metric Learning with Multi class N pair Loss Objective\
-       <http://www.nec-labs.com/uploads/images/Department-Images/MediaAnalytics/\
-       papers/nips16_npairmetriclearning.pdf>`_ .
+  
+    Returns:
+      A Tensor representing the npair loss, the data type is the same as anchor, the shape is [1].
+  
+    Examples:
 
-  Npair loss requires paired data. Npair loss has two parts: the first part is L2
-  regularizer on the embedding vector; the second part is cross entropy loss which
-  takes the similarity matrix of anchor and positive as logits.
-
-  Args:
-    anchor(Variable): embedding vector for the anchor image. shape=[batch_size, embedding_dims], 
-                      the data type is float32 or float64.
-    positive(Variable): embedding vector for the positive image. shape=[batch_size, embedding_dims], 
-                      the data type is float32 or float64.
-    labels(Variable): 1-D tensor. shape=[batch_size], the data type is float32 or float64 or int64.
-    l2_reg(float32): L2 regularization term on embedding vector, default: 0.002.
-
-  Returns:
-    A Variable holding Tensor representing the npair loss, the data type is the same as 
-    anchor, the shape is [1].
-
-  Examples:
-    .. code-block:: python
-
-       import paddle.fluid as fluid
-       anchor = fluid.data(
-                     name = 'anchor', shape = [18, 6], dtype = 'float32')
-       positive = fluid.data(
-                     name = 'positive', shape = [18, 6], dtype = 'float32')
-       labels = fluid.data(
-                     name = 'labels', shape = [18], dtype = 'float32')
-
-       npair_loss = fluid.layers.npair_loss(anchor, positive, labels, l2_reg = 0.002)
-  '''
+      .. code-block:: python
+  
+          import paddle
+          
+          DATATYPE = "float32"
+  
+          anchor = paddle.rand(shape=(18, 6), dtype=DATATYPE)
+          positive = paddle.rand(shape=(18, 6), dtype=DATATYPE)
+          labels = paddle.rand(shape=(18,), dtype=DATATYPE)
+          
+          npair_loss = paddle.nn.functional.npair_loss(anchor, positive, labels, l2_reg = 0.002)
+          print(npair_loss)
+  
+    """
+    check_variable_and_dtype(anchor, 'anchor', ['float32', 'float64'],
+                             'npair_loss')
+    check_variable_and_dtype(positive, 'positive', ['float32', 'float64'],
+                             'positive')
+    check_variable_and_dtype(labels, 'labels', ['float32', 'float64', 'int64'],
+                             'labels')
     Beta = 0.25
     batch_size = labels.shape[0]
 
-    labels = nn.reshape(labels, shape=[batch_size, 1], inplace=True)
+    labels = nn.reshape(labels, shape=[batch_size, 1])
     labels = nn.expand(labels, expand_times=[1, batch_size])
 
     labels = equal(labels, nn.transpose(labels, perm=[1, 0])).astype('float32')
@@ -1655,6 +1719,7 @@ def npair_loss(anchor, positive, labels, l2_reg=0.002):
 
 def mse_loss(input, label):
     """
+
     This op accepts input predications and target label and returns the mean square error.
 
     The loss can be described as:
@@ -1664,46 +1729,24 @@ def mse_loss(input, label):
         Out = MEAN((input - label)^2)
 
     Parameters: 
-        input (Variable): Input tensor, the data type should be float32.
-        label (Variable): Label tensor, the data type should be float32.
+        input (Tensor): Input tensor, the data type should be float32.
+        label (Tensor): Label tensor, the data type should be float32.
 
     Returns:
-        Variable: The tensor variable storing the mean square error difference of input and label.
+        Tensor: The tensor storing the mean square error difference of input and label.
 
-    Return type: Variable.
+    Return type: Tensor.
     
     Examples:
         .. code-block:: python
-	    # declarative mode
-	    import paddle.fluid as fluid
-	    import numpy as np
-	    input = fluid.data(name="input", shape=[1])
-	    label = fluid.data(name="label", shape=[1])
-	    output = fluid.layers.mse_loss(input,label)
-	    place = fluid.CPUPlace()
-	    exe = fluid.Executor(place)
-	    exe.run(fluid.default_startup_program())
- 
-	    input_data = np.array([1.5]).astype("float32")
-	    label_data = np.array([1.7]).astype("float32")
-	    output_data = exe.run(fluid.default_main_program(),
-                feed={"input":input_data, "label":label_data},
-                fetch_list=[output],
-                return_numpy=True)
- 
-	    print(output_data)
-	    # [array([0.04000002], dtype=float32)]
-	    
-	    # imperative mode
-	    import paddle.fluid.dygraph as dg
 
-	    with dg.guard(place) as g:
-    		input = dg.to_variable(input_data)
-    		label = dg.to_variable(label_data)
-    		output = fluid.layers.mse_loss(input, label)
-    		print(output.numpy())
-	        
-	        # [0.04000002]
-
+            import paddle
+            input = paddle.to_tensor([1.1, 1.9])
+            label = paddle.to_tensor([1.0, 2.0])
+            output = paddle.fluid.layers.mse_loss(input, label)
+            print(output.numpy())
+            # [0.01]
     """
+    check_variable_and_dtype(input, "input", ['float32', 'float64'], 'mse_loss')
+    check_variable_and_dtype(label, "label", ['float32', 'float64'], 'mse_loss')
     return nn.reduce_mean(square_error_cost(input, label))

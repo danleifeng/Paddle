@@ -12,12 +12,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include <ctime>
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/device_worker.h"
-#include "paddle/fluid/framework/device_worker_factory.h"
-#include "paddle/fluid/operators/distributed/distributed.h"
+#include "paddle/fluid/operators/controlflow/conditional_block_op_helper.h"
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/lodtensor_printer.h"
+
+#if defined PADDLE_WITH_PSCORE
+#include "paddle/fluid/distributed/service/communicator.h"
+#endif
 
 namespace paddle {
 namespace framework {
@@ -32,18 +36,8 @@ void HogwildWorker::Initialize(const TrainerDesc &desc) {
   use_cvm_ = desc.use_cvm();
   thread_barrier_ = desc.thread_barrier();
 
-  dump_fields_.resize(desc.dump_fields_size());
-  for (int i = 0; i < desc.dump_fields_size(); ++i) {
-    dump_fields_[i] = desc.dump_fields(i);
-  }
-
-  need_dump_param_ = false;
-  dump_param_.resize(desc.dump_param_size());
-  for (int i = 0; i < desc.dump_param_size(); ++i) {
-    dump_param_[i] = desc.dump_param(i);
-  }
-  if (desc.dump_param_size() != 0) {
-    need_dump_param_ = true;
+  for (int i = 0; i < param_.stat_var_names_size(); ++i) {
+    stat_var_name_map_[param_.stat_var_names(i)] = 1;
   }
 }
 
@@ -57,17 +51,22 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
     ops_.push_back(local_op_ptr);
     continue;
   }
+  operators::PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
+      program, 0, ops_);
 }
 
 void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
   auto &block = program.Block(0);
 
   PADDLE_ENFORCE_NOT_NULL(
-      root_scope_, "root_scope should be set before creating thread scope");
+      root_scope_,
+      platform::errors::NotFound(
+          "Root scope should be set before creating thread scope."));
 
   thread_scope_ = &root_scope_->NewScope();
 
   for (auto &var : block.AllVars()) {
+    all_param_.push_back(var->Name());
     if (var->Persistable()) {
       auto *ptr = root_scope_->Var(var->Name());
       InitializeVariable(ptr, var->GetType());
@@ -159,45 +158,10 @@ void HogwildWorker::TrainFilesWithProfiler() {
     }
 
     if (need_dump_field_) {
-      size_t batch_size = device_reader_->GetCurBatchSize();
-      std::vector<std::string> ars(batch_size);
-      for (auto &ar : ars) {
-        ar.clear();
-      }
-      auto &ins_id_vec = device_reader_->GetInsIdVec();
-      auto &ins_content_vec = device_reader_->GetInsContentVec();
-      for (size_t i = 0; i < ins_id_vec.size(); i++) {
-        ars[i] += ins_id_vec[i];
-        ars[i] = ars[i] + "\t" + ins_content_vec[i];
-      }
-      for (auto &field : dump_fields_) {
-        Variable *var = thread_scope_->FindVar(field);
-        if (var == nullptr) {
-          continue;
-        }
-        LoDTensor *tensor = var->GetMutable<LoDTensor>();
-        if (!CheckValidOutput(tensor, batch_size)) {
-          continue;
-        }
-        for (size_t i = 0; i < batch_size; ++i) {
-          auto output_dim = tensor->dims()[1];
-          std::string output_dimstr =
-              boost::lexical_cast<std::string>(output_dim);
-          ars[i] = ars[i] + "\t" + field + ":" + output_dimstr;
-          auto bound = GetTensorBound(tensor, i);
-          ars[i] += PrintLodTensor(tensor, bound.first, bound.second);
-        }
-      }
-      // #pragma omp parallel for
-      for (size_t i = 0; i < ars.size(); i++) {
-        if (ars[i].length() == 0) {
-          continue;
-        }
-        writer_ << ars[i];
-      }
-      if (need_dump_param_ && thread_id_ == 0) {
-        DumpParam(batch_cnt);
-      }
+      DumpField(*thread_scope_, dump_mode_, dump_interval_);
+    }
+    if (need_dump_param_ && thread_id_ == 0) {
+      DumpParam(*thread_scope_, batch_cnt);
     }
 
     total_inst += cur_batch;
@@ -218,20 +182,15 @@ void HogwildWorker::TrainFilesWithProfiler() {
     timeline.Start();
   }
 
-  if (need_dump_field_) {
+  if (need_dump_field_ || need_dump_param_) {
     writer_.Flush();
   }
 
-#ifdef PADDLE_WITH_DISTRIBUTE
+#if defined PADDLE_WITH_PSCORE
   if (thread_barrier_) {
-    operators::distributed::Communicator::GetInstance()
-        ->BarrierTriggerDecrement();
+    paddle::distributed::Communicator::GetInstance()->BarrierTriggerDecrement();
   }
 #endif
-}
-
-void HogwildWorker::SetChannelWriter(ChannelObject<std::string> *queue) {
-  writer_.Reset(queue);
 }
 
 void HogwildWorker::TrainFiles() {
@@ -257,10 +216,9 @@ void HogwildWorker::TrainFiles() {
     PrintFetchVars();
     thread_scope_->DropKids();
   }
-#ifdef PADDLE_WITH_DISTRIBUTE
+#if defined PADDLE_WITH_PSCORE
   if (thread_barrier_) {
-    operators::distributed::Communicator::GetInstance()
-        ->BarrierTriggerDecrement();
+    paddle::distributed::Communicator::GetInstance()->BarrierTriggerDecrement();
   }
 #endif
 }
@@ -269,34 +227,32 @@ void HogwildWorker::PrintFetchVars() {
   // call count
   batch_num_++;
   int batch_per_print = fetch_config_.print_period();
-  if (thread_id_ == 0) {
-    if (batch_num_ % batch_per_print == 0) {
-      int fetch_var_num = fetch_config_.fetch_var_names_size();
-      for (int i = 0; i < fetch_var_num; ++i) {
-        platform::PrintVar(thread_scope_, fetch_config_.fetch_var_names(i),
-                           fetch_config_.fetch_var_str_format(i));
+  int fetch_var_num = fetch_config_.fetch_var_names_size();
+
+  if (fetch_var_num == 0) {
+    return;
+  }
+
+  if (thread_id_ == 0 && batch_num_ % batch_per_print == 0) {
+    time_t curtime;
+    time(&curtime);
+    char mbstr[80];
+    std::strftime(mbstr, sizeof(mbstr), "%Y-%m-%d %H:%M:%S",
+                  std::localtime(&curtime));
+
+    std::stringstream ss;
+    ss << "time: [" << mbstr << "], ";
+    ss << "batch: [" << batch_num_ << "], ";
+
+    for (int i = 0; i < fetch_var_num; ++i) {
+      platform::PrintVar(thread_scope_, fetch_config_.fetch_var_names(i),
+                         fetch_config_.fetch_var_str_format(i), &ss);
+      if (i < fetch_var_num - 1) {
+        ss << ", ";
       }
     }
-  }
-}
 
-void HogwildWorker::SetNeedDump(bool need_dump_field) {
-  need_dump_field_ = need_dump_field;
-}
-
-void HogwildWorker::DumpParam(const int batch_id) {
-  std::ostringstream os;
-  for (auto &param : dump_param_) {
-    os.str("");
-    Variable *var = thread_scope_->FindVar(param);
-    if (var == nullptr) {
-      continue;
-    }
-    LoDTensor *tensor = var->GetMutable<LoDTensor>();
-    int64_t len = tensor->numel();
-    os << "(" << batch_id << "," << param << ")"
-       << PrintLodTensor(tensor, 0, len);
-    writer_ << os.str();
+    std::cout << ss.str() << std::endl;
   }
 }
 

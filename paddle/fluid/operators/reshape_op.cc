@@ -13,8 +13,23 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include <string>
-#include <vector>
+
 #include "paddle/fluid/framework/op_registry.h"
+
+namespace paddle {
+namespace framework {
+class InferShapeContext;
+class OpDesc;
+}  // namespace framework
+namespace imperative {
+class OpBase;
+}  // namespace imperative
+namespace platform {
+struct CPUPlace;
+struct CUDAPlace;
+struct float16;
+}  // namespace platform
+}  // namespace paddle
 
 namespace paddle {
 namespace operators {
@@ -34,7 +49,8 @@ inline std::vector<int> get_new_shape(
             "the element's shape must be [1]. But received the element's shape "
             "is [%s]",
             tensor->dims()));
-    if (platform::is_gpu_place(tensor->place())) {
+    if (platform::is_gpu_place(tensor->place()) ||
+        platform::is_xpu_place(tensor->place())) {
       framework::Tensor temp;
       TensorCopySync(*tensor, platform::CPUPlace(), &temp);
 
@@ -56,9 +72,11 @@ class ReshapeOp : public framework::OperatorWithKernel {
 
   void InferShape(framework::InferShapeContext *ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasInput("X"), true,
-                      "Input(X) of ReshapeOp should not be null.");
+                      platform::errors::InvalidArgument(
+                          "Input(X) of ReshapeOp should not be null."));
     PADDLE_ENFORCE_EQ(ctx->HasOutput("Out"), true,
-                      "Output(Out) of ReshapeOp should not be null.");
+                      platform::errors::InvalidArgument(
+                          "Output(Out) of ReshapeOp should not be null."));
 
     if (ctx->HasInputs("ShapeTensor")) {
       // top prority shape
@@ -304,9 +322,12 @@ class ReshapeGradOp : public framework::OperatorWithKernel {
       : OperatorWithKernel(type, inputs, outputs, attrs) {}
 
   void InferShape(framework::InferShapeContext *ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasInput("X"), true, "Input(X) shouldn't be null.");
+    PADDLE_ENFORCE_EQ(
+        ctx->HasInput("X"), true,
+        platform::errors::InvalidArgument("Input(X) shouldn't be null."));
     PADDLE_ENFORCE_EQ(ctx->HasInput(framework::GradVarName("Out")), true,
-                      "Input(Out@GRAD) shouldn't be null.");
+                      platform::errors::InvalidArgument(
+                          "Input(Out@GRAD) shouldn't be null."));
     ctx->SetOutputDim(framework::GradVarName("X"), ctx->GetInputDim("X"));
   }
 
@@ -342,7 +363,8 @@ class ReshapeKernel {
       if (shape_tensor) {
         auto *shape_data = shape_tensor->data<int>();
         framework::Tensor cpu_shape_tensor;
-        if (platform::is_gpu_place(shape_tensor->place())) {
+        if (platform::is_gpu_place(shape_tensor->place()) ||
+            platform::is_xpu_place(shape_tensor->place())) {
           TensorCopySync(*shape_tensor, platform::CPUPlace(),
                          &cpu_shape_tensor);
           shape_data = cpu_shape_tensor.data<int>();
@@ -370,7 +392,9 @@ class ReshapeGradKernel {
     auto in_dims = d_x->dims();
 
     d_x->mutable_data(ctx.GetPlace(), d_out->type());
-    framework::TensorCopySync(*d_out, ctx.GetPlace(), d_x);
+    framework::TensorCopy(
+        *d_out, ctx.GetPlace(),
+        ctx.template device_context<platform::DeviceContext>(), d_x);
     d_x->Resize(in_dims);
   }
 };
@@ -384,7 +408,9 @@ class ReshapeDoubleGradKernel {
     auto out_dims = dd_out->dims();
 
     dd_out->mutable_data(ctx.GetPlace(), dd_x->type());
-    framework::TensorCopySync(*dd_x, ctx.GetPlace(), dd_out);
+    framework::TensorCopy(
+        *dd_x, ctx.GetPlace(),
+        ctx.template device_context<platform::DeviceContext>(), dd_out);
     dd_out->Resize(out_dims);
   }
 };
@@ -403,7 +429,8 @@ class Reshape2Op : public ReshapeOp {
 
   void InferShape(framework::InferShapeContext *ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasOutput("XShape"), true,
-                      "Output(XShape) of ReshapeOp should not be null.");
+                      platform::errors::InvalidArgument(
+                          "Output(XShape) of ReshapeOp should not be null."));
     const auto &x_dims = ctx->GetInputDim("X");
     std::vector<int64_t> xshape_dims(x_dims.size() + 1);
     xshape_dims[0] = 0;
@@ -425,13 +452,16 @@ class Reshape2OpMaker : public ReshapeOpMaker {
               "XShape is just used to store the shape and lod of X, which will "
               "be used in FlattenGradOp.")
         .AsIntermediate();
-    /* int8 parameters */
-    AddAttr<bool>("use_quantizer",
-                  "(bool, default false) "
-                  "Set to true for operators that should be quantized and use "
-                  "int8 kernel. "
-                  "Used only on CPU.")
+    AddAttr<bool>(
+        "use_quantizer",
+        "(bool, default false) "
+        "This parameter is no longer used. Use 'mkldnn_data_type' instead.")
         .SetDefault(false);
+    AddAttr<std::string>(
+        "mkldnn_data_type",
+        "(string, default \"float32\"). Data type of mkldnn kernel")
+        .SetDefault("float32")
+        .InEnum({"float32", "int8", "bfloat16"});
   }
 };
 
@@ -472,10 +502,12 @@ class Reshape2GradOp : public framework::OperatorWithKernel {
       : OperatorWithKernel(type, inputs, outputs, attrs) {}
 
   void InferShape(framework::InferShapeContext *ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasInput("XShape"), true,
-                      "Input(XShape) shouldn't be null.");
+    PADDLE_ENFORCE_EQ(
+        ctx->HasInput("XShape"), true,
+        platform::errors::InvalidArgument("Input(XShape) shouldn't be null."));
     PADDLE_ENFORCE_EQ(ctx->HasInput(framework::GradVarName("Out")), true,
-                      "Input(Out@GRAD) shouldn't be null.");
+                      platform::errors::InvalidArgument(
+                          "Input(Out@GRAD) shouldn't be null."));
     auto xshape_dims = ctx->GetInputDim("XShape");
     auto x_dims = framework::slice_ddim(xshape_dims, 1, xshape_dims.size());
     ctx->SetOutputDim(framework::GradVarName("X"), x_dims);
@@ -511,8 +543,8 @@ class Reshape2DoubleGradOp : public framework::OperatorWithKernel {
 
   void InferShape(framework::InferShapeContext *ctx) const override {
     PADDLE_ENFORCE_EQ(ctx->HasInput("DDX"), true,
-                      "Input(X@GRAD_GRAD) shouldn't be null.");
-
+                      platform::errors::InvalidArgument(
+                          "Input(X@GRAD_GRAD) shouldn't be null."));
     if (ctx->HasOutput("DDOut") && ctx->HasInput("DDX")) {
       ctx->ShareDim("DOut", "DDOut");
     }
@@ -537,13 +569,13 @@ class Reshape2DoubleGradOp : public framework::OperatorWithKernel {
   }
 };
 
-DECLARE_INPLACE_OP_INFERER(ReshapeOpInplaceInToOut, {"X", "Out"});
-DECLARE_INPLACE_OP_INFERER(ReshapeGradInplaceInToOut,
+DECLARE_INPLACE_OP_INFERER(ReshapeOpInplaceInferer, {"X", "Out"});
+DECLARE_INPLACE_OP_INFERER(ReshapeGradInplaceInferer,
                            {framework::GradVarName("Out"),
                             framework::GradVarName("X")});
-DECLARE_INPLACE_OP_INFERER(ReshapeDoubleGradInplaceInToOut, {"DDX", "DDOut"});
-DECLARE_NO_NEED_BUFFER_VARS_INFERENCE(
-    ReshapeDoubleGradOpNoNeedBufferVarInference, "DOut");
+DECLARE_INPLACE_OP_INFERER(ReshapeDoubleGradInplaceInferer, {"DDX", "DDOut"});
+DECLARE_NO_NEED_BUFFER_VARS_INFERER(ReshapeDoubleGradOpNoNeedBufferVarInferer,
+                                    "DOut");
 
 }  // namespace operators
 }  // namespace paddle
@@ -554,9 +586,9 @@ REGISTER_OPERATOR(
     reshape, ops::ReshapeOp, ops::ReshapeOpMaker,
     paddle::framework::DefaultGradOpMaker<paddle::framework::OpDesc, true>,
     paddle::framework::DefaultGradOpMaker<paddle::imperative::OpBase, true>,
-    ops::ReshapeOpInplaceInToOut);
+    ops::ReshapeOpInplaceInferer);
 REGISTER_OPERATOR(reshape_grad, ops::ReshapeGradOp,
-                  ops::ReshapeGradInplaceInToOut);
+                  ops::ReshapeGradInplaceInferer);
 
 REGISTER_OP_CPU_KERNEL_FUNCTOR(reshape, float, ops::ReshapeKernel, double,
                                ops::ReshapeKernel, int, ops::ReshapeKernel,
@@ -568,53 +600,87 @@ REGISTER_OP_CPU_KERNEL_FUNCTOR(reshape_grad, float, ops::ReshapeGradKernel,
 REGISTER_OPERATOR(reshape2, ops::Reshape2Op, ops::Reshape2OpMaker,
                   ops::Reshape2GradMaker<paddle::framework::OpDesc>,
                   ops::Reshape2GradMaker<paddle::imperative::OpBase>,
-                  ops::ReshapeOpInplaceInToOut);
+                  ops::ReshapeOpInplaceInferer);
 REGISTER_OPERATOR(reshape2_grad, ops::Reshape2GradOp,
                   ops::Reshape2DoubleGradMaker<paddle::framework::OpDesc>,
                   ops::Reshape2DoubleGradMaker<paddle::imperative::OpBase>,
-                  ops::ReshapeGradInplaceInToOut);
+                  ops::ReshapeGradInplaceInferer);
 REGISTER_OPERATOR(reshape2_grad_grad, ops::Reshape2DoubleGradOp,
-                  ops::ReshapeDoubleGradInplaceInToOut,
-                  ops::ReshapeDoubleGradOpNoNeedBufferVarInference);
+                  ops::ReshapeDoubleGradInplaceInferer,
+                  ops::ReshapeDoubleGradOpNoNeedBufferVarInferer);
 
-REGISTER_OP_CPU_KERNEL_FUNCTOR(reshape2, float, ops::ReshapeKernel, double,
-                               ops::ReshapeKernel, int8_t, ops::ReshapeKernel,
-                               uint8_t, ops::ReshapeKernel, int,
-                               ops::ReshapeKernel, int64_t, ops::ReshapeKernel);
-REGISTER_OP_CPU_KERNEL_FUNCTOR(reshape2_grad, float, ops::ReshapeGradKernel,
-                               double, ops::ReshapeGradKernel, int,
-                               ops::ReshapeGradKernel, int64_t,
-                               ops::ReshapeGradKernel);
-REGISTER_OP_CPU_KERNEL_FUNCTOR(reshape2_grad_grad, float,
-                               ops::ReshapeDoubleGradKernel, double,
-                               ops::ReshapeDoubleGradKernel, int,
-                               ops::ReshapeDoubleGradKernel, int64_t,
-                               ops::ReshapeDoubleGradKernel);
+REGISTER_OP_CPU_KERNEL_FUNCTOR(
+    reshape2, float, ops::ReshapeKernel, double, ops::ReshapeKernel, int8_t,
+    ops::ReshapeKernel, uint8_t, ops::ReshapeKernel, int, ops::ReshapeKernel,
+    int64_t, ops::ReshapeKernel, bool, ops::ReshapeKernel,
+    paddle::platform::bfloat16, ops::ReshapeKernel, paddle::platform::complex64,
+    ops::ReshapeKernel, paddle::platform::complex128, ops::ReshapeKernel);
 
-#ifdef PADDLE_WITH_CUDA
+REGISTER_OP_CPU_KERNEL_FUNCTOR(
+    reshape2_grad, float, ops::ReshapeGradKernel, double,
+    ops::ReshapeGradKernel, int, ops::ReshapeGradKernel, uint8_t,
+    ops::ReshapeGradKernel, int64_t, ops::ReshapeGradKernel, bool,
+    ops::ReshapeGradKernel, paddle::platform::bfloat16, ops::ReshapeGradKernel,
+    paddle::platform::complex64, ops::ReshapeGradKernel,
+    paddle::platform::complex128, ops::ReshapeGradKernel);
+REGISTER_OP_CPU_KERNEL_FUNCTOR(
+    reshape2_grad_grad, float, ops::ReshapeDoubleGradKernel, double,
+    ops::ReshapeDoubleGradKernel, int, ops::ReshapeDoubleGradKernel, uint8_t,
+    ops::ReshapeDoubleGradKernel, int64_t, ops::ReshapeDoubleGradKernel, bool,
+    ops::ReshapeDoubleGradKernel, paddle::platform::bfloat16,
+    ops::ReshapeDoubleGradKernel, paddle::platform::complex64,
+    ops::ReshapeDoubleGradKernel, paddle::platform::complex128,
+    ops::ReshapeDoubleGradKernel);
+
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 REGISTER_OP_CUDA_KERNEL_FUNCTOR(reshape, float, ops::ReshapeKernel, double,
                                 ops::ReshapeKernel, int, ops::ReshapeKernel,
-                                int64_t, ops::ReshapeKernel, plat::float16,
+                                uint8_t, ops::ReshapeKernel, int64_t,
+                                ops::ReshapeKernel, plat::float16,
                                 ops::ReshapeKernel);
 REGISTER_OP_CUDA_KERNEL_FUNCTOR(reshape_grad, float, ops::ReshapeGradKernel,
                                 double, ops::ReshapeGradKernel, int,
                                 ops::ReshapeGradKernel, int64_t,
+                                ops::ReshapeGradKernel, uint8_t,
                                 ops::ReshapeGradKernel, plat::float16,
+
                                 ops::ReshapeGradKernel);
 REGISTER_OP_CUDA_KERNEL_FUNCTOR(reshape2, float, ops::ReshapeKernel, double,
                                 ops::ReshapeKernel, int, ops::ReshapeKernel,
-                                int64_t, ops::ReshapeKernel, plat::float16,
-                                ops::ReshapeKernel);
-REGISTER_OP_CUDA_KERNEL_FUNCTOR(reshape2_grad, float, ops::ReshapeGradKernel,
-                                double, ops::ReshapeGradKernel, int,
-                                ops::ReshapeGradKernel, int64_t,
-                                ops::ReshapeGradKernel, plat::float16,
-                                ops::ReshapeGradKernel);
+                                uint8_t, ops::ReshapeKernel, int64_t,
+                                ops::ReshapeKernel, plat::float16,
+                                ops::ReshapeKernel, bool, ops::ReshapeKernel,
+                                plat::complex64, ops::ReshapeKernel,
+                                plat::complex128, ops::ReshapeKernel);
+REGISTER_OP_CUDA_KERNEL_FUNCTOR(
+    reshape2_grad, float, ops::ReshapeGradKernel, double,
+    ops::ReshapeGradKernel, int, ops::ReshapeGradKernel, uint8_t,
+    ops::ReshapeGradKernel, int64_t, ops::ReshapeGradKernel, plat::float16,
+    ops::ReshapeGradKernel, bool, ops::ReshapeGradKernel, plat::complex64,
+    ops::ReshapeGradKernel, plat::complex128, ops::ReshapeGradKernel);
 
-REGISTER_OP_CUDA_KERNEL_FUNCTOR(reshape2_grad_grad, float,
-                                ops::ReshapeDoubleGradKernel, double,
-                                ops::ReshapeDoubleGradKernel, int,
-                                ops::ReshapeDoubleGradKernel, int64_t,
-                                ops::ReshapeDoubleGradKernel, plat::float16,
-                                ops::ReshapeDoubleGradKernel);
+REGISTER_OP_CUDA_KERNEL_FUNCTOR(
+    reshape2_grad_grad, float, ops::ReshapeDoubleGradKernel, double,
+    ops::ReshapeDoubleGradKernel, int, ops::ReshapeDoubleGradKernel, uint8_t,
+    ops::ReshapeDoubleGradKernel, int64_t, ops::ReshapeDoubleGradKernel,
+    plat::float16, ops::ReshapeDoubleGradKernel, bool,
+    ops::ReshapeDoubleGradKernel, plat::complex64, ops::ReshapeDoubleGradKernel,
+    plat::complex128, ops::ReshapeDoubleGradKernel);
+#endif
+
+#ifdef PADDLE_WITH_XPU
+REGISTER_OP_XPU_KERNEL_FUNCTOR(reshape2, float, ops::ReshapeKernel, double,
+                               ops::ReshapeKernel, int, ops::ReshapeKernel,
+                               int64_t, ops::ReshapeKernel, plat::float16,
+                               ops::ReshapeKernel, bool, ops::ReshapeKernel,
+                               plat::complex64, ops::ReshapeKernel,
+                               plat::complex128, ops::ReshapeKernel);
+REGISTER_OP_XPU_KERNEL_FUNCTOR(reshape2_grad, float, ops::ReshapeGradKernel,
+                               double, ops::ReshapeGradKernel, int,
+                               ops::ReshapeGradKernel, int64_t,
+                               ops::ReshapeGradKernel, plat::float16,
+                               ops::ReshapeGradKernel, bool,
+                               ops::ReshapeGradKernel, plat::complex64,
+                               ops::ReshapeGradKernel, plat::complex128,
+                               ops::ReshapeGradKernel);
 #endif

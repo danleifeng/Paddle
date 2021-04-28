@@ -23,13 +23,13 @@
 
 namespace paddle {
 namespace framework {
-#define CUDA_KERNEL_LOOP(i, n)                                 \
-  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
-       i += blockDim.x * gridDim.x)
 
-__global__ void PullCopy(float** dest, const boxps::FeatureValueGpu* src,
-                         const int64_t* len, int hidden, int slot_num,
-                         int total_len, uint64_t** keys) {
+template <size_t EMBEDX_DIM, size_t EXPAND_EMBED_DIM>
+__global__ void PullCopy(
+    float** dest,
+    const boxps::FeatureValueGpu<EMBEDX_DIM, EXPAND_EMBED_DIM>* src,
+    const int64_t* len, int hidden, int expand_dim, int slot_num, int total_len,
+    uint64_t** keys) {
   CUDA_KERNEL_LOOP(i, total_len) {
     int low = 0;
     int high = slot_num - 1;
@@ -52,15 +52,28 @@ __global__ void PullCopy(float** dest, const boxps::FeatureValueGpu* src,
       *(dest[x] + y * hidden + 2) = (src + i)->embed_w;
     }
     if ((src + i)->embedding_size == 0 || *(keys[x] + y) == 0) {
-      for (int j = 0; j < 8; j++) {
+      for (int j = 0; j < hidden - 3; j++) {
         *(dest[x] + y * hidden + 3 + j) = 0;
       }
     } else {
-      for (int j = 0; j < 8; j++) {
+      for (int j = 0; j < hidden - 3; j++) {
         *(dest[x] + y * hidden + 3 + j) = (src + i)->embedx[1 + j];
       }
     }
-  }
+    // process embed_expand
+    if (expand_dim > 0) {
+      int z = x + slot_num;
+      if ((src + i)->embed_expand_size[0] == 0 || *(keys[x] + y) == 0) {
+        for (int j = 0; j < expand_dim; j++) {
+          *(dest[z] + y * expand_dim + j) = 0;
+        }
+      } else {
+        for (int j = 0; j < expand_dim; j++) {
+          *(dest[z] + y * expand_dim + j) = (src + i)->embed_expand[1 + j];
+        }
+      }
+    }
+  }  // end kernel loop
 }
 
 __global__ void CopyKeysKernel(uint64_t** src_keys, uint64_t* dest_total_keys,
@@ -82,9 +95,11 @@ __global__ void CopyKeysKernel(uint64_t** src_keys, uint64_t* dest_total_keys,
   }
 }
 
-__global__ void PushCopy(boxps::FeaturePushValueGpu* dest, float** src,
-                         int64_t* len, int hidden, int slot_num, int total_len,
-                         int bs, int* slot_vector) {
+template <size_t EMBEDX_DIM, size_t EXPAND_EMBED_DIM>
+__global__ void PushCopy(
+    boxps::FeaturePushValueGpu<EMBEDX_DIM, EXPAND_EMBED_DIM>* dest, float** src,
+    int64_t* len, int hidden, int expand_dim, int slot_num, int total_len,
+    int bs, int* slot_vector) {
   CUDA_KERNEL_LOOP(i, total_len) {
     int low = 0;
     int high = slot_num - 1;
@@ -101,8 +116,15 @@ __global__ void PushCopy(boxps::FeaturePushValueGpu* dest, float** src,
     (dest + i)->show = *(src[x] + y * hidden);
     (dest + i)->clk = *(src[x] + y * hidden + 1);
     (dest + i)->embed_g = *(src[x] + y * hidden + 2) * -1. * bs;
-    for (int j = 0; j < 8; j++) {
+    for (int j = 0; j < hidden - 3; j++) {
       (dest + i)->embedx_g[j] = *(src[x] + y * hidden + 3 + j) * -1. * bs;
+    }
+    if (expand_dim > 0) {
+      int z = x + slot_num;
+      for (int j = 0; j < expand_dim; j++) {
+        (dest + i)->embed_expand_g[j] =
+            *(src[z] + y * expand_dim + j) * -1. * bs;
+      }
     }
   }
 }
@@ -110,23 +132,71 @@ __global__ void PushCopy(boxps::FeaturePushValueGpu* dest, float** src,
 void BoxWrapper::CopyForPull(const paddle::platform::Place& place,
                              uint64_t** gpu_keys,
                              const std::vector<float*>& values,
-                             const boxps::FeatureValueGpu* total_values_gpu,
-                             const int64_t* gpu_len, const int slot_num,
-                             const int hidden_size,
+                             void* total_values_gpu, const int64_t* gpu_len,
+                             const int slot_num, const int hidden_size,
+                             const int expand_embed_dim,
                              const int64_t total_length) {
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(
-                        boost::get<platform::CUDAPlace>(place)))
+                        BOOST_GET_CONST(platform::CUDAPlace, place)))
                     ->stream();
   auto buf_value = memory::AllocShared(place, values.size() * sizeof(float*));
   float** gpu_values = reinterpret_cast<float**>(buf_value->ptr());
+#ifdef PADDLE_WITH_HIP
+  hipMemcpy(gpu_values, values.data(), values.size() * sizeof(float*),
+            hipMemcpyHostToDevice);
+#else
   cudaMemcpy(gpu_values, values.data(), values.size() * sizeof(float*),
              cudaMemcpyHostToDevice);
+#endif
+#define EMBEDX_CASE(i, ...)                                                  \
+  case i: {                                                                  \
+    constexpr size_t EmbedxDim = i;                                          \
+    switch (expand_embed_dim) {                                              \
+      __VA_ARGS__                                                            \
+      default:                                                               \
+        PADDLE_THROW(platform::errors::InvalidArgument(                      \
+            "Unsupport this expand embedding size [%d]", expand_embed_dim)); \
+    }                                                                        \
+  } break
 
-  PullCopy<<<(total_length + 512 - 1) / 512, 512, 0, stream>>>(
-      gpu_values, total_values_gpu, gpu_len, hidden_size, slot_num,
-      total_length, gpu_keys);
+#ifdef PADDLE_WITH_HIP
+#define EXPAND_EMBED_PUSH_CASE(i, ...)                                        \
+  case i: {                                                                   \
+    constexpr size_t ExpandDim = i;                                           \
+    hipLaunchKernelGGL(                                                       \
+        PushCopy<EmbedxDim, ExpandDim>, dim3((total_length + 512 - 1) / 512), \
+        dim3(512), 0, stream, gpu_values,                                     \
+        reinterpret_cast<boxps::FeatureValueGpu<EmbedxDim, ExpandDim>*>(      \
+            total_values_gpu),                                                \
+        gpu_len, hidden_size, expand_embed_dim, slot_num, total_length,       \
+        gpu_keys);                                                            \
+  } break
+#else
+#define EXPAND_EMBED_PULL_CASE(i, ...)                                       \
+  case i: {                                                                  \
+    constexpr size_t ExpandDim = i;                                          \
+    PullCopy<EmbedxDim,                                                      \
+             ExpandDim><<<(total_length + 512 - 1) / 512, 512, 0, stream>>>( \
+        gpu_values,                                                          \
+        reinterpret_cast<boxps::FeatureValueGpu<EmbedxDim, ExpandDim>*>(     \
+            total_values_gpu),                                               \
+        gpu_len, hidden_size, expand_embed_dim, slot_num, total_length,      \
+        gpu_keys);                                                           \
+  } break
+#endif
+
+  switch (hidden_size - 3) {
+    EMBEDX_CASE(8, EXPAND_EMBED_PULL_CASE(0); EXPAND_EMBED_PULL_CASE(8);
+                EXPAND_EMBED_PULL_CASE(64););
+    EMBEDX_CASE(16, EXPAND_EMBED_PULL_CASE(0););
+    default:
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "Unsupport this embedding size [%d]", hidden_size - 3));
+  }
   cudaStreamSynchronize(stream);
+#undef EXPAND_EMBED_PULL_CASE
+#undef EMBEDX_CASE
 }
 
 void BoxWrapper::CopyKeys(const paddle::platform::Place& place,
@@ -134,22 +204,29 @@ void BoxWrapper::CopyKeys(const paddle::platform::Place& place,
                           const int64_t* gpu_len, int slot_num, int total_len) {
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(
-                        boost::get<platform::CUDAPlace>(place)))
+                        BOOST_GET_CONST(platform::CUDAPlace, place)))
                     ->stream();
+#ifdef PADDLE_WITH_HIP
+  hipLaunchKernelGGL(CopyKeysKernel, dim3((total_len + 512 - 1) / 512),
+                     dim3(512), 0, stream, origin_keys, total_keys, gpu_len,
+                     slot_num, total_len);
+  hipStreamSynchronize(stream);
+#else
   CopyKeysKernel<<<(total_len + 512 - 1) / 512, 512, 0, stream>>>(
       origin_keys, total_keys, gpu_len, slot_num, total_len);
   cudaStreamSynchronize(stream);
+#endif
 }
 
 void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
                              const std::vector<const float*>& grad_values,
-                             boxps::FeaturePushValueGpu* total_grad_values_gpu,
+                             void* total_grad_values_gpu,
                              const std::vector<int64_t>& slot_lengths,
-                             const int hidden_size, const int64_t total_length,
-                             const int batch_size) {
+                             const int hidden_size, const int expand_embed_dim,
+                             const int64_t total_length, const int batch_size) {
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(
-                        boost::get<platform::CUDAPlace>(place)))
+                        BOOST_GET_CONST(platform::CUDAPlace, place)))
                     ->stream();
   auto slot_lengths_lod = slot_lengths;
   for (int i = 1; i < slot_lengths_lod.size(); i++) {
@@ -166,18 +243,71 @@ void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
   int64_t* gpu_len = reinterpret_cast<int64_t*>(buf_length->ptr());
   int* d_slot_vector = reinterpret_cast<int*>(buf_slot_vector->ptr());
 
+#ifdef PADDLE_WITH_HIP
+  hipMemcpy(gpu_values, grad_values.data(), grad_values.size() * sizeof(float*),
+            hipMemcpyHostToDevice);
+  hipMemcpy(gpu_len, slot_lengths_lod.data(),
+            slot_lengths.size() * sizeof(int64_t), hipMemcpyHostToDevice);
+  hipMemcpy(d_slot_vector, slot_vector_.data(),
+            slot_lengths_lod.size() * sizeof(int), hipMemcpyHostToDevice);
+#else
   cudaMemcpy(gpu_values, grad_values.data(),
              grad_values.size() * sizeof(float*), cudaMemcpyHostToDevice);
   cudaMemcpy(gpu_len, slot_lengths_lod.data(),
              slot_lengths.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
   cudaMemcpy(d_slot_vector, slot_vector_.data(),
              slot_lengths_lod.size() * sizeof(int), cudaMemcpyHostToDevice);
+#endif
 
-  PushCopy<<<(total_length + 512 - 1) / 512, 512, 0, stream>>>(
-      total_grad_values_gpu, gpu_values, gpu_len, hidden_size,
-      slot_lengths.size(), total_length, batch_size, d_slot_vector);
+#define EMBEDX_CASE(i, ...)                                                  \
+  case i: {                                                                  \
+    constexpr size_t EmbedxDim = i;                                          \
+    switch (expand_embed_dim) {                                              \
+      __VA_ARGS__                                                            \
+      default:                                                               \
+        PADDLE_THROW(platform::errors::InvalidArgument(                      \
+            "Unsupport this expand embedding size [%d]", expand_embed_dim)); \
+    }                                                                        \
+  } break
+
+#ifdef PADDLE_WITH_HIP
+#define EXPAND_EMBED_PUSH_CASE(i, ...)                                       \
+  case i: {                                                                  \
+    constexpr size_t ExpandDim = i;                                          \
+    hipLaunchKernelGGL(PushCopy<EmbedxDim, ExpandDim>,                       \
+        dim3(total_length + 512 - 1) / 512), dim3(512), 0, stream,           \
+        reinterpret_cast<boxps::FeaturePushValueGpu<EmbedxDim, ExpandDim>*>( \
+            total_grad_values_gpu),                                          \
+        gpu_values, gpu_len, hidden_size, expand_embed_dim,                  \
+        slot_lengths.size(), total_length, batch_size, d_slot_vector);       \
+  } break
+#else
+#define EXPAND_EMBED_PUSH_CASE(i, ...)                                       \
+  case i: {                                                                  \
+    constexpr size_t ExpandDim = i;                                          \
+    PushCopy<EmbedxDim,                                                      \
+             ExpandDim><<<(total_length + 512 - 1) / 512, 512, 0, stream>>>( \
+        reinterpret_cast<boxps::FeaturePushValueGpu<EmbedxDim, ExpandDim>*>( \
+            total_grad_values_gpu),                                          \
+        gpu_values, gpu_len, hidden_size, expand_embed_dim,                  \
+        slot_lengths.size(), total_length, batch_size, d_slot_vector);       \
+  } break
+#endif
+
+  switch (hidden_size - 3) {
+    EMBEDX_CASE(8, EXPAND_EMBED_PUSH_CASE(0); EXPAND_EMBED_PUSH_CASE(8);
+                EXPAND_EMBED_PUSH_CASE(64););
+    EMBEDX_CASE(16, EXPAND_EMBED_PUSH_CASE(0););
+    default:
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "Unsupport this embedding size [%d]", hidden_size - 3));
+  }
+
   cudaStreamSynchronize(stream);
+#undef EXPAND_EMBED_PUSH_CASE
+#undef EMBEDX_CASE
 }
+
 }  // end namespace framework
 }  // end namespace paddle
 #endif

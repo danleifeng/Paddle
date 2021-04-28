@@ -15,10 +15,26 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/gelu_op_plugin.h"
 
+namespace nvinfer1 {
+class ILayer;
+}  // namespace nvinfer1
+namespace paddle {
+namespace framework {
+class Scope;
+
+namespace proto {
+class OpDesc;
+}  // namespace proto
+}  // namespace framework
+}  // namespace paddle
+
 namespace paddle {
 namespace inference {
 namespace tensorrt {
 
+/*
+ * Gelu converter from fluid to tensorRT.
+ */
 /*
  * Gelu converter from fluid to tensorRT.
  */
@@ -31,24 +47,27 @@ class GeluOpConverter : public OpConverter {
     framework::OpDesc op_desc(op, nullptr);
     // Declare inputs
     int input_num = op_desc.Input("X").size();
-    PADDLE_ENFORCE_EQ(input_num, 1,
-                      platform::errors::InvalidArgument(
-                          "gelu op has only 1 input, but got %d", input_num));
     auto* input = engine_->GetITensor(op_desc.Input("X")[0]);
-    // Get output
-    size_t output_num = op_desc.Output("Out").size();
-    PADDLE_ENFORCE_EQ(output_num, 1,
-                      platform::errors::InvalidArgument(
-                          "gelu op has only 1 output, but got %d", output_num));
-    // Get input shape and volume
-    nvinfer1::Dims input_shape = input->getDimensions();
-    size_t input_volume = 1;
-    for (int i = 0; i < input_shape.nbDims; i++) {
-      input_volume *= input_shape.d[i];
+
+    nvinfer1::ILayer* layer = nullptr;
+    if (engine_->with_dynamic_shape()) {
+#if IS_TRT_VERSION_GE(6000)
+      bool with_fp16 =
+          engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
+      plugin::GeluPluginDynamic* plugin =
+          new plugin::GeluPluginDynamic(with_fp16);
+      layer = engine_->AddDynamicPlugin(&input, input_num, plugin);
+#else
+      PADDLE_THROW(platform::errors::Fatal(
+          "You are running the TRT Dynamic Shape mode, need to confirm that "
+          "your TRT version is no less than 6.0"));
+#endif
+    } else {
+      bool with_fp16 =
+          engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
+      plugin::GeluPlugin* plugin = new plugin::GeluPlugin(with_fp16);
+      layer = engine_->AddPlugin(&input, input_num, plugin);
     }
-    plugin::GeluPlugin* plugin = new plugin::GeluPlugin(input_volume);
-    nvinfer1::IPluginLayer* layer =
-        engine_->AddPlugin(&input, input_num, plugin);
     auto output_name = op_desc.Output("Out")[0];
     RreplenishLayerAndOutput(layer, "gelu", {output_name}, test_mode);
   }

@@ -18,6 +18,9 @@ limitations under the License. */
 #ifdef PADDLE_WITH_CUDA
 #include <cuda_runtime.h>
 #endif
+#ifdef PADDLE_WITH_HIP
+#include <hip/hip_runtime.h>
+#endif
 #include "paddle/fluid/platform/place.h"
 
 namespace paddle {
@@ -29,6 +32,7 @@ enum class EventRole {
   kOrdinary,  // only record op time with op type key
   kInnerOp,   // record op detail time with op type key
   kUniqueOp,  // record op detail time with op unique name key
+  kSpecial,   // record event such as PE which is outer of thread local
 };
 
 class Event {
@@ -47,9 +51,9 @@ class Event {
   void set_name(std::string name) { name_ = name; }
   void set_role(EventRole role) { role_ = role; }
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #ifndef PADDLE_WITH_CUPTI
-  cudaEvent_t event() const { return event_; }
+  gpuEvent_t event() const { return event_; }
   int device() const { return device_; }
 #endif
 #endif
@@ -65,7 +69,7 @@ class Event {
   EventRole role_{};
   int64_t cpu_ns_;
   bool visited_status_{false};
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #ifdef PADDLE_WITH_CUPTI
   int64_t gpu_ns_ = 0;
 
@@ -76,7 +80,7 @@ class Event {
 
  private:
 #else
-  cudaEvent_t event_ = nullptr;
+  gpuEvent_t event_ = nullptr;
   int device_ = -1;
 #endif
 #endif

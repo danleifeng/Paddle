@@ -19,10 +19,15 @@ limitations under the License. */
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 #include "paddle/fluid/platform/device_context.h"
 #ifdef PADDLE_WITH_CUDA
 #include "paddle/fluid/platform/dynload/cuda_driver.h"
 #include "paddle/fluid/platform/dynload/nvrtc.h"
+#endif
+#ifdef PADDLE_WITH_HIP
+#include "paddle/fluid/platform/dynload/hiprtc.h"
+#include "paddle/fluid/platform/dynload/rocm_driver.h"
 #endif
 
 namespace paddle {
@@ -43,7 +48,7 @@ class DeviceCode {
   std::string kernel_;
 };
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 class CUDADeviceCode : public DeviceCode {
  public:
   explicit CUDADeviceCode(const Place& place, const std::string& name,
@@ -56,17 +61,30 @@ class CUDADeviceCode : public DeviceCode {
     workload_per_thread_ = workload_per_thread;
   }
 
+  static void CheckAvailableStatus();
+  static bool IsAvailable() { return available_; }
+
  private:
+#ifdef PADDLE_WITH_HIP
+  bool CheckNVRTCResult(hiprtcResult result, std::string function);
+#else
   bool CheckNVRTCResult(nvrtcResult result, std::string function);
-  bool CheckCUDADriverResult(CUresult result, std::string function);
+#endif
+
+  static bool available_;
 
   bool is_compiled_{false};
   int max_threads_{0};
   int num_threads_{1024};
   int workload_per_thread_{1};
   std::vector<char> ptx_;
+#ifdef PADDLE_WITH_HIP
+  hipModule_t module_;
+  hipFunction_t function_;
+#else
   CUmodule module_;
   CUfunction function_;
+#endif
 };
 #endif
 

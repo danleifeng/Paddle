@@ -19,17 +19,16 @@ limitations under the License. */
 #ifdef WITH_GPERFTOOLS
 #include "gperftools/profiler.h"
 #endif
-#include "gflags/gflags.h"
-#include "gtest/gtest.h"
-#include "paddle/fluid/memory/detail/system_allocator.h"
-#include "paddle/fluid/platform/gpu_info.h"
-
-#ifdef PADDLE_WITH_CUDA
-#include <cuda_runtime.h>
-
 #include <fstream>
 #include <string>
 
+#include "gflags/gflags.h"
+#include "gtest/gtest.h"
+#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/npu_info.h"
+
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
+    defined(PADDLE_WITH_ASCEND_CL)
 DECLARE_double(fraction_of_gpu_memory_to_use);
 DECLARE_uint64(initial_gpu_memory_in_mb);
 DECLARE_uint64(reallocate_gpu_memory_in_mb);
@@ -52,11 +51,7 @@ int* TestBuddyAllocator(BuddyAllocator* allocator, size_t size_bytes,
 
     EXPECT_NE(p, nullptr);
 
-#ifdef PADDLE_WITH_CUDA
     if (size_bytes < allocator->GetMaxChunkSize()) {
-#else
-    if (size_bytes < allocator->GetMaxChunkSize()) {
-#endif
       // Not allocate from SystemAllocator
       EXPECT_FALSE(use_system_allocator);
       EXPECT_GE(allocator->Used(), used_bytes + size_bytes);
@@ -83,7 +78,7 @@ int* TestBuddyAllocator(BuddyAllocator* allocator, size_t size_bytes,
   return nullptr;
 }
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 TEST(BuddyAllocator, GpuFraction) {
   // In a 16 GB machine, the pool size will be about 160 MB
   FLAGS_fraction_of_gpu_memory_to_use = 0.01;
@@ -100,9 +95,9 @@ TEST(BuddyAllocator, GpuFraction) {
   TestBuddyAllocator(&buddy_allocator, 10 << 20);
 
   // Greater than max chunk size
-  TestBuddyAllocator(&buddy_allocator, 499 << 20,
+  TestBuddyAllocator(&buddy_allocator, 300 << 20,
                      /* use_system_allocator = */ true);
-  TestBuddyAllocator(&buddy_allocator, 2 * static_cast<size_t>(1 << 30),
+  TestBuddyAllocator(&buddy_allocator, 1 * static_cast<size_t>(1 << 30),
                      /* use_system_allocator = */ true);
 }
 
@@ -124,7 +119,7 @@ TEST(BuddyAllocator, InitRealloc) {
   // Greater than max chunk size
   TestBuddyAllocator(&buddy_allocator, 101 << 20,
                      /* use_system_allocator = */ true);
-  TestBuddyAllocator(&buddy_allocator, 2 * static_cast<size_t>(1 << 30),
+  TestBuddyAllocator(&buddy_allocator, 1 * static_cast<size_t>(1 << 30),
                      /* use_system_allocator = */ true);
 }
 
@@ -147,7 +142,7 @@ TEST(BuddyAllocator, ReallocSizeGreaterThanInit) {
   // Greater than max trunk size
   TestBuddyAllocator(&buddy_allocator, 11 << 20,
                      /* use_system_allocator = */ true);
-  TestBuddyAllocator(&buddy_allocator, 2 * static_cast<size_t>(1 << 30),
+  TestBuddyAllocator(&buddy_allocator, 1 * static_cast<size_t>(1 << 30),
                      /* use_system_allocator = */ true);
 }
 
@@ -202,8 +197,13 @@ TEST(BuddyAllocator, AllocFromAvailable) {
 
   // Take half of available GPU
   void* p;
+#ifdef PADDLE_WITH_HIP
+  hipError_t result = hipMalloc(&p, available >> 1);
+  EXPECT_TRUE(result == hipSuccess);
+#else
   cudaError_t result = cudaMalloc(&p, available >> 1);
   EXPECT_TRUE(result == cudaSuccess);
+#endif
 
   // BuddyAllocator should be able to alloc the remaining GPU
   BuddyAllocator buddy_allocator(
@@ -216,7 +216,11 @@ TEST(BuddyAllocator, AllocFromAvailable) {
   TestBuddyAllocator(&buddy_allocator, static_cast<size_t>(1 << 30));
 
   if (p) {
+#ifdef PADDLE_WITH_HIP
+    EXPECT_TRUE(hipFree(p) == hipSuccess);
+#else
     EXPECT_TRUE(cudaFree(p) == cudaSuccess);
+#endif
   }
 }
 
@@ -226,7 +230,12 @@ TEST(BuddyAllocator, AllocFromAvailableWhenFractionIsOne) {
   FLAGS_reallocate_gpu_memory_in_mb = 0;
 
   void* p = nullptr;
-  EXPECT_TRUE(cudaMalloc(&p, static_cast<size_t>(3) << 30) == cudaSuccess);
+
+#ifdef PADDLE_WITH_HIP
+  EXPECT_TRUE(hipMalloc(&p, static_cast<size_t>(1) << 30) == hipSuccess);
+#else
+  EXPECT_TRUE(cudaMalloc(&p, static_cast<size_t>(1) << 30) == cudaSuccess);
+#endif
 
   // BuddyAllocator should be able to alloc the remaining GPU
   BuddyAllocator buddy_allocator(
@@ -234,10 +243,14 @@ TEST(BuddyAllocator, AllocFromAvailableWhenFractionIsOne) {
       platform::GpuMinChunkSize(), platform::GpuMaxChunkSize());
 
   TestBuddyAllocator(&buddy_allocator, static_cast<size_t>(1) << 30);
-  TestBuddyAllocator(&buddy_allocator, static_cast<size_t>(2) << 30);
+  TestBuddyAllocator(&buddy_allocator, static_cast<size_t>(1) << 30);
 
   if (p) {
+#ifdef PADDLE_WITH_HIP
+    EXPECT_TRUE(hipFree(p) == hipSuccess);
+#else
     EXPECT_TRUE(cudaFree(p) == cudaSuccess);
+#endif
   }
 }
 
@@ -312,6 +325,49 @@ TEST(BuddyAllocator, SpeedAna) {
   std::cerr << "time cost " << diff.count() << std::endl;
 }
 
+TEST(BuddyAllocator, Release) {
+  // In a 8 GB machine, the pool size will be about 800 MB
+  FLAGS_fraction_of_gpu_memory_to_use = 0.1;
+  FLAGS_initial_gpu_memory_in_mb = 0;
+  FLAGS_reallocate_gpu_memory_in_mb = 0;
+
+  BuddyAllocator buddy_allocator(
+      std::unique_ptr<SystemAllocator>(new GPUAllocator(TEST_GPU_ID)),
+      platform::GpuMinChunkSize(), platform::GpuMaxChunkSize());
+
+  // Less than pool size
+  TestBuddyAllocator(&buddy_allocator, 10);
+  TestBuddyAllocator(&buddy_allocator, 10 << 10);
+  TestBuddyAllocator(&buddy_allocator, 50 << 20);
+
+  buddy_allocator.Release();
+}
+#endif
+
+#ifdef PADDLE_WITH_ASCEND_CL
+TEST(BuddyAllocator, NpuFraction) {
+  // In a 16 GB machine, the pool size will be about 160 MB
+  FLAGS_fraction_of_gpu_memory_to_use = 0.005;
+  FLAGS_fraction_of_gpu_memory_to_use = 0.92;
+  FLAGS_initial_gpu_memory_in_mb = 0;
+  FLAGS_reallocate_gpu_memory_in_mb = 0;
+
+  BuddyAllocator buddy_allocator(
+      std::unique_ptr<SystemAllocator>(new NPUAllocator(0)),
+      platform::NPUMinChunkSize(), platform::NPUMaxChunkSize());
+
+  // Less than pool size
+  TestBuddyAllocator(&buddy_allocator, 10);
+  TestBuddyAllocator(&buddy_allocator, 10 << 10);
+  TestBuddyAllocator(&buddy_allocator, 10 << 20);
+  buddy_allocator.Release();
+
+  // Greater than max chunk size
+  TestBuddyAllocator(&buddy_allocator, 300 << 20,
+                     /* use_system_allocator = */ true);
+  TestBuddyAllocator(&buddy_allocator, 1 * static_cast<size_t>(1 << 30),
+                     /* use_system_allocator = */ true);
+}
 #endif
 
 }  // namespace detail

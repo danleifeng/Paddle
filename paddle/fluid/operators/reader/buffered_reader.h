@@ -18,12 +18,17 @@
 #include <memory>
 #include <queue>
 #include <vector>
+
 #include "ThreadPool.h"
 #include "paddle/fluid/framework/reader.h"
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+#include "paddle/fluid/platform/cuda_resource_pool.h"
 #include "paddle/fluid/platform/gpu_info.h"
 #endif
-
+#ifdef PADDLE_WITH_ASCEND_CL
+#include "paddle/fluid/platform/npu_info.h"
+#include "paddle/fluid/platform/npu_resource_pool.h"
+#endif
 namespace paddle {
 namespace operators {
 namespace reader {
@@ -34,7 +39,8 @@ class BufferedReader : public framework::DecoratedReader {
 
  public:
   BufferedReader(const std::shared_ptr<framework::ReaderBase>& reader,
-                 const platform::Place& place, size_t buffer_size);
+                 const platform::Place& place, size_t buffer_size,
+                 bool pin_memory = false);
 
   ~BufferedReader() override;
 
@@ -52,6 +58,7 @@ class BufferedReader : public framework::DecoratedReader {
   ThreadPool thread_pool_;
   platform::Place place_;
   const size_t buffer_size_;
+  bool pin_memory_;
 
   std::queue<std::future<size_t>> position_;
 
@@ -60,13 +67,21 @@ class BufferedReader : public framework::DecoratedReader {
   // buffer, just read async and create futures as buffer size. However, to
   // malloc tensors every time is extremely slow. Here we store all data in
   // buffers and prevent alloc every time.
+  bool is_same_place_;
   std::vector<TensorVec> cpu_buffer_;
-  std::vector<TensorVec> gpu_buffer_;
+  std::vector<TensorVec> cuda_buffer_;
+  std::vector<TensorVec> npu_buffer_;
   size_t prev_pos_{-1UL};
-#ifdef PADDLE_WITH_CUDA
-  cudaStream_t stream_;
-  cudaStream_t compute_stream_;
-  std::vector<cudaEvent_t> events_;
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  gpuStream_t compute_stream_;
+  std::shared_ptr<platform::CudaStreamObject> stream_;
+  std::vector<std::shared_ptr<platform::CudaEventObject>> events_;
+#endif
+
+#ifdef PADDLE_WITH_ASCEND_CL
+  aclrtStream compute_stream_;
+  std::shared_ptr<platform::NpuStreamObject> stream_;
+  std::vector<std::shared_ptr<platform::NpuEventObject>> events_;
 #endif
 };
 

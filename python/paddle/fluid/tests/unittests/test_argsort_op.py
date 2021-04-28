@@ -15,6 +15,7 @@
 from __future__ import print_function
 
 import unittest
+import paddle
 import paddle.fluid as fluid
 import paddle.fluid.layers as layers
 import numpy as np
@@ -318,6 +319,127 @@ class TestArgsortOpDescendingAxisNeg2CPU(TestArgsortOpAxisNeg2CPU):
 class TestArgsortOpDescendingAxisNeg2GPU(TestArgsortOpAxisNeg2GPU):
     def init_direction(self):
         self.descending = True
+
+
+class TestArgsortErrorOnCPU(unittest.TestCase):
+    def setUp(self):
+        self.place = core.CPUPlace()
+
+    def test_error(self):
+        def test_fluid_var_type():
+            with fluid.program_guard(fluid.Program()):
+                x = [1]
+                output = fluid.layers.argsort(input=x)
+            self.assertRaises(TypeError, test_fluid_var_type)
+
+        def test_paddle_var_type():
+            with fluid.program_guard(fluid.Program()):
+                x = [1]
+                output = paddle.argsort(input=x)
+            self.assertRaises(TypeError, test_paddle_var_type)
+
+
+class TestArgsortErrorOnGPU(TestArgsortErrorOnCPU):
+    def setUp(self):
+        if core.is_compiled_with_cuda():
+            self.place = core.CUDAPlace(0)
+        else:
+            self.place = core.CPUPlace()
+
+
+class TestArgsort(unittest.TestCase):
+    def init(self):
+        self.input_shape = [10000, ]
+        self.axis = 0
+
+    def setUp(self):
+        self.init()
+        if core.is_compiled_with_cuda():
+            self.place = core.CUDAPlace(0)
+        else:
+            self.place = core.CPUPlace()
+        self.data = np.random.rand(*self.input_shape)
+
+    def test_api(self):
+        with fluid.program_guard(fluid.Program()):
+            input = fluid.data(
+                name="input", shape=self.input_shape, dtype="float64")
+
+            output = paddle.argsort(input, axis=self.axis)
+            output2 = paddle.argsort(input, axis=self.axis, descending=True)
+
+            exe = fluid.Executor(self.place)
+            result, result2 = exe.run(feed={'input': self.data},
+                                      fetch_list=[output, output2])
+
+            np_result = np.argsort(self.data, axis=self.axis)
+            self.assertEqual((result == np_result).all(), True)
+
+            np_result2 = np.argsort(-self.data, axis=self.axis)
+            self.assertEqual((result2 == np_result2).all(), True)
+
+
+class TestArgsort2(TestArgsort):
+    def init(self):
+        self.input_shape = [10000, 1]
+        self.axis = 0
+
+
+class TestArgsort3(TestArgsort):
+    def init(self):
+        self.input_shape = [1, 10000]
+        self.axis = 1
+
+
+class TestArgsort4(TestArgsort):
+    def init(self):
+        self.input_shape = [2, 3, 4]
+        self.axis = 1
+
+
+class TestArgsortImperative(unittest.TestCase):
+    def init(self):
+        self.input_shape = [10000, ]
+        self.axis = 0
+
+    def setUp(self):
+        self.init()
+        self.input_data = np.random.rand(*self.input_shape)
+        if core.is_compiled_with_cuda():
+            self.place = core.CUDAPlace(0)
+        else:
+            self.place = core.CPUPlace()
+
+    def test_api(self):
+        paddle.disable_static(self.place)
+        var_x = paddle.to_tensor(self.input_data)
+        out = paddle.argsort(var_x, axis=self.axis)
+        expect = np.argsort(self.input_data, axis=self.axis)
+        self.assertEqual((expect == out.numpy()).all(), True)
+
+        out2 = paddle.argsort(var_x, axis=self.axis, descending=True)
+        expect2 = np.argsort(-self.input_data, axis=self.axis)
+        self.assertEqual((expect2 == out2.numpy()).all(), True)
+
+        paddle.enable_static()
+
+
+class TestArgsortImperative2(TestArgsortImperative):
+    def init(self):
+        self.input_shape = [10000, 1]
+        self.axis = 0
+
+
+class TestArgsortImperative3(TestArgsortImperative):
+    def init(self):
+        self.input_shape = [1, 10000]
+        self.axis = 1
+
+
+class TestArgsortImperative2(TestArgsortImperative):
+    def init(self):
+        self.input_shape = [2, 3, 4]
+        self.axis = 1
 
 
 if __name__ == "__main__":

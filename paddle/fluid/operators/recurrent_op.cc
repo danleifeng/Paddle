@@ -14,8 +14,13 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/recurrent_op.h"
 
-#include <algorithm>
-#include "paddle/fluid/string/string_helper.h"
+namespace paddle {
+namespace framework {
+class InferShapeContext;
+class LoDTensor;
+class OpDesc;
+}  // namespace framework
+}  // namespace paddle
 
 namespace paddle {
 namespace operators {
@@ -155,7 +160,9 @@ int64_t RecurrentBase::GetSequenceLength(const framework::Scope &scope) const {
   }
   PADDLE_ENFORCE_GE(seq_len, 0,
                     platform::errors::InvalidArgument(
-                        "RecurrentOp gets invalid sequence length."));
+                        "RecurrentOp gets invalid sequence length. Expected "
+                        "seq_len >= 0. Received seq_len = %d",
+                        seq_len));
   return seq_len;
 }
 
@@ -197,17 +204,24 @@ void RecurrentOp::RunImpl(const framework::Scope &scope,
   auto &dev_ctx = *pool.Get(place);
 
   VLOG(3) << "Static RNN input sequence length = " << seq_len;
-  StepScopes scopes = CreateStepScopes(dev_ctx, scope, seq_len);
   auto reverse = Attr<bool>(kReverse);
 
   framework::Executor executor(place);
   auto *block = Attr<framework::BlockDesc *>(kStepBlock);
 
   auto *program = block->Program();
-  auto ctx = executor.Prepare(
-      *program, block->ID(), Attr<std::vector<std::string>>(
-                                 kSkipEagerDeletionVars) /*skip_ref_cnt_vars*/);
+  auto ctx = executor.Prepare(*program, block->ID(),
+                              Attr<std::vector<std::string>>(
+                                  kSkipEagerDeletionVars), /*skip_ref_cnt_vars*/
+                              true);
 
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> lock(mutex);
+  StepScopes scopes = CreateStepScopes(dev_ctx, scope, seq_len);
+  // TODO(gfwm2013) Function CreateStepScopes would make segmentation fault in
+  // multithreading in eval process, so we use a mutex before function
+  // CreateStepScopes to make sure that the computing process is correct. This
+  // problem will fix in next pull request.
   for (size_t i = 0; i < seq_len; ++i) {
     size_t seq_offset = reverse ? seq_len - i - 1 : i;
     VLOG(3) << "Recurrent operate at the time step " << seq_offset;
@@ -242,16 +256,6 @@ void RecurrentOp::RunImpl(const framework::Scope &scope,
     // Link inside::output -> outside::output
     //   outside::output[seq_offset: seq_offset + 1] = inside::output
     executor.CreateVariables(ctx->prog_, &cur_scope, ctx->block_id_);
-    if (i > 0) {
-      LinkTensorWithCallback(scope, Outputs(kOutputs), cur_scope,
-                             Outputs(kOutputs),
-                             [&](const framework::LoDTensor &src_tensor,
-                                 framework::LoDTensor *dst_tensor) {
-                               framework::Tensor src_slice =
-                                   src_tensor.Slice(seq_offset, seq_offset + 1);
-                               dst_tensor->ShareDataWith(src_slice);
-                             });
-    }
 
     // Linked now, execute!
     executor.RunPreparedContext(ctx.get(), &cur_scope,
@@ -269,6 +273,14 @@ void RecurrentOp::RunImpl(const framework::Scope &scope,
             auto dst_out = dst_tensor->Slice(seq_offset, seq_offset + 1);
             // Explicit copy output since the local RNN scope can be destroyed
             // early.
+            framework::TensorCopy(src_tensor, place, dev_ctx, &dst_out);
+          });
+    } else {
+      LinkTensorWithCallback(
+          cur_scope, Outputs(kOutputs), scope, Outputs(kOutputs),
+          [&](const framework::LoDTensor &src_tensor,
+              framework::LoDTensor *dst_tensor) {
+            auto dst_out = dst_tensor->Slice(seq_offset, seq_offset + 1);
             framework::TensorCopy(src_tensor, place, dev_ctx, &dst_out);
           });
     }

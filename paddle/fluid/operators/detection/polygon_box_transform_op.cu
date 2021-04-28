@@ -43,8 +43,10 @@ template <typename T>
 class PolygonBoxTransformOpCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-    PADDLE_ENFORCE(platform::is_gpu_place(ctx.GetPlace()),
-                   "It must use CUDAPlace.");
+    PADDLE_ENFORCE_EQ(
+        platform::is_gpu_place(ctx.GetPlace()), true,
+        platform::errors::InvalidArgument(
+            "The polygon_box_transform operator needs to be executed on GPU."));
     auto* in = ctx.Input<Tensor>("Input");
     auto in_dims = in->dims();
     const T* in_data = in->data<T>();

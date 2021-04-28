@@ -96,7 +96,10 @@ class LoDTensorArray2TensorOp : public framework::OperatorBase {
         *scope.FindVar(Output("OutIndex"))->GetMutable<framework::LoDTensor>();
 
     const size_t n = inx.size();
-    PADDLE_ENFORCE_GT(n, 0, "Input tensorarray size should > 0.");
+    PADDLE_ENFORCE_GT(n, 0, platform::errors::InvalidArgument(
+                                "Input tensorarray size should > 0,"
+                                "but the received is %d",
+                                n));
 
     std::string base_name = Inputs("X")[0];
     std::vector<std::string> names;
@@ -213,9 +216,9 @@ class LoDTensorArray2TensorGradInferVarType
     : public framework::VarTypeInference {
  public:
   void operator()(framework::InferVarTypeContext *ctx) const override {
-    for (auto &out_var : ctx->Output(framework::GradVarName("X"))) {
-      ctx->SetType(out_var, framework::proto::VarType::LOD_TENSOR_ARRAY);
-    }
+    ctx->SetOutputType(framework::GradVarName("X"),
+                       framework::proto::VarType::LOD_TENSOR_ARRAY,
+                       framework::ALL_ELEMENTS);
   }
 };
 
@@ -232,7 +235,10 @@ class LoDTensorArray2TensorGradOp : public framework::OperatorBase {
 
     auto &inx = scope.FindVar(Input("X"))->Get<framework::LoDTensorArray>();
     const size_t n = inx.size();
-    PADDLE_ENFORCE_GT(n, 0, "Input tensorarray size should > 0.");
+    PADDLE_ENFORCE_GT(n, 0, platform::errors::InvalidArgument(
+                                "Input tensorarray size should > 0, "
+                                "but the received is: %d. ",
+                                n));
 
     std::string base_name = Inputs("X")[0];
     std::vector<std::string> names;
@@ -244,8 +250,12 @@ class LoDTensorArray2TensorGradOp : public framework::OperatorBase {
     auto dout_name = Input(framework::GradVarName("Out"));
 
     std::vector<std::string> grad_names;
+    // NOTE(Aurelius84): Generating grad base name by Input("X") instead of
+    // fixed string to avoid incorrectly sharing same var's allocation in
+    // multi-thread that will cause wrong calculation result.
+    std::string grad_base_name = base_name + "_temp_grad_";
 
-    LodTensorVectorResizeFromLodTensorArray(scope, "grad_name", Input("X"),
+    LodTensorVectorResizeFromLodTensorArray(scope, grad_base_name, Input("X"),
                                             &grad_names);
 
     auto use_stack = Attr<bool>("use_stack");

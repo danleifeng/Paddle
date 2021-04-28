@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include(ExternalProject)
 # Creat a target named "third_party", which can compile external dependencies on all platform(windows/linux/mac)
 
 set(THIRD_PARTY_PATH  "${CMAKE_BINARY_DIR}/third_party" CACHE STRING
     "A path setting third party libraries download & build directories.")
-
 set(THIRD_PARTY_CACHE_PATH     "${CMAKE_SOURCE_DIR}"    CACHE STRING
     "A path cache third party source code to avoid repeated download.")
 
 set(THIRD_PARTY_BUILD_TYPE Release)
+set(third_party_deps)
 
 # cache funciton to avoid repeat download code of third_party.
 # This function has 4 parameters, URL / REPOSITOR / TAG / DIR:
@@ -28,15 +29,16 @@ set(THIRD_PARTY_BUILD_TYPE Release)
 # 2. REPOSITORY:    specify git REPOSITORY of 3rd party
 # 3. TAG:           specify git tag/branch/commitID of 3rd party
 # 4. DIR:           overwrite the original SOURCE_DIR when cache directory
-# 
+#
 # The function Return 1 PARENT_SCOPE variables:
-#  - ${TARGET}_DOWNLOAD_CMD: Simply place "${TARGET}_DOWNLOAD_CMD" in ExternalProject_Add, 
+#  - ${TARGET}_DOWNLOAD_CMD: Simply place "${TARGET}_DOWNLOAD_CMD" in ExternalProject_Add,
 #                            and you no longer need to set any donwnload steps in ExternalProject_Add.
 # For example:
 #    Cache_third_party(${TARGET}
 #            REPOSITORY ${TARGET_REPOSITORY}
 #            TAG        ${TARGET_TAG}
 #            DIR        ${TARGET_SOURCE_DIR})
+
 FUNCTION(cache_third_party TARGET)
     SET(options "")
     SET(oneValueArgs URL REPOSITORY TAG DIR)
@@ -50,7 +52,7 @@ FUNCTION(cache_third_party TARGET)
         SET(${TARGET_NAME}_DOWNLOAD_CMD
                 GIT_REPOSITORY  ${cache_third_party_REPOSITORY})
         IF(cache_third_party_TAG)
-            LIST(APPEND   ${TARGET_NAME}_DOWNLOAD_CMD  
+            LIST(APPEND   ${TARGET_NAME}_DOWNLOAD_CMD
                     GIT_TAG     ${cache_third_party_TAG})
         ENDIF()
     ELSEIF(cache_third_party_URL)
@@ -100,10 +102,35 @@ MACRO(UNSET_VAR VAR_NAME)
     UNSET(${VAR_NAME})
 ENDMACRO()
 
+# Funciton to Download the dependencies during compilation
+# This function has 2 parameters, URL / DIRNAME:
+# 1. URL:           The download url of 3rd dependencies
+# 2. NAME:          The name of file, that determin the dirname
+#
+FUNCTION(file_download_and_uncompress URL NAME)
+  MESSAGE(STATUS "Download dependence[${NAME}] from ${URL}")
+  SET(${NAME}_INCLUDE_DIR ${THIRD_PARTY_PATH}/${NAME}/data PARENT_SCOPE)
+  ExternalProject_Add(
+      extern_download_${NAME}
+      ${EXTERNAL_PROJECT_LOG_ARGS}
+      PREFIX                ${THIRD_PARTY_PATH}/${NAME}
+      URL                   ${URL}
+      DOWNLOAD_DIR          ${THIRD_PARTY_PATH}/${NAME}/data/
+      SOURCE_DIR            ${THIRD_PARTY_PATH}/${NAME}/data/
+      DOWNLOAD_NO_PROGRESS  1
+      CONFIGURE_COMMAND     ""
+      BUILD_COMMAND         ""
+      UPDATE_COMMAND        ""
+      INSTALL_COMMAND       ""
+    )
+  set(third_party_deps ${third_party_deps} extern_download_${NAME} PARENT_SCOPE)
+ENDFUNCTION()
+
+
 # Correction of flags on different Platform(WIN/MAC) and Print Warning Message
 if (APPLE)
     if(WITH_MKL)
-        MESSAGE(WARNING 
+        MESSAGE(WARNING
             "Mac is not supported with MKL in Paddle yet. Force WITH_MKL=OFF.")
         set(WITH_MKL OFF CACHE STRING "Disable MKL for building on mac" FORCE)
     endif()
@@ -114,17 +141,10 @@ if(WIN32 OR APPLE)
     SET(WITH_XBYAK OFF CACHE STRING "Disable XBYAK in Windows and MacOS" FORCE)
 
     if(WITH_LIBXSMM)
-        MESSAGE(WARNING 
+        MESSAGE(WARNING
             "Windows, Mac are not supported with libxsmm in Paddle yet."
             "Force WITH_LIBXSMM=OFF")
         SET(WITH_LIBXSMM OFF CACHE STRING "Disable LIBXSMM in Windows and MacOS" FORCE)
-    endif()
-
-    if(WITH_NGRAPH)
-        MESSAGE(WARNING
-            "Windows or Mac is not supported with nGraph in Paddle yet."
-            "Force WITH_NGRAPH=OFF")
-        SET(WITH_NGRAPH OFF CACHE STRING "Disable nGraph in Windows and MacOS" FORCE)
     endif()
 
     if(WITH_BOX_PS)
@@ -185,14 +205,8 @@ include(external/dlpack)    # download dlpack
 include(external/xxhash)    # download, build, install xxhash
 include(external/warpctc)   # download, build, install warpctc
 
-set(third_party_deps)
 list(APPEND third_party_deps extern_eigen3 extern_gflags extern_glog extern_boost extern_xxhash)
 list(APPEND third_party_deps extern_zlib extern_dlpack extern_warpctc extern_threadpool)
-
-if(WITH_AMD_GPU)
-    include(external/rocprim)   # download, build, install rocprim
-    list(APPEND third_party_deps extern_rocprim)
-endif()
 
 include(cblas)              	# find first, then download, build, install openblas
 if(${CBLAS_PROVIDER} STREQUAL MKLML)
@@ -208,7 +222,7 @@ if(WITH_MKLDNN)
 endif()
 
 include(external/protobuf)  	# find first, then download, build, install protobuf
-if(NOT PROTOBUF_FOUND OR WIN32)
+if(TARGET extern_protobuf)
     list(APPEND third_party_deps extern_protobuf)
 endif()
 
@@ -218,15 +232,24 @@ if(WITH_PYTHON)
     list(APPEND third_party_deps extern_pybind)
 endif()
 
-IF(WITH_TESTING OR (WITH_DISTRIBUTE AND NOT WITH_GRPC))
+IF(WITH_TESTING OR WITH_DISTRIBUTE)
     include(external/gtest)     # download, build, install gtest
     list(APPEND third_party_deps extern_gtest)
 ENDIF()
 
 if(WITH_GPU)
-    include(external/cub)       # download cub
-    list(APPEND third_party_deps extern_cub)
+    if (${CMAKE_CUDA_COMPILER_VERSION} LESS 11.0)
+        include(external/cub)       # download cub
+        list(APPEND third_party_deps extern_cub)
+    endif()
+    set(CUDAERROR_URL  "http://paddlepaddledeps.bj.bcebos.com/cudaErrorMessage.tar.gz" CACHE STRING "" FORCE)
+    file_download_and_uncompress(${CUDAERROR_URL} "cudaerror") # download file cudaErrorMessage
 endif(WITH_GPU)
+
+if(WITH_XPU)
+    include(external/xpu)          # download, build, install xpu
+    list(APPEND third_party_deps extern_xpu)
+endif(WITH_XPU)
 
 if(WITH_PSLIB)
     include(external/pslib)          # download, build, install pslib
@@ -251,25 +274,28 @@ if(WITH_BOX_PS)
     list(APPEND third_party_deps extern_box_ps)
 endif(WITH_BOX_PS)
 
-if(WITH_DISTRIBUTE)
-    if(WITH_GRPC)
-        list(APPEND third_party_deps extern_grpc)
-    else()
-        list(APPEND third_party_deps extern_leveldb)
-        list(APPEND third_party_deps extern_brpc)
+if(WITH_ASCEND OR WITH_ASCEND_CL)
+    include(external/ascend)
+    if(WITH_ASCEND OR WITH_ASCEND_CL)
+        list(APPEND third_party_deps extern_ascend)
     endif()
-endif()
+    if(WITH_ASCEND_CL)
+        list(APPEND third_party_deps extern_ascend_cl)
+    endif()
+endif ()
 
-if(WITH_NGRAPH)
-    if(WITH_MKLDNN)
-        include(external/ngraph)    # download, build, install nGraph
-        list(APPEND third_party_deps extern_ngraph)
-    else()
-        MESSAGE(WARNING
-            "nGraph needs mkl-dnn to be enabled."
-            "Force WITH_NGRAPH=OFF")
-        SET(WITH_NGRAPH OFF CACHE STRING "Disable nGraph if mkl-dnn is disabled" FORCE)
-    endif()
+if (WITH_PSCORE)
+    include(external/snappy)
+    list(APPEND third_party_deps extern_snappy)
+
+    include(external/leveldb)
+    list(APPEND third_party_deps extern_leveldb)
+
+    include(external/brpc)
+    list(APPEND third_party_deps extern_brpc)
+
+    include(external/libmct)     # download, build, install libmct
+    list(APPEND third_party_deps extern_libmct)
 endif()
 
 if(WITH_XBYAK)
@@ -290,7 +316,14 @@ if(WITH_DGC)
 endif()
 
 if (WITH_LITE)
+    message(STATUS "Compile Paddle with Lite Engine.")
     include(external/lite)
 endif (WITH_LITE)
 
-add_custom_target(third_party DEPENDS ${third_party_deps})
+if (WITH_CRYPTO)
+    include(external/cryptopp)   # download, build, install cryptopp
+    list(APPEND third_party_deps extern_cryptopp)
+    add_definitions(-DPADDLE_WITH_CRYPTO)
+endif (WITH_CRYPTO)
+
+add_custom_target(third_party ALL DEPENDS ${third_party_deps})

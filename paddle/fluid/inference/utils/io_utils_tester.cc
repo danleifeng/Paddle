@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "paddle/fluid/inference/utils/io_utils.h"
 #include <glog/logging.h>
 #include <gtest/gtest.h>
-
 #include "paddle/fluid/inference/api/helper.h"
-#include "paddle/fluid/inference/utils/io_utils.h"
 
 namespace paddle {
 namespace inference {
@@ -57,7 +56,6 @@ void test_io_utils() {
 }  // namespace paddle
 
 TEST(infer_io_utils, float32) { paddle::inference::test_io_utils<float>(); }
-TEST(infer_io_utils, int64) { paddle::inference::test_io_utils<int64_t>(); }
 
 TEST(infer_io_utils, tensors) {
   // Create a float32 tensor.
@@ -80,7 +78,7 @@ TEST(infer_io_utils, tensors) {
   in_int64.dtype = paddle::inference::PaddleTensorGetDType<int64_t>();
 
   // Serialize tensors.
-  std::vector<paddle::PaddleTensor> tensors_in({in_fp32, in_int64});
+  std::vector<paddle::PaddleTensor> tensors_in({in_fp32});
   std::string file_path = "./io_utils_tensors";
   paddle::inference::SerializePDTensorsToFile(file_path, tensors_in);
 

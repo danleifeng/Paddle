@@ -14,17 +14,11 @@
 
 include(ExternalProject)
 
+# update eigen to the commit id f612df27 on 03/16/2021
 set(EIGEN_PREFIX_DIR ${THIRD_PARTY_PATH}/eigen3)
 set(EIGEN_SOURCE_DIR ${THIRD_PARTY_PATH}/eigen3/src/extern_eigen3)
-set(EIGEN_REPOSITORY https://github.com/eigenteam/eigen-git-mirror)
-set(EIGEN_TAG        917060c364181f33a735dc023818d5a54f60e54c)
-
-# eigen on cuda9.1 missing header of math_funtions.hpp
-# https://stackoverflow.com/questions/43113508/math-functions-hpp-not-found-when-using-cuda-with-eigen
-if(WITH_AMD_GPU)
-    set(EIGEN_REPOSITORY https://github.com/sabreshao/hipeigen.git)
-    set(EIGEN_TAG        7cb2b6e5a4b4a1efe658abb215cd866c6fb2275e)
-endif()
+set(EIGEN_REPOSITORY https://gitlab.com/libeigen/eigen.git)
+set(EIGEN_TAG        f612df273689a19d25b45ca4f8269463207c4fee)
 
 cache_third_party(extern_eigen3
     REPOSITORY    ${EIGEN_REPOSITORY}
@@ -32,52 +26,40 @@ cache_third_party(extern_eigen3
     DIR           EIGEN_SOURCE_DIR)
 
 if(WIN32)
-    file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/eigen/Half.h native_src)
-    file(TO_NATIVE_PATH ${EIGEN_SOURCE_DIR}/Eigen/src/Core/arch/CUDA/Half.h native_dst)
-    set(EIGEN_PATCH_COMMAND copy ${native_src} ${native_dst} /Y)
+    add_definitions(-DEIGEN_STRONG_INLINE=inline)
+elseif(LINUX)
+    if(WITH_ROCM)
+        # For HIPCC Eigen::internal::device::numeric_limits is not EIGEN_DEVICE_FUNC
+        # which will cause compiler error of using __host__ funciont in __host__ __device__
+        file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/eigen/Meta.h native_src)
+        file(TO_NATIVE_PATH ${EIGEN_SOURCE_DIR}/Eigen/src/Core/util/Meta.h native_dst)
+        set(EIGEN_PATCH_COMMAND cp ${native_src} ${native_dst})
+    endif()
 endif()
 
 set(EIGEN_INCLUDE_DIR ${EIGEN_SOURCE_DIR})
 INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 
-if(WITH_AMD_GPU)
-    ExternalProject_Add(
-        extern_eigen3
-        ${EXTERNAL_PROJECT_LOG_ARGS}
-        ${SHALLOW_CLONE}
-        "${EIGEN_DOWNLOAD_CMD}"
-        PREFIX          ${EIGEN_PREFIX_DIR}
-        SOURCE_DIR      ${EIGEN_SOURCE_DIR}
-        UPDATE_COMMAND    ""
-        PATCH_COMMAND   ${EIGEN_PATCH_COMMAND}
-        CONFIGURE_COMMAND ""
-        BUILD_COMMAND     ""
-        INSTALL_COMMAND   ""
-        TEST_COMMAND      ""
-    )
-else()
-    ExternalProject_Add(
-        extern_eigen3
-        ${EXTERNAL_PROJECT_LOG_ARGS}
-        ${SHALLOW_CLONE}
-        "${EIGEN_DOWNLOAD_CMD}"
-        PREFIX          ${EIGEN_PREFIX_DIR}
-        SOURCE_DIR      ${EIGEN_SOURCE_DIR}
-        UPDATE_COMMAND    ""
-        PATCH_COMMAND   ${EIGEN_PATCH_COMMAND}
-        CONFIGURE_COMMAND ""
-        BUILD_COMMAND     ""
-        INSTALL_COMMAND   ""
-        TEST_COMMAND      ""
-    )
-endif()
+ExternalProject_Add(
+    extern_eigen3
+    ${EXTERNAL_PROJECT_LOG_ARGS}
+    ${SHALLOW_CLONE}
+    "${EIGEN_DOWNLOAD_CMD}"
+    PREFIX          ${EIGEN_PREFIX_DIR}
+    SOURCE_DIR      ${EIGEN_SOURCE_DIR}
+    UPDATE_COMMAND    ""
+    PATCH_COMMAND     ${EIGEN_PATCH_COMMAND}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND     ""
+    INSTALL_COMMAND   ""
+    TEST_COMMAND      ""
+)
 
-if (${CMAKE_VERSION} VERSION_LESS "3.3.0")
-    set(dummyfile ${CMAKE_CURRENT_BINARY_DIR}/eigen3_dummy.c)
-    file(WRITE ${dummyfile} "const char *dummy_eigen3 = \"${dummyfile}\";")
-    add_library(eigen3 STATIC ${dummyfile})
-else()
-    add_library(eigen3 INTERFACE)
-endif()
+add_library(eigen3 INTERFACE)
 
 add_dependencies(eigen3 extern_eigen3)
+
+# sw not support thread_local semantic
+if(WITH_SW)
+  add_definitions(-DEIGEN_AVOID_THREAD_LOCAL)
+endif()

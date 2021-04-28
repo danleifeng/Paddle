@@ -15,16 +15,25 @@
 from __future__ import print_function
 
 import numpy as np
-import paddle.fluid as fluid
 import unittest
 import inspect
 import gast
 
-from paddle.fluid.dygraph.jit import dygraph_to_static_graph
+import paddle
+import paddle.fluid as fluid
+import paddle.fluid.dygraph as dygraph
+
+from paddle import to_tensor
+from paddle.fluid.dygraph import to_variable
+from paddle.fluid.dygraph.jit import dygraph_to_static_func
 from paddle.fluid.dygraph.dygraph_to_static.utils import is_dygraph_api
 
 SEED = 2020
 np.random.seed(SEED)
+
+# TODO(zhhsplendid): This test is old so that use a static graph style
+# mark it as TODO, to refactoring the code of this file.
+paddle.enable_static()
 
 
 def dyfunc_to_variable(x):
@@ -33,14 +42,45 @@ def dyfunc_to_variable(x):
 
 
 def dyfunc_to_variable_2(x):
-    res = fluid.dygraph.to_variable(value=np.zeros(shape=(1), dtype=np.int32))
+    res = dygraph.to_variable(value=np.zeros(shape=(1), dtype=np.int32))
+    return res
+
+
+def dyfunc_to_variable_3(x):
+    res = to_variable(x, name=None, zero_copy=None)
+    return res
+
+
+def dyfunc_to_tensor(x):
+    res1 = paddle.to_tensor(x, dtype=None, place=None, stop_gradient=True)
+    res2 = paddle.tensor.to_tensor(data=res1)
+    res3 = to_tensor(data=res2)
+    return res3
+
+
+def dyfunc_int_to_tensor(x):
+    res = paddle.to_tensor(3)
+    return res
+
+
+def dyfunc_float_to_tensor(x):
+    res = paddle.to_tensor(2.0)
+    return res
+
+
+def dyfunc_bool_to_tensor(x):
+    res = paddle.to_tensor(True)
     return res
 
 
 class TestDygraphBasicApi_ToVariable(unittest.TestCase):
     def setUp(self):
         self.input = np.ones(5).astype("int32")
-        self.test_funcs = [dyfunc_to_variable, dyfunc_to_variable_2]
+        self.test_funcs = [
+            dyfunc_to_tensor, dyfunc_bool_to_tensor, dyfunc_int_to_tensor,
+            dyfunc_float_to_tensor, dyfunc_to_variable, dyfunc_to_variable_2,
+            dyfunc_to_variable_3
+        ]
         self.place = fluid.CUDAPlace(0) if fluid.is_compiled_with_cuda(
         ) else fluid.CPUPlace()
 
@@ -53,7 +93,7 @@ class TestDygraphBasicApi_ToVariable(unittest.TestCase):
         main_program = fluid.Program()
         main_program.random_seed = SEED
         with fluid.program_guard(main_program):
-            static_out = dygraph_to_static_graph(self.dygraph_func)(self.input)
+            static_out = dygraph_to_static_func(self.dygraph_func)(self.input)
 
         exe = fluid.Executor(self.place)
         static_res = exe.run(main_program, fetch_list=static_out)
@@ -72,8 +112,6 @@ class TestDygraphBasicApi_ToVariable(unittest.TestCase):
 
 
 # 1. test Apis that inherit from layers.Layer
-
-
 def dyfunc_BilinearTensorProduct(layer1, layer2):
     bilinearTensorProduct = fluid.dygraph.nn.BilinearTensorProduct(
         input1_dim=5,
@@ -198,7 +236,7 @@ class TestDygraphBasicApi(unittest.TestCase):
         main_program.random_seed = SEED
         with fluid.program_guard(main_program, startup_program):
             data = fluid.layers.assign(self.input)
-            static_out = dygraph_to_static_graph(self.dygraph_func)(data)
+            static_out = dygraph_to_static_func(self.dygraph_func)(data)
 
         exe = fluid.Executor(fluid.CPUPlace())
         exe.run(startup_program)
@@ -233,8 +271,8 @@ class TestDygraphBasicApi_BilinearTensorProduct(TestDygraphBasicApi):
         main_program = fluid.Program()
         main_program.random_seed = SEED
         with fluid.program_guard(main_program, startup_program):
-            static_out = dygraph_to_static_graph(self.dygraph_func)(self.input1,
-                                                                    self.input2)
+            static_out = dygraph_to_static_func(self.dygraph_func)(self.input1,
+                                                                   self.input2)
 
         exe = fluid.Executor(fluid.CPUPlace())
         exe.run(startup_program)
@@ -360,7 +398,7 @@ class TestDygraphBasicApi_CosineDecay(unittest.TestCase):
         main_program = fluid.Program()
         main_program.random_seed = SEED
         with fluid.program_guard(main_program, startup_program):
-            static_out = dygraph_to_static_graph(self.dygraph_func)()
+            static_out = dygraph_to_static_func(self.dygraph_func)()
 
         exe = fluid.Executor(fluid.CPUPlace())
         exe.run(startup_program)

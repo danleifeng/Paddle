@@ -27,6 +27,8 @@ from paddle.fluid.contrib.slim.quantization import TransformForMobilePass
 from paddle.fluid.contrib.slim.quantization import AddQuantDequantPass
 from paddle.fluid import core
 
+paddle.enable_static()
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["CPU_NUM"] = "1"
 
@@ -255,6 +257,7 @@ class TestQuantizationFreezePass(unittest.TestCase):
                      use_cuda,
                      seed,
                      activation_quant_type,
+                     bias_correction=False,
                      weight_quant_type='abs_max',
                      for_ci=True,
                      quant_skip_pattern='skip_quant'):
@@ -316,6 +319,7 @@ class TestQuantizationFreezePass(unittest.TestCase):
         build_strategy = fluid.BuildStrategy()
         build_strategy.memory_optimize = False
         build_strategy.enable_inplace = False
+        build_strategy.fuse_all_reduce_ops = False
         binary = fluid.CompiledProgram(main_graph.graph).with_data_parallel(
             loss_name=loss.name, build_strategy=build_strategy)
         quantized_test_program = test_graph.to_program()
@@ -352,7 +356,8 @@ class TestQuantizationFreezePass(unittest.TestCase):
 
         # Freeze graph for inference, but the weight of fc/conv is still float type.
         freeze_pass = QuantizationFreezePass(
-            scope=scope, place=place, weight_quantize_type=weight_quant_type)
+            scope=scope, place=place, bias_correction=bias_correction, \
+            weight_quantize_type=weight_quant_type)
         freeze_pass.apply(test_graph)
         if not for_ci:
             marked_nodes = set()
@@ -473,6 +478,13 @@ class TestQuantizationFreezePass(unittest.TestCase):
                     True,
                     seed=1,
                     activation_quant_type='range_abs_max',
+                    bias_correction=True,
+                    weight_quant_type='abs_max',
+                    for_ci=True)
+                self.freeze_graph(
+                    True,
+                    seed=1,
+                    activation_quant_type='range_abs_max',
                     weight_quant_type='abs_max',
                     for_ci=True)
                 self.freeze_graph(
@@ -491,6 +503,13 @@ class TestQuantizationFreezePass(unittest.TestCase):
                     True,
                     seed=1,
                     activation_quant_type='moving_average_abs_max',
+                    weight_quant_type='channel_wise_abs_max',
+                    for_ci=True)
+                self.freeze_graph(
+                    True,
+                    seed=1,
+                    activation_quant_type='moving_average_abs_max',
+                    bias_correction=True,
                     weight_quant_type='channel_wise_abs_max',
                     for_ci=True)
 

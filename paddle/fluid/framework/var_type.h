@@ -13,7 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-#include "paddle/fluid/framework/framework.pb.h"
 #include "paddle/fluid/framework/lod_rank_table.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/lod_tensor_array.h"
@@ -36,10 +35,12 @@ inline proto::VarType::Type ToVarType(int type) {
     case proto::VarType::SELECTED_ROWS:
     case proto::VarType::LOD_RANK_TABLE:
     case proto::VarType::LOD_TENSOR_ARRAY:
+    case proto::VarType::FETCH_LIST:
     case proto::VarType::READER:
       return static_cast<proto::VarType::Type>(type);
     default:
-      PADDLE_THROW("ToVarType:Unsupported type %d", type);
+      PADDLE_THROW(platform::errors::Unavailable(
+          "ToVarType method Unsupported type %d.", type));
   }
 }
 
@@ -61,8 +62,12 @@ inline void VisitVarType(const framework::Variable& var, Visitor visitor) {
     case proto::VarType::READER:
       visitor(var.Get<ReaderHolder>());
       return;
+    case proto::VarType::FETCH_LIST:
+      visitor(var.Get<FetchList>());
+      return;
     default:
-      PADDLE_THROW("Not supported visit type, %s", ToTypeName(var.Type()));
+      PADDLE_THROW(platform::errors::Unavailable("Not supported visit type %s.",
+                                                 ToTypeName(var.Type())));
   }
 }
 

@@ -18,6 +18,7 @@ limitations under the License. */
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
 #include "paddle/fluid/framework/attribute.h"
 #include "paddle/fluid/framework/type_defs.h"
 #include "paddle/fluid/framework/var_desc.h"
@@ -27,6 +28,7 @@ namespace framework {
 
 class BlockDesc;
 class ProgramDesc;
+
 class OpDesc {
  public:
   OpDesc() {}
@@ -57,10 +59,13 @@ class OpDesc {
 
   const std::vector<std::string> &Output(const std::string &name) const;
 
+  bool HasOutput(const std::string &name) const;
+
   std::vector<std::string> OutputArgumentNames() const;
 
   void SetOutput(const std::string &param_name,
                  const std::vector<std::string> &args);
+  void RemoveOutput(const std::string &name);
 
   bool HasAttr(const std::string &name) const {
     return attrs_.find(name) != attrs_.end();
@@ -85,7 +90,7 @@ class OpDesc {
   T GetAttrIfExists(const std::string &name) const {
     T result{};
     if (HasAttr(name)) {
-      result = boost::get<T>(GetAttr(name));
+      result = BOOST_GET_CONST(T, GetAttr(name));
     }
     return result;
   }

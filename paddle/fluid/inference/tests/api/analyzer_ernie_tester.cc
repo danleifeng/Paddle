@@ -143,7 +143,7 @@ void SetConfig(AnalysisConfig *cfg, bool use_mkldnn = false,
   }
   cfg->SwitchSpecifyInputNames();
   cfg->SwitchIrOptim();
-  cfg->SetCpuMathLibraryNumThreads(FLAGS_paddle_num_threads);
+  cfg->SetCpuMathLibraryNumThreads(FLAGS_cpu_num_threads);
 }
 
 void profile(bool use_mkldnn = false, bool use_gpu = false) {
@@ -163,7 +163,7 @@ TEST(Analyzer_ernie, profile_mkldnn) { profile(true, false); }
 #endif
 
 // Check the model by gpu
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 TEST(Analyzer_ernie, profile_gpu) { profile(false, true); }
 #endif
 

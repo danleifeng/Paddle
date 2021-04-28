@@ -19,7 +19,8 @@
 #include <tuple>
 #include <typeindex>
 #include <vector>
-#include "paddle/fluid/framework/framework.pb.h"
+
+#include "paddle/fluid/framework/feed_fetch_type.h"
 #include "paddle/fluid/framework/lod_tensor_array.h"
 #include "paddle/fluid/platform/place.h"
 #ifdef PADDLE_WITH_CUDA
@@ -28,26 +29,49 @@
 #include <nccl.h>
 #endif
 #endif
+#ifdef PADDLE_WITH_HIP
+#include <miopen/miopen.h>
+#ifdef PADDLE_WITH_RCCL
+#include <rccl.h>
+#endif
+#endif
+
+#ifdef PADDLE_WITH_ASCEND_CL
+#include <hccl/hccl.h>
+#include <hccl/hccl_types.h>
+#endif
+
+#if defined(PADDLE_WITH_XPU_BKCL)
+#include "xpu/bkcl.h"
+#endif
 
 // Users should add forward declarations here
 namespace paddle {
 
 namespace platform {
-#ifdef PADDLE_WITH_CUDA
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 class Communicator;
 class NCCLCommunicator;
 #endif
 #endif
+#ifdef PADDLE_WITH_ASCEND_CL
+class Communicator;
+class HCCLCommunicator;
+#endif
+
+#if defined(PADDLE_WITH_XPU_BKCL)
+class BKCLCommunicator;
+#endif
 }  // namespace platform
 
 namespace framework {
-class Tensor;
-class LoDTensor;
-class SelectedRows;
 class LoDRankTable;
+class LoDTensor;
 class ReaderHolder;
 class Scope;
+class SelectedRows;
+class Tensor;
 }  // namespace framework
 
 namespace operators {
@@ -56,6 +80,7 @@ class CudnnRNNCache;
 
 namespace reader {
 class LoDTensorBlockingQueueHolder;
+class OrderedMultiDeviceLoDTensorBlockingQueueHolder;
 }  // namespace reader
 }  // namespace operators
 
@@ -138,12 +163,19 @@ struct VarTypeRegistryImpl {
 using VarTypeRegistry = detail::VarTypeRegistryImpl<
     Tensor, LoDTensor, SelectedRows, std::vector<Scope *>, LoDRankTable,
     LoDTensorArray, platform::PlaceList, ReaderHolder, std::string, Scope *,
-    operators::reader::LoDTensorBlockingQueueHolder,
-#ifdef PADDLE_WITH_CUDA
-#if defined(PADDLE_WITH_NCCL)
+    operators::reader::LoDTensorBlockingQueueHolder, FetchList,
+    operators::reader::OrderedMultiDeviceLoDTensorBlockingQueueHolder,
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     ncclUniqueId, platform::Communicator, platform::NCCLCommunicator,
 #endif
     operators::CudnnRNNCache,
+#endif
+#if defined(PADDLE_WITH_ASCEND_CL)
+    HcclRootInfo,
+#endif
+#if defined(PADDLE_WITH_XPU_BKCL)
+    BKCLUniqueId, platform::BKCLCommunicator,
 #endif
     int, float>;
 
@@ -176,6 +208,7 @@ REG_PROTO_VAR_TYPE_TRAIT(LoDRankTable, proto::VarType::LOD_RANK_TABLE);
 REG_PROTO_VAR_TYPE_TRAIT(LoDTensorArray, proto::VarType::LOD_TENSOR_ARRAY);
 REG_PROTO_VAR_TYPE_TRAIT(platform::PlaceList, proto::VarType::PLACE_LIST);
 REG_PROTO_VAR_TYPE_TRAIT(ReaderHolder, proto::VarType::READER);
+REG_PROTO_VAR_TYPE_TRAIT(FetchList, proto::VarType::FETCH_LIST);
 REG_PROTO_VAR_TYPE_TRAIT(int, proto::VarType::INT32);
 REG_PROTO_VAR_TYPE_TRAIT(float, proto::VarType::FP32);
 

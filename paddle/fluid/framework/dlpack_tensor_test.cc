@@ -15,7 +15,12 @@
 #include "paddle/fluid/framework/dlpack_tensor.h"
 #include <glog/logging.h>
 #include <gtest/gtest.h>
-#include <vector>
+
+namespace paddle {
+namespace platform {
+struct float16;
+}  // namespace platform
+}  // namespace paddle
 
 namespace paddle {
 namespace framework {
@@ -49,7 +54,7 @@ void TestMain(const platform::Place &place, uint16_t lanes) {
     CHECK_EQ(0, dl_tensor.ctx.device_id);
   } else if (platform::is_gpu_place(place)) {
     CHECK_EQ(kDLGPU, dl_tensor.ctx.device_type);
-    CHECK_EQ(boost::get<platform::CUDAPlace>(place).device,
+    CHECK_EQ(BOOST_GET_CONST(platform::CUDAPlace, place).device,
              dl_tensor.ctx.device_id);
   } else if (platform::is_cuda_pinned_place(place)) {
     CHECK_EQ(kDLCPUPinned, dl_tensor.ctx.device_type);
@@ -98,7 +103,7 @@ void TestToCudfCompatibleDLManagedTensor(const platform::Place &place,
 
 template <typename T>
 void TestMainLoop() {
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   std::vector<platform::Place> places{platform::CPUPlace(),
                                       platform::CUDAPlace(0),
                                       platform::CUDAPinnedPlace()};

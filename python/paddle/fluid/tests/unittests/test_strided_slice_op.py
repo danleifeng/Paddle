@@ -16,6 +16,9 @@ from op_test import OpTest
 import numpy as np
 import unittest
 import paddle.fluid as fluid
+import paddle
+
+paddle.enable_static()
 
 
 def strided_slice_native_forward(input, axes, starts, ends, strides):
@@ -444,11 +447,11 @@ class TestStridedSliceAPI(unittest.TestCase):
         minus_1 = fluid.layers.fill_constant([1], "int32", -1)
         minus_3 = fluid.layers.fill_constant([1], "int32", -3)
         starts = fluid.layers.data(
-            name='starts', shape=[3], append_batch_size=False)
+            name='starts', shape=[3], dtype='int32', append_batch_size=False)
         ends = fluid.layers.data(
-            name='ends', shape=[3], append_batch_size=False)
+            name='ends', shape=[3], dtype='int32', append_batch_size=False)
         strides = fluid.layers.data(
-            name='strides', shape=[3], append_batch_size=False)
+            name='strides', shape=[3], dtype='int32', append_batch_size=False)
 
         x = fluid.layers.data(
             name="x",
@@ -486,7 +489,7 @@ class TestStridedSliceAPI(unittest.TestCase):
             feed={
                 "x": input,
                 'starts': np.array([-3, 0, 2]).astype("int32"),
-                'ends': np.array([3, 100, -1]).astype("int32"),
+                'ends': np.array([3, 2147483648, -1]).astype("int64"),
                 'strides': np.array([1, 1, 1]).astype("int32")
             },
             fetch_list=[out_1, out_2, out_3, out_4, out_5, out_6, out_7])
@@ -497,6 +500,27 @@ class TestStridedSliceAPI(unittest.TestCase):
         assert np.array_equal(res_5, input[-3:3, 0:100:2, -1:2:-1, :])
         assert np.array_equal(res_6, input[-3:3, 0:100:2, :, -1:2:-1])
         assert np.array_equal(res_7, input[-1, 0:100:2, :, -1:2:-1])
+
+    def test_dygraph_op(self):
+        x = paddle.zeros(shape=[3, 4, 5, 6], dtype="float32")
+        axes = [1, 2, 3]
+        starts = [-3, 0, 2]
+        ends = [3, 2, 4]
+        strides_1 = [1, 1, 1]
+        sliced_1 = paddle.strided_slice(
+            x, axes=axes, starts=starts, ends=ends, strides=strides_1)
+        assert sliced_1.shape == (3, 2, 2, 2)
+
+    @unittest.skipIf(not paddle.is_compiled_with_cuda(),
+                     "Cannot use CUDAPinnedPlace in CPU only version")
+    def test_cuda_pinned_place(self):
+        with paddle.fluid.dygraph.guard():
+            x = paddle.to_tensor(
+                np.random.randn(2, 10), place=paddle.CUDAPinnedPlace())
+            self.assertTrue(x.place.is_cuda_pinned_place())
+            y = x[:, ::2]
+            self.assertFalse(x.place.is_cuda_pinned_place())
+            self.assertFalse(y.place.is_cuda_pinned_place())
 
 
 if __name__ == "__main__":

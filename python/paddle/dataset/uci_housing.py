@@ -27,8 +27,7 @@ import tempfile
 import tarfile
 import os
 import paddle.dataset.common
-
-__all__ = ['train', 'test']
+import paddle.utils.deprecated as deprecated
 
 URL = 'http://paddlemodels.bj.bcebos.com/uci_housing/housing.data'
 MD5 = 'd4accdce7a25600298819f8e28e8d593'
@@ -74,7 +73,8 @@ def load_data(filename, feature_num=14, ratio=0.8):
     data = data.reshape(data.shape[0] // feature_num, feature_num)
     maximums, minimums, avgs = data.max(axis=0), data.min(axis=0), data.sum(
         axis=0) / data.shape[0]
-    feature_range(maximums[:-1], minimums[:-1])
+    # if you want to print the distribution of input data, you could use function of feature_range
+    #feature_range(maximums[:-1], minimums[:-1])
     for i in six.moves.range(feature_num - 1):
         data[:, i] = (data[:, i] - avgs[i]) / (maximums[i] - minimums[i])
     offset = int(data.shape[0] * ratio)
@@ -82,6 +82,10 @@ def load_data(filename, feature_num=14, ratio=0.8):
     UCI_TEST_DATA = data[offset:]
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.text.datasets.UCIHousing",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def train():
     """
     UCI_HOUSING training set creator.
@@ -102,6 +106,10 @@ def train():
     return reader
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.text.datasets.UCIHousing",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def test():
     """
     UCI_HOUSING test set creator.
@@ -133,6 +141,10 @@ def fluid_model():
     return dirpath
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.text.datasets.UCIHousing",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def predict_reader():
     """
     It returns just one tuple data to do inference.
@@ -145,5 +157,9 @@ def predict_reader():
     return (UCI_TEST_DATA[0][:-1], )
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.text.datasets.UCIHousing",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def fetch():
     paddle.dataset.common.download(URL, 'uci_housing', MD5)

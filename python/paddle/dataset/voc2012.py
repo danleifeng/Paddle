@@ -26,9 +26,8 @@ import io
 import numpy as np
 from paddle.dataset.common import download
 from paddle.dataset.image import *
+import paddle.utils.deprecated as deprecated
 from PIL import Image
-
-__all__ = ['train', 'test', 'val']
 
 VOC_URL = 'http://host.robots.ox.ac.uk/pascal/VOC/voc2012/\
 VOCtrainval_11-May-2012.tar'
@@ -66,6 +65,10 @@ def reader_creator(filename, sub_name):
     return reader
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.vision.datasets.VOC2012",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def train():
     """
     Create a train dataset reader containing 2913 images in HWC order.
@@ -73,6 +76,10 @@ def train():
     return reader_creator(download(VOC_URL, CACHE_DIR, VOC_MD5), 'trainval')
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.vision.datasets.VOC2012",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def test():
     """
     Create a test dataset reader containing 1464 images in HWC order.
@@ -80,6 +87,10 @@ def test():
     return reader_creator(download(VOC_URL, CACHE_DIR, VOC_MD5), 'train')
 
 
+@deprecated(
+    since="2.0.0",
+    update_to="paddle.vision.datasets.VOC2012",
+    reason="Please use new dataset API which supports paddle.io.DataLoader")
 def val():
     """
     Create a val dataset reader containing 1449 images in HWC order.

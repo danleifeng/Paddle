@@ -27,11 +27,9 @@ limitations under the License. */
 #include "glog/logging.h"  // For VLOG
 #include "paddle/fluid/framework/attribute.h"
 #include "paddle/fluid/framework/block_desc.h"
-#include "paddle/fluid/framework/framework.pb.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/op_kernel_type.h"
-#include "paddle/fluid/framework/operator_kernel_configs.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/selected_rows.h"
 #include "paddle/fluid/framework/tensor.h"
@@ -39,6 +37,15 @@ limitations under the License. */
 #include "paddle/fluid/memory/malloc.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/variant.h"
+
+namespace paddle {
+namespace framework {
+class InferShapeContext;
+class OpInfo;
+class Scope;
+class Variable;
+}  // namespace framework
+}  // namespace paddle
 
 DECLARE_int32(inner_op_parallelism);
 
@@ -106,8 +113,8 @@ inline std::string GradOriginalVarName(const std::string& grad_var_name) {
 const Tensor* GetLoDTensorOrSelectedRowsValueFromVar(const Variable& var);
 Tensor* GetMutableLoDTensorOrSelectedRowsValueFromVar(Variable* var);
 
-class OperatorBase;
 class ExecutionContext;
+class OperatorBase;
 
 class RuntimeContext {
  public:
@@ -153,9 +160,18 @@ class OperatorBase {
   bool HasAttr(const std::string& name) const { return attrs_.count(name); }
   template <typename T>
   inline const T& Attr(const std::string& name) const {
-    PADDLE_ENFORCE(attrs_.find(name) != attrs_.end(),
-                   "%s should be in AttributeMap", name);
-    return boost::get<T>(attrs_.at(name));
+    PADDLE_ENFORCE_NE(
+        attrs_.find(name), attrs_.end(),
+        platform::errors::NotFound("(%s) is not found in AttributeMap.", name));
+    return BOOST_GET_CONST(T, attrs_.at(name));
+  }
+  void SetAttr(const std::string& name, const Attribute& v) {
+    PADDLE_ENFORCE_EQ(
+        HasAttr(name), true,
+        platform::errors::NotFound(
+            "The attribute %s is not found in operator %s", name, Type()));
+
+    attrs_[name] = v;
   }
   const AttributeMap& Attrs() const { return attrs_; }
 
@@ -163,7 +179,9 @@ class OperatorBase {
   const VariableNameMap& Outputs() const { return outputs_; }
 
   const OpInfo& Info() const {
-    PADDLE_ENFORCE_NOT_NULL(info_, "OpInfo of %s is not found", type_);
+    PADDLE_ENFORCE_NOT_NULL(
+        info_, platform::errors::NotFound(
+                   "OpInfo of operator (%s) is not found.", type_));
     return *info_;
   }
 
@@ -189,6 +207,11 @@ class OperatorBase {
   virtual void RuntimeInferShape(const Scope& scope,
                                  const platform::Place& place,
                                  const RuntimeContext& ctx) const {}
+
+  virtual platform::Place GetExecutionPlace(
+      const platform::Place& place) const {
+    return place;
+  }
 
  protected:
   std::string type_;
@@ -216,30 +239,12 @@ class OperatorBase {
                        const platform::Place& place) const = 0;
 };
 
-#ifdef PADDLE_WITH_CUDA
-using KernelConfig = boost::variant<
-    std::shared_ptr<AlgorithmsCache<cudnnConvolutionFwdAlgo_t>>,
-    std::shared_ptr<AlgorithmsCache<cudnnConvolutionBwdDataAlgo_t>>,
-    std::shared_ptr<AlgorithmsCache<cudnnConvolutionBwdFilterAlgo_t>>>;
-#else
-using KernelConfig = boost::variant<boost::blank>;
-#endif
-
-using OpKernelConfigsMap =
-    std::unordered_map<OpKernelType, std::vector<KernelConfig>,
-                       OpKernelType::Hash>;
-
 class ExecutionContext {
  public:
   ExecutionContext(const OperatorBase& op, const Scope& scope,
                    const platform::DeviceContext& device_context,
-                   const RuntimeContext& ctx,
-                   std::vector<KernelConfig>* configs)
-      : op_(op),
-        scope_(scope),
-        device_context_(device_context),
-        ctx_(ctx),
-        kernel_configs_(configs) {}
+                   const RuntimeContext& ctx)
+      : op_(op), scope_(scope), device_context_(device_context), ctx_(ctx) {}
   virtual ~ExecutionContext() {}
 
   virtual std::string InputName(const std::string& name) const {
@@ -267,7 +272,7 @@ class ExecutionContext {
 
   template <typename T>
   inline const T& Attr(const std::string& name) const {
-    return boost::get<T>(GetAttr(name));
+    return BOOST_GET_CONST(T, GetAttr(name));
   }
 
   virtual const Attribute& GetAttr(const std::string& name) const {
@@ -378,9 +383,11 @@ class ExecutionContext {
     return device_context_;
   }
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   const inline platform::CUDADeviceContext& cuda_device_context() const {
-    PADDLE_ENFORCE_EQ(platform::is_gpu_place(device_context_.GetPlace()), true);
+    PADDLE_ENFORCE_EQ(platform::is_gpu_place(device_context_.GetPlace()), true,
+                      platform::errors::PreconditionNotMet(
+                          "Current device context place is not GPUPlace."));
     return *reinterpret_cast<const platform::CUDADeviceContext*>(
         &device_context_);
   }
@@ -395,8 +402,12 @@ class ExecutionContext {
     auto shared_allocation = std::shared_ptr<memory::allocation::Allocation>(
         allocation_ptr, deleter);
 
-    PADDLE_ENFORCE_GE(allocation_ptr->size(),
-                      framework::product(dim) * sizeof(T));
+    PADDLE_ENFORCE_GE(
+        allocation_ptr->size(), framework::product(dim) * sizeof(T),
+        platform::errors::PreconditionNotMet(
+            "The data memory size(%d) is less than the tensor needed memory "
+            "size(%d).",
+            allocation_ptr->size(), framework::product(dim) * sizeof(T)));
 
     paddle::framework::Tensor temp_tensor(
         framework::ToDataType(std::type_index(typeid(T))));
@@ -405,25 +416,16 @@ class ExecutionContext {
     return temp_tensor;
   }
 
-  template <typename T>
-  T& GetKernelConfig(size_t idx) const {
-    PADDLE_ENFORCE(
-        kernel_configs_ && kernel_configs_->size() > static_cast<size_t>(idx),
-        "%s selected kernel doesn't have kernel config %lu <= %lu",
-        op_.Type().c_str(), kernel_configs_->size(), idx);
-    return *boost::get<std::shared_ptr<T>>((*kernel_configs_)[idx]);
-  }
-
   const RuntimeContext Context() const { return ctx_; }
 
   std::string DebugString() const { return op_.DebugString(); }
+  const OperatorBase& GetOp() const { return op_; }
 
  private:
   const OperatorBase& op_;
   const Scope& scope_;
   const platform::DeviceContext& device_context_;
   const RuntimeContext& ctx_;
-  mutable std::vector<KernelConfig>* kernel_configs_;
 };
 
 template <>
@@ -488,6 +490,10 @@ class OperatorWithKernel : public OperatorBase {
                          return platform::is_gpu_place(kern_pair.first.place_);
                        });
   }
+  bool SupportsMKLDNN(proto::VarType::Type data_type) const;
+
+  bool CanMKLDNNBeUsed(const framework::ExecutionContext& ctx,
+                       proto::VarType::Type data_type) const;
 
   virtual void InferShape(InferShapeContext* ctx) const = 0;
 
@@ -497,9 +503,11 @@ class OperatorWithKernel : public OperatorBase {
   proto::VarType::Type IndicateVarDataType(const ExecutionContext& ctx,
                                            const std::string& name) const;
 
-  virtual OpKernelType GetExpectedKernelType(const ExecutionContext& ctx) const;
+  proto::VarType::Type IndicateOrPromoteVarDataTypes(
+      const ExecutionContext& ctx, const std::string& name1,
+      const std::string& name2) const;
 
-  std::vector<KernelConfig>* GetKernelConfig(const OpKernelType& key) const;
+  virtual OpKernelType GetExpectedKernelType(const ExecutionContext& ctx) const;
 
   // change this to public so that in dygraph mode we can call it to check if we
   // need transform data
@@ -507,12 +515,12 @@ class OperatorWithKernel : public OperatorBase {
       const std::string& var_name, const Tensor& tensor,
       const OpKernelType& expected_kernel_type) const;
 
+  platform::Place GetExecutionPlace(
+      const platform::Place& platform) const override {
+    return kernel_type_->place_;
+  }
+
  private:
-  void ParseInputDataType(const ExecutionContext& ctx, const std::string& name,
-                          proto::VarType::Type* type) const;
-  // indicate kernel DataType by input data. By default all input data must be
-  // same.
-  proto::VarType::Type IndicateDataType(const ExecutionContext& ctx) const;
   void RunImpl(const Scope& scope, const platform::Place& place) const final;
   void RunImpl(const Scope& scope, const platform::Place& place,
                RuntimeContext* runtime_ctx) const;
@@ -536,8 +544,21 @@ class OperatorWithKernel : public OperatorBase {
   void ChooseKernel(const RuntimeContext& ctx, const Scope& scope,
                     const platform::Place& place) const;
 
+  void HandleComplexGradToRealGrad(const Scope& scope,
+                                   RuntimeContext* ctx) const;
+
+  /* Inner assist methods */
+  // indicate kernel DataType by input data.
+  // By default all input data must be same.
+  proto::VarType::Type IndicateDataType(const ExecutionContext& ctx) const;
+  // used for IndicateDataType
+  void ParseInputDataType(const ExecutionContext& ctx, const std::string& name,
+                          proto::VarType::Type* type) const;
+  // used for IndicateOrPromoteVarDataTypes
+  Tensor* GetTensorFormInputSafely(const ExecutionContext& ctx,
+                                   const std::string& name) const;
+
  protected:
-  mutable OpKernelConfigsMap kernel_configs_map_;
   mutable std::unique_ptr<OpKernelType> kernel_type_;
   mutable std::unique_ptr<OpKernelFunc> kernel_func_;
   mutable std::unique_ptr<RuntimeContext> runtime_ctx_;

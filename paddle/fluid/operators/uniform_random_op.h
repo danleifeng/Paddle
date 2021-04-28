@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 #include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/framework/operator.h"
 
 namespace paddle {
 namespace operators {
@@ -49,7 +50,10 @@ inline std::vector<int64_t> GetNewDataFromShapeTensor(
     }
     return vec_new_data;
   } else {
-    PADDLE_THROW("The dtype of shape tensor must be int32 or int64.");
+    PADDLE_THROW(platform::errors::InvalidArgument(
+        "Expected dtype of ShapeTensor must be int32, int64. But got "
+        "unsupport dtype: %s.",
+        paddle::framework::DataTypeToString(new_data_tensor->type())));
   }
 }
 
@@ -59,8 +63,12 @@ inline std::vector<int64_t> GetNewDataFromShapeTensorList(
   vec_new_shape.reserve(list_new_shape_tensor.size());
   for (size_t i = 0; i < list_new_shape_tensor.size(); ++i) {
     auto tensor = list_new_shape_tensor[i];
-    PADDLE_ENFORCE_EQ(tensor->dims(), framework::make_ddim({1}),
-                      "shape of dim tensor should be [1]");
+    PADDLE_ENFORCE_EQ(
+        tensor->dims(), framework::make_ddim({1}),
+        platform::errors::InvalidArgument(
+            "Shape of dim tensor in uniform_random_op should be [1]"
+            "But received tensor's dim=%s.",
+            tensor->dims()));
 
     if (tensor->type() == framework::proto::VarType::INT32) {
       if (platform::is_gpu_place(tensor->place())) {
@@ -79,7 +87,11 @@ inline std::vector<int64_t> GetNewDataFromShapeTensorList(
         vec_new_shape.push_back(*tensor->data<int64_t>());
       }
     } else {
-      PADDLE_THROW("The dtype of shape tensor must be int32 or int64.");
+      PADDLE_THROW(platform::errors::InvalidArgument(
+          "Expected dtype of ShapeTensorList of %d-th must be int32, int64. "
+          "But got "
+          "unsupport dtype: %s.",
+          i, paddle::framework::DataTypeToString(tensor->type())));
     }
   }
 

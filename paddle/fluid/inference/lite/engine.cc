@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #define LITE_WITH_CUDA 1
 #endif
 
-#include "paddle/fluid/inference/lite/engine.h"
-#include "lite/core/context.h"
-#include "lite/core/device_info.h"
+#ifdef LITE_SUBGRAPH_WITH_XPU
+#define LITE_WITH_XPU 1
+#endif
 
-#include "lite/api/paddle_use_kernels.h"
-#include "lite/api/paddle_use_ops.h"
-#include "lite/api/paddle_use_passes.h"
+#ifndef PADDLE_WITH_ARM
+#define LITE_WITH_X86 1
+#endif
+
+#include "paddle/fluid/inference/lite/engine.h"
+#include <utility>
 
 namespace paddle {
 namespace inference {
@@ -37,25 +40,45 @@ bool EngineManager::Has(const std::string& name) const {
   return engines_.at(name).get() != nullptr;
 }
 
-paddle::lite::Predictor* EngineManager::Get(const std::string& name) const {
+paddle::lite_api::PaddlePredictor* EngineManager::Get(
+    const std::string& name) const {
   return engines_.at(name).get();
 }
 
-paddle::lite::Predictor* EngineManager::Create(const std::string& name,
-                                               const EngineConfig& cfg) {
-  auto* p = new paddle::lite::Predictor();
-#ifdef PADDLE_WITH_CUDA
-  paddle::lite::Env<TARGET(kCUDA)>::Init();
+paddle::lite_api::PaddlePredictor* EngineManager::Create(
+    const std::string& name, const EngineConfig& cfg) {
+  // config info for predictor.
+  paddle::lite_api::CxxConfig lite_cxx_config;
+  lite_cxx_config.set_model_buffer(cfg.model.c_str(), cfg.model.size(),
+                                   cfg.param.c_str(), cfg.param.size());
+  lite_cxx_config.set_valid_places(cfg.valid_places);
+#ifdef PADDLE_WITH_ARM
+  lite_cxx_config.set_threads(cfg.cpu_math_library_num_threads);
+#else
+  lite_cxx_config.set_x86_math_num_threads(cfg.cpu_math_library_num_threads);
 #endif
-  p->Build("", cfg.model, cfg.param, cfg.valid_places, cfg.neglected_passes,
-           cfg.model_type, cfg.model_from_memory);
-  engines_[name].reset(p);
-  return p;
+
+#ifdef LITE_SUBGRAPH_WITH_XPU
+  // Deprecated in Paddle-Lite release/v2.8
+  lite_cxx_config.set_xpu_workspace_l3_size_per_thread(
+      cfg.xpu_l3_workspace_size);
+  lite_cxx_config.set_xpu_l3_cache_method(cfg.xpu_l3_workspace_size,
+                                          cfg.locked);
+  lite_cxx_config.set_xpu_conv_autotune(cfg.autotune, cfg.autotune_file);
+  lite_cxx_config.set_xpu_multi_encoder_method(cfg.precision,
+                                               cfg.adaptive_seqlen);
+#endif
+
+  // create predictor
+  std::shared_ptr<paddle::lite_api::PaddlePredictor> p =
+      paddle::lite_api::CreatePaddlePredictor(lite_cxx_config);
+  engines_[name] = std::move(p);
+  return engines_[name].get();
 }
 
 void EngineManager::DeleteAll() {
   for (auto& item : engines_) {
-    item.second.reset(nullptr);
+    item.second.reset();
   }
 }
 
