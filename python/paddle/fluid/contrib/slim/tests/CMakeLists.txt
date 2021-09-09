@@ -43,6 +43,12 @@ function(download_quant_fp32_model install_dir data_file check_sum)
     endif()
 endfunction()
 
+function(download_lstm_model install_dir data_file check_sum)
+    if (NOT EXISTS ${install_dir}/${data_file})
+	    inference_download_and_uncompress(${install_dir} ${INFERENCE_URL}/lstm ${data_file} ${check_sum})
+    endif()
+endfunction()
+
 function(inference_quant_int8_image_classification_test target quant_model_dir dataset_path)
     py_test(${target} SRCS "${CMAKE_CURRENT_SOURCE_DIR}/quant_int8_image_classification_comparison.py"
             ENVS FLAGS_OMP_NUM_THREADS=${CPU_NUM_THREADS_ON_CI}
@@ -86,6 +92,20 @@ function(inference_quant2_int8_nlp_test target quant_model_dir fp32_model_dir da
 		 --ops_to_quantize ${ops_to_quantize})
 endfunction()
 
+function(inference_quant2_int8_lstm_model_test target fp32_model dataset_path)
+    py_test(${target} SRCS "${CMAKE_CURRENT_SOURCE_DIR}/quant2_int8_lstm_model.py"
+            ENVS FLAGS_OMP_NUM_THREADS=${CPU_NUM_THREADS_ON_CI}
+                 OMP_NUM_THREADS=${CPU_NUM_THREADS_ON_CI}
+                 FLAGS_use_mkldnn=true
+            ARGS --fp32_model ${fp32_model}
+                 --infer_data ${dataset_path}
+                 --num_threads 4
+                 --mkldnn_cache_capacity 100
+                 --warmup_iter 100
+                 --warmup_batch_size 1
+                 --acc_diff_threshold 0.11)
+endfunction()
+
 function(download_quant_data install_dir data_file check_sum)
     if (NOT EXISTS ${install_dir}/${data_file})
            inference_download_and_uncompress(${install_dir} ${INFERENCE_URL}/int8 ${data_file} ${check_sum})
@@ -125,8 +145,10 @@ if(WIN32)
 	list(REMOVE_ITEM TEST_OPS test_post_training_quantization_mobilenetv1)
 	list(REMOVE_ITEM TEST_OPS test_post_training_quantization_resnet50)
 	list(REMOVE_ITEM TEST_OPS test_post_training_quantization_lstm_model)
+	list(REMOVE_ITEM TEST_OPS test_imperative_ptq)
 	list(REMOVE_ITEM TEST_OPS test_weight_quantization_mobilenetv1)
 	list(REMOVE_ITEM TEST_OPS test_quantize_transpiler_v2)
+	list(REMOVE_ITEM TEST_OPS test_imperative_qat_amp)
 endif()
 
 if(LINUX AND WITH_MKLDNN)
@@ -258,6 +280,16 @@ if(LINUX AND WITH_MKLDNN)
 	set(QUANT2_INT8_ERNIE_DOT_SAVE_PATH "${QUANT_INSTALL_DIR}/Ernie_quant2_int8_dot_file")
 	convert_model2dot_test(convert_model2dot_ernie ${QUANT2_ERNIE_MODEL_DIR}/Ernie_qat/float ${QUANT2_INT8_ERNIE_DOT_SAVE_PATH} "Ernie_quant2_int8")
 
+	### PTQ INT8
+
+	# PTQ int8 lstm model
+	set(LSTM_DATA_ARCHIVE "unittest_model_data/quant_lstm_input_data.tar.gz")
+	set(QUANT2_INT8_LSTM_SAVE_PATH "${QUANT_INSTALL_DIR}/lstm_quant2")
+	download_quant_data(${QUANT2_INT8_LSTM_SAVE_PATH} ${LSTM_DATA_ARCHIVE} add84c754e9b792fea1fbd728d134ab7)
+	set(QUANT2_FP32_LSTM_MODEL_ARCHIVE "lstm_fp32_model.tar.gz")
+	download_lstm_model(${QUANT2_INT8_LSTM_SAVE_PATH} ${QUANT2_FP32_LSTM_MODEL_ARCHIVE} eecd9f44d69a84acc1cf2235c4b8b743)
+	inference_quant2_int8_lstm_model_test(test_quant2_int8_lstm_mkldnn ${QUANT2_INT8_LSTM_SAVE_PATH}/lstm_fp32_model ${QUANT2_INT8_LSTM_SAVE_PATH}/quant_lstm_input_data)
+
 endif()
 
 # Since the tests for Quant & INT8 comparison support only testing on Linux 
@@ -299,6 +331,7 @@ if(NOT WIN32)
     set_tests_properties(test_post_training_quantization_mobilenetv1 PROPERTIES TIMEOUT 600 LABELS "RUN_TYPE=NIGHTLY")
     set_tests_properties(test_post_training_quantization_resnet50 PROPERTIES TIMEOUT 600 LABELS "RUN_TYPE=NIGHTLY")
     set_tests_properties(test_post_training_quantization_mnist PROPERTIES TIMEOUT 120)
+    set_tests_properties(test_imperative_ptq PROPERTIES TIMEOUT 120)
     set_tests_properties(test_weight_quantization_mobilenetv1 PROPERTIES TIMEOUT 120)
 endif()
 
@@ -320,4 +353,5 @@ if(LINUX AND WITH_MKLDNN)
     set_tests_properties(test_quant2_int8_ernie_mkldnn PROPERTIES TIMEOUT 120)
     set_tests_properties(test_quant_int8_googlenet_mkldnn PROPERTIES TIMEOUT 120)
     set_tests_properties(test_quant2_int8_resnet50_mkldnn PROPERTIES TIMEOUT 120)
+	set_tests_properties(test_quant2_int8_lstm_mkldnn PROPERTIES TIMEOUT 120)
 endif()
