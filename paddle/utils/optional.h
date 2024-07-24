@@ -17,15 +17,17 @@
 // You are welcome to contact the author at:
 //  fernando_cacciola@hotmail.com
 //
-#ifndef PADDLE_OPTIONAL_OPTIONAL_FLC_19NOV2002_HPP
-#define PADDLE_OPTIONAL_OPTIONAL_FLC_19NOV2002_HPP
+#pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <functional>
 #include <new>
 #include <type_traits>
 
 #include "none.h"
+
+namespace paddle {
 
 // Daniel Wallin discovered that bind/apply.hpp badly interacts with the apply<>
 // member template of a factory as used in the optional<> implementation.
@@ -36,9 +38,8 @@ template <class T, class Factory>
 void construct(Factory const& factory, void* address) {
   factory.template apply<T>(address);
 }
-}
+}  // namespace paddle_optional_detail
 
-namespace paddle {
 template <typename T>
 class optional;
 
@@ -60,8 +61,10 @@ inline bool equal_pointees(OptionalPointee const& x, OptionalPointee const& y) {
 }
 
 template <class OptionalPointee>
-struct equal_pointees_t
-    : std::binary_function<OptionalPointee, OptionalPointee, bool> {
+struct equal_pointees_t {
+  using first_argument_type = OptionalPointee;
+  using second_argument_type = OptionalPointee;
+  using result_type = bool;
   bool operator()(OptionalPointee const& x, OptionalPointee const& y) const {
     return equal_pointees(x, y);
   }
@@ -82,8 +85,10 @@ inline bool less_pointees(OptionalPointee const& x, OptionalPointee const& y) {
 }
 
 template <class OptionalPointee>
-struct less_pointees_t
-    : std::binary_function<OptionalPointee, OptionalPointee, bool> {
+struct less_pointees_t {
+  using first_argument_type = OptionalPointee;
+  using second_argument_type = OptionalPointee;
+  using result_type = bool;
   bool operator()(OptionalPointee const& x, OptionalPointee const& y) const {
     return less_pointees(x, y);
   }
@@ -865,5 +870,3 @@ inline void optional_swap(optional<T>& x, optional<T>& y) {
 }  // namespace optional_detail
 
 }  // namespace paddle
-
-#endif

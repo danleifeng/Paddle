@@ -18,20 +18,14 @@
 
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class Node;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace patterns {
+namespace paddle::framework::ir::patterns {
 
-static PDNode* create_emb_vars(PDPattern* pattern, const std::string& name,
+static PDNode* create_emb_vars(PDPattern* pattern,
+                               const std::string& name,
                                const std::string& arg,
                                bool is_persist = false) {
   std::unordered_set<std::string> embedding_ops{"lookup_table",
@@ -41,7 +35,8 @@ static PDNode* create_emb_vars(PDPattern* pattern, const std::string& name,
   if (is_persist) return node->assert_is_persistable_var();
   return node;
 }
-static PDNode* create_emb_out_vars(PDPattern* pattern, const std::string& name,
+static PDNode* create_emb_out_vars(PDPattern* pattern,
+                                   const std::string& name,
                                    const std::string& arg) {
   std::unordered_set<std::string> embedding_ops{"lookup_table",
                                                 "lookup_table_v2"};
@@ -137,7 +132,8 @@ void SkipLayerNorm::operator()() {
       .LinksTo({layer_norm_out, layer_norm_mean_var, layer_norm_variance_var});
 }
 
-}  // namespace patterns
+}  // namespace paddle::framework::ir::patterns
+namespace paddle::framework::ir {
 
 int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
     Graph* graph, const std::string& name_scope
@@ -161,10 +157,10 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(lookup_table2_w, lookup_table2_w, start_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(lookup_table1, lookup_table1, start_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(lookup_table2, lookup_table2, start_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(lookup_table1_out, lookup_table1_out,
-                              start_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(lookup_table2_out, lookup_table2_out,
-                              start_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        lookup_table1_out, lookup_table1_out, start_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        lookup_table2_out, lookup_table2_out, start_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(eltwise_add, eltwise_add, start_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(eltwise_add_out, eltwise_add_out, start_pattern);
     if (!IsCompat(subgraph, graph)) {
@@ -172,14 +168,18 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
       return;
     }
     std::vector<std::pair<Node*, Node*>> ins;
-    ins.push_back(std::make_pair(lookup_table1_x, lookup_table1_w));
-    ins.push_back(std::make_pair(lookup_table2_x, lookup_table2_w));
+    ins.emplace_back(lookup_table1_x, lookup_table1_w);
+    ins.emplace_back(lookup_table2_x, lookup_table2_w);
     start_pattern_in_nodes.push_back(ins);
     start_pattern_out_node.push_back(eltwise_add_out);
 
     std::unordered_set<Node*> rm_nodes;
-    rm_nodes.insert({lookup_table1, lookup_table2, lookup_table1_out,
-                     lookup_table2_out, eltwise_add, eltwise_add_out});
+    rm_nodes.insert({lookup_table1,
+                     lookup_table2,
+                     lookup_table1_out,
+                     lookup_table2_out,
+                     eltwise_add,
+                     eltwise_add_out});
     start_pattern_remove_nodes.push_back(rm_nodes);
   };
   gpd(graph, handler);
@@ -199,8 +199,8 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(lookup_table1_x, lookup_table1_x, second_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(lookup_table1_w, lookup_table1_w, second_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(lookup_table1, lookup_table1, second_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(lookup_table1_out, lookup_table1_out,
-                              second_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        lookup_table1_out, lookup_table1_out, second_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(eltwise_add_in, eltwise_add_in, second_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(eltwise_add, eltwise_add, second_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(eltwise_add_out, eltwise_add_out, second_pattern);
@@ -224,7 +224,7 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
   std::vector<Node*> end_pattern_scales;
   std::vector<Node*> end_pattern_biases;
   std::vector<Node*> end_pattern_out;
-  std::vector<Node*> end_patter_layernorms;
+  std::vector<Node*> end_pattern_layernorms;
   std::vector<std::unordered_set<Node*>> end_pattern_remove_nodes;
   GraphPatternDetector gpd3;
   auto* pattern3 = gpd3.mutable_pattern();
@@ -234,19 +234,19 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
   auto handler3 = [&](const GraphPatternDetector::subgraph_t& subgraph,
                       Graph* g) {
     GET_IR_NODE_FROM_SUBGRAPH(eltwise_add, eltwise_add, skip_layernorm_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(eltwise_add_out, eltwise_add_out,
-                              skip_layernorm_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        eltwise_add_out, eltwise_add_out, skip_layernorm_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(layer_norm, layer_norm, skip_layernorm_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(layer_norm_out, layer_norm_out,
-                              skip_layernorm_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(layer_norm_bias, layer_norm_bias,
-                              skip_layernorm_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(layer_norm_scale, layer_norm_scale,
-                              skip_layernorm_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(layer_norm_mean, layer_norm_mean,
-                              skip_layernorm_pattern);
-    GET_IR_NODE_FROM_SUBGRAPH(layer_norm_variance, layer_norm_variance,
-                              skip_layernorm_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        layer_norm_out, layer_norm_out, skip_layernorm_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        layer_norm_bias, layer_norm_bias, skip_layernorm_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        layer_norm_scale, layer_norm_scale, skip_layernorm_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        layer_norm_mean, layer_norm_mean, skip_layernorm_pattern);
+    GET_IR_NODE_FROM_SUBGRAPH(
+        layer_norm_variance, layer_norm_variance, skip_layernorm_pattern);
     if (!IsCompat(subgraph, graph)) {
       LOG(WARNING) << "Pass(SkipLayerNorm) in op compat failed.";
       return;
@@ -258,7 +258,7 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
     end_pattern_biases.push_back(layer_norm_bias);
     end_pattern_scales.push_back(layer_norm_scale);
     end_pattern_out.push_back(layer_norm_out);
-    end_patter_layernorms.push_back(layer_norm);
+    end_pattern_layernorms.push_back(layer_norm);
   };
   gpd3(graph, handler3);
 
@@ -288,81 +288,129 @@ int EmbeddingEltwiseLayerNormFusePass::BuildFusion(
 
     for (size_t k = 0; k < end_pattern_elt_out.size(); ++k) {
       if (tmp == end_pattern_elt_out[k]) {
-        fusion_ids.push_back(std::make_pair(i, std::make_pair(k, js)));
+        fusion_ids.emplace_back(i, std::make_pair(k, js));
         break;
       }
     }
   }
 
-  for (size_t num = 0; num < fusion_ids.size(); ++num) {
-    int i = fusion_ids[num].first;
-    int k = fusion_ids[num].second.first;
-    std::vector<size_t> js = fusion_ids[num].second.second;
+  for (auto& fusion_id : fusion_ids) {
+    int i = fusion_id.first;
+    int k = fusion_id.second.first;
+    std::vector<size_t> js = fusion_id.second.second;
 
     std::vector<std::string> ids;
     std::vector<std::string> embs;
-    for (size_t iter = 0; iter < start_pattern_in_nodes[i].size(); ++iter) {
-      ids.push_back(start_pattern_in_nodes[i][iter].first->Name());
-      embs.push_back(start_pattern_in_nodes[i][iter].second->Name());
+
+    auto ids0_shape = start_pattern_in_nodes[i][0].first->Var()->GetShape();
+    bool flag = true;
+    for (auto& start_pattern : start_pattern_in_nodes[i]) {
+      auto ids_shape = start_pattern.first->Var()->GetShape();
+      if (ids_shape.size() != ids0_shape.size()) {
+        VLOG(3) << "Shape check failed, ids'rank are not all equal, stop "
+                   "embedding_eltwise_layernorm_fuse_pass.";
+        flag = false;
+      } else {
+        for (size_t j = 0; j < ids_shape.size(); ++j) {
+          if (ids_shape[j] != ids0_shape[j]) {
+            VLOG(3)
+                << "Shape check failed, ids.shape[i] are not all equal, stop "
+                   "embedding_eltwise_layernorm_fuse_pass.";
+            flag = false;
+          }
+        }
+      }
+      ids.push_back(start_pattern.first->Name());
+      embs.push_back(start_pattern.second->Name());
     }
-    for (size_t iter = 0; iter < js.size(); ++iter) {
-      ids.push_back(inner_pattern_ins[js[iter]].first->Name());
-      embs.push_back(inner_pattern_ins[js[iter]].second->Name());
+    for (auto item : js) {
+      auto ids_shape = inner_pattern_ins[item].first->Var()->GetShape();
+      if (ids_shape.size() != ids0_shape.size()) {
+        VLOG(3) << "Shape check failed, ids'rank are not all equal, stop "
+                   "embedding_eltwise_layernorm_fuse_pass.";
+        flag = false;
+      } else {
+        for (size_t j = 0; j < ids_shape.size(); ++j) {
+          if (ids_shape[j] != ids0_shape[j]) {
+            VLOG(3)
+                << "Shape check failed, ids.shape[i] are not all equal, stop "
+                   "embedding_eltwise_layernorm_fuse_pass.";
+            flag = false;
+          }
+        }
+      }
+      ids.push_back(inner_pattern_ins[item].first->Name());
+      embs.push_back(inner_pattern_ins[item].second->Name());
     }
 
-    OpDesc new_op_desc;
-    new_op_desc.SetType("fused_embedding_eltwise_layernorm");
-    new_op_desc.SetInput("Ids", ids);
-    new_op_desc.SetInput("Embs", embs);
-
-    new_op_desc.SetInput("WordId", {ids[0]});
-    new_op_desc.SetInput("PosId", {ids[1]});
-    new_op_desc.SetInput("SentId", {ids[2]});
-
-    new_op_desc.SetInput("WordEmbedding", {embs[0]});
-    new_op_desc.SetInput("PosEmbedding", {embs[1]});
-    new_op_desc.SetInput("SentEmbedding", {embs[2]});
-
-    new_op_desc.SetInput("Bias", {end_pattern_biases[k]->Name()});
-    new_op_desc.SetInput("Scale", {end_pattern_scales[k]->Name()});
-    new_op_desc.SetOutput("Out", {end_pattern_out[k]->Name()});
-    new_op_desc.SetAttr("epsilon",
-                        end_patter_layernorms[k]->Op()->GetAttr("epsilon"));
-
-    if (end_patter_layernorms[k]->Op()->HasAttr("out_threshold")) {
-      new_op_desc.SetAttr("enable_int8", true);
+    // todo: support any inputs with lookup_table_v2
+    if (ids.size() < 3) {
+      VLOG(3) << "embedding_eltwise_layernorm_fuse_pass only support >=3 "
+                 "inputs with lookup_table_v2";
+      return fusion_count;
     }
+    if (flag) {
+      OpDesc new_op_desc;
+      new_op_desc.SetType("fused_embedding_eltwise_layernorm");
+      new_op_desc.SetInput("Ids", ids);
+      new_op_desc.SetInput("Embs", embs);
+      new_op_desc.SetInput("WordId", {ids[0]});
+      new_op_desc.SetInput("PosId", {ids[1]});
+      if (ids.size() > 2) {
+        new_op_desc.SetInput("SentId", {ids[2]});
+      }
 
-    auto* embedding_eltwise_layernorm = graph->CreateOpNode(&new_op_desc);
+      new_op_desc.SetInput("WordEmbedding", {embs[0]});
+      new_op_desc.SetInput("PosEmbedding", {embs[1]});
+      if (embs.size() > 2) {
+        new_op_desc.SetInput("SentEmbedding", {embs[2]});
+      }
 
-    for (size_t iter = 0; iter < start_pattern_in_nodes[i].size(); ++iter) {
-      IR_NODE_LINK_TO(start_pattern_in_nodes[i][iter].first,
-                      embedding_eltwise_layernorm);
-      IR_NODE_LINK_TO(start_pattern_in_nodes[i][iter].second,
-                      embedding_eltwise_layernorm);
-    }
-    for (size_t iter = 0; iter < js.size(); ++iter) {
-      IR_NODE_LINK_TO(inner_pattern_ins[js[iter]].first,
-                      embedding_eltwise_layernorm);
-      IR_NODE_LINK_TO(inner_pattern_ins[js[iter]].second,
-                      embedding_eltwise_layernorm);
-    }
-    IR_NODE_LINK_TO(end_pattern_biases[k], embedding_eltwise_layernorm);
-    IR_NODE_LINK_TO(end_pattern_scales[k], embedding_eltwise_layernorm);
-    IR_NODE_LINK_TO(embedding_eltwise_layernorm, end_pattern_out[k]);
+      new_op_desc.SetInput("Bias", {end_pattern_biases[k]->Name()});
+      new_op_desc.SetInput("Scale", {end_pattern_scales[k]->Name()});
+      new_op_desc.SetOutput("Out", {end_pattern_out[k]->Name()});
+      new_op_desc.SetAttr("epsilon",
+                          end_pattern_layernorms[k]->Op()->GetAttr("epsilon"));
 
-    // Remove unneeded nodes.
-    std::unordered_set<const Node*> marked_nodes;
-    marked_nodes.insert(start_pattern_remove_nodes[i].begin(),
-                        start_pattern_remove_nodes[i].end());
-    marked_nodes.insert(end_pattern_remove_nodes[k].begin(),
-                        end_pattern_remove_nodes[k].end());
-    for (size_t iter = 0; iter < js.size(); ++iter) {
-      marked_nodes.insert(inner_pattern_remove_nodes[js[iter]].begin(),
-                          inner_pattern_remove_nodes[js[iter]].end());
+      if (end_pattern_layernorms[k]->Op()->HasAttr("out_threshold")) {
+        new_op_desc.SetAttr("enable_int8", true);
+        new_op_desc.SetAttr(
+            "out_threshold",
+            end_pattern_layernorms[k]->Op()->GetAttr("out_threshold"));
+      }
+
+      auto* embedding_eltwise_layernorm = graph->CreateOpNode(&new_op_desc);
+
+      for (auto& start_pattern : start_pattern_in_nodes[i]) {
+        IR_NODE_LINK_TO(start_pattern.first, embedding_eltwise_layernorm);
+        IR_NODE_LINK_TO(start_pattern.second, embedding_eltwise_layernorm);
+      }
+      for (auto item : js) {
+        IR_NODE_LINK_TO(inner_pattern_ins[item].first,
+                        embedding_eltwise_layernorm);
+        IR_NODE_LINK_TO(inner_pattern_ins[item].second,
+                        embedding_eltwise_layernorm);
+      }
+      IR_NODE_LINK_TO(end_pattern_biases[k], embedding_eltwise_layernorm);
+      IR_NODE_LINK_TO(end_pattern_scales[k], embedding_eltwise_layernorm);
+      IR_NODE_LINK_TO(embedding_eltwise_layernorm, end_pattern_out[k]);
+
+      // Remove unneeded nodes.
+      std::unordered_set<const Node*> marked_nodes;
+      marked_nodes.insert(start_pattern_remove_nodes[i].begin(),
+                          start_pattern_remove_nodes[i].end());
+      marked_nodes.insert(end_pattern_remove_nodes[k].begin(),
+                          end_pattern_remove_nodes[k].end());
+      for (auto item : js) {
+        marked_nodes.insert(inner_pattern_remove_nodes[item].begin(),
+                            inner_pattern_remove_nodes[item].end());
+      }
+      GraphSafeRemoveNodes(graph, marked_nodes);
+      ++fusion_count;
+    } else {
+      VLOG(3) << "Shape check failed, stop "
+                 "embedding_eltwise_layernorm_fuse_pass.";
     }
-    GraphSafeRemoveNodes(graph, marked_nodes);
-    ++fusion_count;
   }
 
   return fusion_count;
@@ -380,7 +428,6 @@ EmbeddingEltwiseLayerNormFusePass::EmbeddingEltwiseLayerNormFusePass() {
       .IsTensor()
       .End()
       .AddAttr("axis")
-      .IsIntIn({0, -1})
       .End();
 
   AddOpCompat(OpCompat("layer_norm"))
@@ -421,15 +468,13 @@ void EmbeddingEltwiseLayerNormFusePass::ApplyImpl(Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(embedding_eltwise_layernorm_fuse_pass,
               paddle::framework::ir::EmbeddingEltwiseLayerNormFusePass);
 REGISTER_PASS_CAPABILITY(embedding_eltwise_layernorm_fuse_pass)
     .AddCombination(
         paddle::framework::compatible::OpVersionComparatorCombination()
-            .EQ("lookup_table", 0)
+            .LE("lookup_table", 1)
             .LE("lookup_table_v2", 1)
-            .EQ("elementweise_add", 0));
+            .LE("elementweise_add", 1));

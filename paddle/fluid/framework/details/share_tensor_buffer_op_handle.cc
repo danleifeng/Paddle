@@ -18,17 +18,11 @@
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 class MemOptVarInfo;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
-namespace paddle {
-namespace framework {
-namespace details {
+namespace paddle::framework::details {
 
 class ComputationOpHandle;
 
@@ -41,33 +35,43 @@ ComputationOpHandle *GetUniquePendingComputationOpHandle(
       auto *compute_op = dynamic_cast<ComputationOpHandle *>(&op);
       PADDLE_ENFORCE_NOT_NULL(
           compute_op,
-          platform::errors::PreconditionNotMet(
+          phi::errors::PreconditionNotMet(
               "The pending OpHandle should be ComputationOpHandle."));
 
       if (result_op == nullptr) {
         result_op = compute_op;
       } else {
         PADDLE_ENFORCE_EQ(
-            result_op, compute_op,
-            platform::errors::PreconditionNotMet(
+            result_op,
+            compute_op,
+            phi::errors::PreconditionNotMet(
                 "The pending OpHandle should be the unique one."));
       }
     }
   }
 
   PADDLE_ENFORCE_NOT_NULL(result_op,
-                          platform::errors::PreconditionNotMet(
+                          phi::errors::PreconditionNotMet(
                               "The pending OpHandle should not be NULL."));
   return result_op;
 }
 
 ShareTensorBufferOpHandle::ShareTensorBufferOpHandle(
-    ir::Node *node, Scope *scope, size_t scope_idx, const std::string &op_type,
+    ir::Node *node,
+    Scope *scope,
+    size_t scope_idx,
+    const std::string &op_type,
     const std::vector<const ir::MemOptVarInfo *> &in_var_infos,
-    const std::vector<std::string> &out_var_names, bool share_dims)
+    const std::vector<std::string> &out_var_names,
+    bool share_dims_and_dtype)
     : OpHandleBase(node),
-      functor_(scope, scope_idx, op_type, in_var_infos, out_var_names,
-               is_variant_scope_, share_dims) {}
+      functor_(scope,
+               scope_idx,
+               op_type,
+               in_var_infos,
+               out_var_names,
+               is_variant_scope_,
+               share_dims_and_dtype) {}
 
 std::unordered_map<std::string, std::string>
 ShareTensorBufferOpHandle::ReusedVars() const {
@@ -79,20 +83,18 @@ void ShareTensorBufferOpHandle::AddReuseVarPair(
   functor_.AddReuseVarPair(in_var_info, out_var_name);
 }
 
-void ShareTensorBufferOpHandle::SetShareDims(bool share_dims) {
-  functor_.SetShareDims(share_dims);
+void ShareTensorBufferOpHandle::SetShareDimsAndDtype(
+    bool share_dims_and_dtype) {
+  functor_.SetShareDimsAndDtype(share_dims_and_dtype);
 }
 
 void ShareTensorBufferOpHandle::InitCUDA() {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  int dev_id =
-      BOOST_GET_CONST(platform::CUDAPlace, dev_ctxes_.begin()->first).device;
+  int dev_id = dev_ctxes_.begin()->first.device;
   events_[dev_id] = nullptr;
 #endif
 }
 
 void ShareTensorBufferOpHandle::RunImpl() { functor_(local_exec_scopes_[0]); }
 
-}  // namespace details
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::details

@@ -15,11 +15,12 @@ limitations under the License. */
 #include <cuda_runtime_api.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+
 #include "NvInfer.h"
 #include "paddle/fluid/inference/tensorrt/helper.h"
-#include "paddle/fluid/platform/dynload/tensorrt.h"
+#include "paddle/phi/backends/dynload/tensorrt.h"
 
-namespace dy = paddle::platform::dynload;
+namespace dy = phi::dynload;
 
 class Logger : public nvinfer1::ILogger {
  public:
@@ -44,11 +45,8 @@ class Logger : public nvinfer1::ILogger {
 
 class ScopedWeights {
  public:
-  explicit ScopedWeights(float value) : value_(value) {
-    w.type = nvinfer1::DataType::kFLOAT;
-    w.values = &value_;
-    w.count = 1;
-  }
+  explicit ScopedWeights(float value)
+      : value_(value), w{nvinfer1::DataType::kFLOAT, &value_, 1} {}
   const nvinfer1::Weights& get() { return w; }
 
  private:
@@ -80,56 +78,114 @@ nvinfer1::IHostMemory* CreateNetwork() {
   ScopedWeights weights(2.);
   ScopedWeights bias(3.);
 
-  nvinfer1::INetworkDefinition* network = builder->createNetworkV2(0U);
+  nvinfer1::INetworkDefinition* network = builder->createNetworkV2(
+      1U << static_cast<uint32_t>(
+          nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH));
   // Add the input
-  auto input = network->addInput(kInputTensor, nvinfer1::DataType::kFLOAT,
-                                 nvinfer1::Dims3{1, 1, 1});
+  auto input = network->addInput(
+      kInputTensor, nvinfer1::DataType::kFLOAT, nvinfer1::Dims3{1, 1, 1});
   EXPECT_NE(input, nullptr);
+  // Add the constant layer for weight
+  auto weight_tensor =
+      network->addConstant(nvinfer1::Dims3{1, 1, 1}, weights.get())
+          ->getOutput(0);
+  // Add the constant layer for bias
+  auto bias_tensor =
+      network->addConstant(nvinfer1::Dims3{1, 1, 1}, bias.get())->getOutput(0);
   // Add the hidden layer.
-  auto layer = network->addFullyConnected(*input, 1, weights.get(), bias.get());
-  EXPECT_NE(layer, nullptr);
+  auto matmul_layer =
+      network->addMatrixMultiply(*input,
+                                 nvinfer1::MatrixOperation::kNONE,
+                                 *weight_tensor,
+                                 nvinfer1::MatrixOperation::kTRANSPOSE);
+  auto add_layer =
+      network->addElementWise(*matmul_layer->getOutput(0),
+                              *bias_tensor,
+                              nvinfer1::ElementWiseOperation::kSUM);
+  EXPECT_NE(add_layer, nullptr);
   // Mark the output.
-  auto output = layer->getOutput(0);
+  auto output = add_layer->getOutput(0);
   output->setName(kOutputTensor);
   network->markOutput(*output);
-  // Build the engine.
-  builder->setMaxBatchSize(1);
+#if IS_TRT_VERSION_GE(8300)
+  config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1 << 10);
+#else
   config->setMaxWorkspaceSize(1 << 10);
-  auto engine = builder->buildEngineWithConfig(*network, *config);
+#endif
+#if IS_TRT_VERSION_GE(8600)
+  nvinfer1::IHostMemory* model =
+      builder->buildSerializedNetwork(*network, *config);
+  EXPECT_NE(model, nullptr);
+#else
+  auto* engine = builder->buildEngineWithConfig(*network, *config);
   EXPECT_NE(engine, nullptr);
   // Serialize the engine to create a model, then close.
   nvinfer1::IHostMemory* model = engine->serialize();
-  network->destroy();
-  engine->destroy();
-  builder->destroy();
+  delete engine;
+#endif
+  delete network;
+  delete builder;
   return model;
 }
 
-void Execute(nvinfer1::IExecutionContext* context, const float* input,
+void Execute(nvinfer1::IExecutionContext* context,
+             const float* input,
              float* output) {
   const nvinfer1::ICudaEngine& engine = context->getEngine();
   // Two binds, input and output
+  cudaStream_t stream;
+  ASSERT_EQ(0, cudaStreamCreate(&stream));
+#if IS_TRT_VERSION_GE(8600)
+  ASSERT_EQ(engine.getNbIOTensors(), 2);
+  void* buffers[2];
+  for (int i = 0; i < 2; ++i) {
+    ASSERT_EQ(0, cudaMalloc(&buffers[i], sizeof(float)));
+    auto tensor_name = engine.getIOTensorName(i);
+    context->setTensorAddress(tensor_name, buffers[i]);
+  }
+  ASSERT_EQ(
+      0,
+      cudaMemcpyAsync(
+          buffers[0], input, sizeof(float), cudaMemcpyHostToDevice, stream));
+  context->enqueueV3(stream);
+  ASSERT_EQ(
+      0,
+      cudaMemcpyAsync(
+          output, buffers[1], sizeof(float), cudaMemcpyDeviceToHost, stream));
+  cudaStreamSynchronize(stream);
+  cudaStreamDestroy(stream);
+  ASSERT_EQ(0, cudaFree(buffers[0]));
+  ASSERT_EQ(0, cudaFree(buffers[1]));
+#else
   ASSERT_EQ(engine.getNbBindings(), 2);
   const int input_index = engine.getBindingIndex(kInputTensor);
   const int output_index = engine.getBindingIndex(kOutputTensor);
   // Create GPU buffers and a stream
-  void* buffers[2];
+  std::vector<void*> buffers(2);
   ASSERT_EQ(0, cudaMalloc(&buffers[input_index], sizeof(float)));
   ASSERT_EQ(0, cudaMalloc(&buffers[output_index], sizeof(float)));
-  cudaStream_t stream;
   ASSERT_EQ(0, cudaStreamCreate(&stream));
   // Copy the input to the GPU, execute the network, and copy the output back.
-  ASSERT_EQ(0, cudaMemcpyAsync(buffers[input_index], input, sizeof(float),
-                               cudaMemcpyHostToDevice, stream));
-  context->enqueue(1, buffers, stream, nullptr);
-  ASSERT_EQ(0, cudaMemcpyAsync(output, buffers[output_index], sizeof(float),
-                               cudaMemcpyDeviceToHost, stream));
+  ASSERT_EQ(0,
+            cudaMemcpyAsync(buffers[input_index],
+                            input,
+                            sizeof(float),
+                            cudaMemcpyHostToDevice,
+                            stream));
+  context->enqueue(1, buffers.data(), stream, nullptr);
+  ASSERT_EQ(0,
+            cudaMemcpyAsync(output,
+                            buffers[output_index],
+                            sizeof(float),
+                            cudaMemcpyDeviceToHost,
+                            stream));
   cudaStreamSynchronize(stream);
 
   // Release the stream and the buffers
   cudaStreamDestroy(stream);
   ASSERT_EQ(0, cudaFree(buffers[input_index]));
   ASSERT_EQ(0, cudaFree(buffers[output_index]));
+#endif
 }
 
 TEST(TensorrtTest, BasicFunction) {
@@ -140,8 +196,8 @@ TEST(TensorrtTest, BasicFunction) {
   Logger logger;
   nvinfer1::IRuntime* runtime = createInferRuntime(&logger);
   nvinfer1::ICudaEngine* engine =
-      runtime->deserializeCudaEngine(model->data(), model->size(), nullptr);
-  model->destroy();
+      runtime->deserializeCudaEngine(model->data(), model->size());
+  delete model;
   nvinfer1::IExecutionContext* context = engine->createExecutionContext();
 
   // Execute the network.
@@ -151,7 +207,7 @@ TEST(TensorrtTest, BasicFunction) {
   EXPECT_EQ(output, input * 2 + 3);
 
   // Destroy the engine.
-  context->destroy();
-  engine->destroy();
-  runtime->destroy();
+  delete context;
+  delete engine;
+  delete runtime;
 }

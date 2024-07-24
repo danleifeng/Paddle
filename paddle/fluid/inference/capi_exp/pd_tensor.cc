@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "paddle/fluid/inference/capi_exp/pd_tensor.h"
+
 #include "paddle/fluid/inference/api/paddle_inference_api.h"
 #include "paddle/fluid/inference/capi_exp/pd_types.h"
 #include "paddle/fluid/inference/capi_exp/pd_utils.h"
@@ -20,16 +21,18 @@
 #include "paddle/fluid/inference/capi_exp/utils_internal.h"
 #include "paddle/fluid/platform/enforce.h"
 
-#define CHECK_AND_CONVERT_PD_TENSOR                                         \
-  PADDLE_ENFORCE_NOT_NULL(                                                  \
-      pd_tensor, paddle::platform::errors::InvalidArgument(                 \
-                     "The pointer of paddle tensor shouldn't be nullptr")); \
+#define CHECK_AND_CONVERT_PD_TENSOR                              \
+  PADDLE_ENFORCE_NOT_NULL(                                       \
+      pd_tensor,                                                 \
+      phi::errors::InvalidArgument(                              \
+          "The pointer of paddle tensor shouldn't be nullptr")); \
   auto& tensor = pd_tensor->tensor
 
 extern "C" {
 
 void PD_TensorDestroy(__pd_take PD_Tensor* pd_tensor) { delete pd_tensor; }
-void PD_TensorReshape(__pd_keep PD_Tensor* pd_tensor, size_t shape_size,
+void PD_TensorReshape(__pd_keep PD_Tensor* pd_tensor,
+                      size_t shape_size,
                       int32_t* shape) {
   CHECK_AND_CONVERT_PD_TENSOR;
   std::vector<int> shapes(shape_size);
@@ -53,19 +56,19 @@ REPEAT_ALL_DATA_TYPE(PD_TENSOR_MUTABLE_DATA_IMPL)
 #undef PD_TENSOR_MUTABLE_DATA_IMPL
 
 #define PD_TENSOR_DATA_IMPL(type, Type)                                        \
-  type* PD_TensorData##Type(__pd_keep PD_Tensor* pd_tensor,                    \
-                            PD_PlaceType* place, int32_t* size) {              \
+  type* PD_TensorData##Type(                                                   \
+      __pd_keep PD_Tensor* pd_tensor, PD_PlaceType* place, int32_t* size) {    \
     CHECK_AND_CONVERT_PD_TENSOR;                                               \
     PADDLE_ENFORCE_NOT_NULL(place,                                             \
-                            paddle::platform::errors::InvalidArgument(         \
+                            phi::errors::InvalidArgument(                      \
                                 "The pointer of place shouldn't be nullptr")); \
     PADDLE_ENFORCE_NOT_NULL(size,                                              \
-                            paddle::platform::errors::InvalidArgument(         \
+                            phi::errors::InvalidArgument(                      \
                                 "The pointer of size shouldn't be nullptr"));  \
-    paddle_infer::PlaceType cxx_palce_type;                                    \
+    paddle_infer::PlaceType cxx_place_type;                                    \
     int cxx_size;                                                              \
-    type* data = tensor->data<type>(&cxx_palce_type, &cxx_size);               \
-    *place = paddle_infer::CvtFromCxxPlaceType(cxx_palce_type);                \
+    type* data = tensor->data<type>(&cxx_place_type, &cxx_size);               \
+    *place = paddle_infer::CvtFromCxxPlaceType(cxx_place_type);                \
     *size = static_cast<int32_t>(cxx_size);                                    \
     return data;                                                               \
   }

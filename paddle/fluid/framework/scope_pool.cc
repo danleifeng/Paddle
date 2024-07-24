@@ -29,16 +29,17 @@ void ScopePool::Insert(std::unique_ptr<Scope> &&s) {
 }
 
 void ScopePool::Remove(Scope *s) {
-  size_t has_scope;
+  size_t has_scope = 0;
   {
     std::lock_guard<std::mutex> guard(mtx_);
     has_scope = scopes_.erase(s);
   }
   PADDLE_ENFORCE_GT(
-      has_scope, 0,
-      platform::errors::NotFound("Global scope %p is not found in ScopePool. "
-                                 "Deleting a nonexistent scope is not allowed.",
-                                 s));
+      has_scope,
+      0,
+      phi::errors::NotFound("Global scope %p is not found in ScopePool. "
+                            "Deleting a nonexistent scope is not allowed.",
+                            s));
   DeleteScope(s);
 }
 

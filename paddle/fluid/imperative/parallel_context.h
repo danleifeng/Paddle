@@ -16,17 +16,13 @@
 #include <string>
 #include <vector>
 
-#include "paddle/fluid/platform/place.h"
+#include "paddle/fluid/platform/device_context.h"
+#include "paddle/phi/common/place.h"
 
 namespace paddle {
-namespace platform {
-class DeviceContext;
-}  // namespace platform
-
 namespace framework {
 class Variable;
 }  // namespace framework
-
 }  // namespace paddle
 
 namespace paddle {
@@ -43,7 +39,7 @@ struct ParallelStrategy {
 class ParallelContext {
  public:
   explicit ParallelContext(const ParallelStrategy& strategy,
-                           const platform::Place& place)
+                           const phi::Place& place)
       : strategy_(strategy), place_(place) {}
 
   virtual ~ParallelContext() = default;
@@ -53,10 +49,13 @@ class ParallelContext {
   virtual void InitWithRingID(int ring_id) = 0;
 
   virtual void AllReduceByStream(const framework::Variable& src,
-                                 framework::Variable* dst, int ring_id,
+                                 framework::Variable* dst,
+                                 int ring_id,
                                  bool use_calc_stream) = 0;
 
-  virtual paddle::platform::DeviceContext* GetDeviceContext(int ring_id) = 0;
+  virtual void Broadcast(framework::Variable* src, int ring_id) = 0;
+
+  virtual phi::DeviceContext* GetDeviceContext(int ring_id) = 0;
 
   // comm_stream[ring_id] wait compute_stream.
   // if CPU, should do nothing.
@@ -66,7 +65,7 @@ class ParallelContext {
   // if CPU, should do nothing.
   virtual void WaitComm(int ring_id) = 0;
 
-  // synchorize compute stream
+  // synchronize compute stream
   virtual void SynchronizeCompute() = 0;
 
   inline int GetNRings() const { return strategy_.nrings_; }
@@ -75,7 +74,7 @@ class ParallelContext {
 
  protected:
   ParallelStrategy strategy_;
-  platform::Place place_;
+  phi::Place place_;
 };
 
 }  //  namespace imperative

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/framework/ddim.h"
+#include "paddle/common/ddim.h"
 #include "paddle/fluid/operators/reader/py_reader.h"
 #include "paddle/fluid/operators/reader/reader_op_registry.h"
 
@@ -26,7 +26,7 @@ class CreatePyReaderOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
+               const phi::Place& dev_place) const override {
     auto* out = scope.FindVar(Output("Out"))
                     ->template GetMutable<framework::ReaderHolder>();
     if (out->Get() != nullptr) return;
@@ -35,7 +35,7 @@ class CreatePyReaderOp : public framework::OperatorBase {
     auto* queue_holder_var = scope.FindVar(queue_name);
     PADDLE_ENFORCE_NOT_NULL(
         queue_holder_var,
-        platform::errors::NotFound(
+        phi::errors::NotFound(
             "No LoDTensorBlockingQueueHolder variable with name %s found. This "
             "may be because the DataLoader is defined in another Scope, "
             "which is different from the Scope when calling Executor.run.",
@@ -56,35 +56,35 @@ class CreatePyReaderOp : public framework::OperatorBase {
       queue = ordered_queue->GetQueue(dev_idx);
     }
 
-    /* Coverting shape_concat and ranks into DDim of each data.
+    /* Converting shape_concat and ranks into DDim of each data.
      shape_concat and ranks are shapes and shape ranks of each data.E.g.
      shape_concat = [2,3,4,5,6], ranks = [3,2] means two data whose shapes are
      [2,3,4] and [5,6] respectively. */
     auto& shape_concat = Attr<std::vector<int>>("shape_concat");
     auto& ranks = Attr<std::vector<int>>("ranks");
     int shape_start_index = 0;
-    std::vector<framework::DDim> dims;
-    for (size_t i = 0; i < ranks.size(); ++i) {
-      int shape_end_index = shape_start_index + ranks[i];
+    std::vector<phi::DDim> dims;
+    for (auto rank : ranks) {
+      int shape_end_index = shape_start_index + rank;
       auto shape = std::vector<int>(shape_concat.begin() + shape_start_index,
                                     shape_concat.begin() + shape_end_index);
-      dims.push_back(framework::make_ddim(shape));
+      dims.push_back(common::make_ddim(shape));
       shape_start_index = shape_end_index;
     }
 
     // Converts VarType from int to enum
     auto& dtype_int = Attr<std::vector<int>>("dtypes");
     std::vector<framework::proto::VarType::Type> var_types;
-    for (size_t i = 0; i < dtype_int.size(); ++i) {
+    for (auto type_int : dtype_int) {
       var_types.push_back(
-          static_cast<framework::proto::VarType::Type>(dtype_int[i]));
+          static_cast<framework::proto::VarType::Type>(type_int));
     }
 
     // Converts need_check_feed from int to bool
     auto& need_check_feed_int = Attr<std::vector<int>>("need_check_feed");
     std::vector<bool> need_check_feed;
-    for (size_t i = 0; i < need_check_feed_int.size(); ++i) {
-      need_check_feed.push_back(static_cast<bool>(need_check_feed_int[i]));
+    for (auto feed_int : need_check_feed_int) {
+      need_check_feed.push_back(static_cast<bool>(feed_int));
     }
     auto py_reader =
         std::make_shared<PyReader>(queue, dims, var_types, need_check_feed);
@@ -109,7 +109,7 @@ class CreatePyReaderOpMaker : public FileReaderMakerBase {
         .SetDefault(1);
 
     AddComment(R"DOC(
-      Create PyReader to support LoDTensor data feeding in Python side.
+      Create PyReader to support phi::DenseTensor data feeding in Python side.
       )DOC");
   }
 };
@@ -120,5 +120,6 @@ class CreatePyReaderOpMaker : public FileReaderMakerBase {
 
 namespace reader = ::paddle::operators::reader;
 
-REGISTER_FILE_READER_OPERATOR(create_py_reader, reader::CreatePyReaderOp,
+REGISTER_FILE_READER_OPERATOR(create_py_reader,
+                              reader::CreatePyReaderOp,
                               reader::CreatePyReaderOpMaker);

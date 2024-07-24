@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/detection/anchor_generator_op.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class AnchorGeneratorOp : public framework::OperatorWithKernel {
  public:
@@ -23,22 +22,26 @@ class AnchorGeneratorOp : public framework::OperatorWithKernel {
 
   void InferShape(framework::InferShapeContext* ctx) const override {
     PADDLE_ENFORCE_EQ(
-        ctx->HasInput("Input"), true,
-        platform::errors::InvalidArgument(
+        ctx->HasInput("Input"),
+        true,
+        phi::errors::InvalidArgument(
             "Input(Input) of AnchorGeneratorOp should not be null."));
     PADDLE_ENFORCE_EQ(
-        ctx->HasOutput("Anchors"), true,
-        platform::errors::InvalidArgument(
+        ctx->HasOutput("Anchors"),
+        true,
+        phi::errors::InvalidArgument(
             "Output(Anchors) of AnchorGeneratorOp should not be null."));
     PADDLE_ENFORCE_EQ(
-        ctx->HasOutput("Variances"), true,
-        platform::errors::InvalidArgument(
+        ctx->HasOutput("Variances"),
+        true,
+        phi::errors::InvalidArgument(
             "Output(Variances) of AnchorGeneratorOp should not be null."));
 
     auto input_dims = ctx->GetInputDim("Input");
     PADDLE_ENFORCE_EQ(
-        input_dims.size(), 4,
-        platform::errors::InvalidArgument("The layout of input is NCHW."));
+        input_dims.size(),
+        4,
+        phi::errors::InvalidArgument("The layout of input is NCHW."));
 
     auto anchor_sizes = ctx->Attrs().Get<std::vector<float>>("anchor_sizes");
     auto aspect_ratios = ctx->Attrs().Get<std::vector<float>>("aspect_ratios");
@@ -50,18 +53,17 @@ class AnchorGeneratorOp : public framework::OperatorWithKernel {
     std::vector<int64_t> dim_vec(4);
     dim_vec[0] = input_dims[2];
     dim_vec[1] = input_dims[3];
-    dim_vec[2] = num_anchors;
+    dim_vec[2] = static_cast<int64_t>(num_anchors);
     dim_vec[3] = 4;
-    ctx->SetOutputDim("Anchors", framework::make_ddim(dim_vec));
-    ctx->SetOutputDim("Variances", framework::make_ddim(dim_vec));
+    ctx->SetOutputDim("Anchors", common::make_ddim(dim_vec));
+    ctx->SetOutputDim("Variances", common::make_ddim(dim_vec));
   }
 
  protected:
-  framework::OpKernelType GetExpectedKernelType(
+  phi::KernelKey GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
-    return framework::OpKernelType(
-        OperatorWithKernel::IndicateVarDataType(ctx, "Input"),
-        ctx.device_context());
+    return phi::KernelKey(OperatorWithKernel::IndicateVarDataType(ctx, "Input"),
+                          ctx.GetPlace());
   }
 };
 
@@ -93,12 +95,14 @@ class AnchorGeneratorOpMaker : public framework::OpProtoAndCheckerMaker {
         " For instance, the anchor size of 64 means the area of this anchor "
         "equals to 64**2.")
         .AddCustomChecker([](const std::vector<float>& anchor_sizes) {
-          PADDLE_ENFORCE_GT(anchor_sizes.size(), 0UL,
-                            platform::errors::InvalidArgument(
+          PADDLE_ENFORCE_GT(anchor_sizes.size(),
+                            0UL,
+                            phi::errors::InvalidArgument(
                                 "Size of anchor_sizes must be at least 1."));
           for (size_t i = 0; i < anchor_sizes.size(); ++i) {
-            PADDLE_ENFORCE_GT(anchor_sizes[i], 0.0,
-                              platform::errors::InvalidArgument(
+            PADDLE_ENFORCE_GT(anchor_sizes[i],
+                              0.0,
+                              phi::errors::InvalidArgument(
                                   "anchor_sizes[%d] must be positive.", i));
           }
         });
@@ -113,12 +117,14 @@ class AnchorGeneratorOpMaker : public framework::OpProtoAndCheckerMaker {
                                 "(vector<float>) List of variances to be used "
                                 "in box regression deltas")
         .AddCustomChecker([](const std::vector<float>& variances) {
-          PADDLE_ENFORCE_EQ(variances.size(), 4UL,
-                            platform::errors::InvalidArgument(
-                                "Must provide 4 variance only."));
+          PADDLE_ENFORCE_EQ(
+              variances.size(),
+              4UL,
+              phi::errors::InvalidArgument("Must provide 4 variance only."));
           for (size_t i = 0; i < variances.size(); ++i) {
-            PADDLE_ENFORCE_GT(variances[i], 0.0,
-                              platform::errors::InvalidArgument(
+            PADDLE_ENFORCE_GT(variances[i],
+                              0.0,
+                              phi::errors::InvalidArgument(
                                   "variance[%d] must be greater than 0.", i));
           }
         });
@@ -129,12 +135,14 @@ class AnchorGeneratorOpMaker : public framework::OpProtoAndCheckerMaker {
         .SetDefault(std::vector<float>(2, 16.0))
         .AddCustomChecker([](const std::vector<float>& stride) {
           PADDLE_ENFORCE_EQ(
-              stride.size(), 2UL,
-              platform::errors::InvalidArgument(
+              stride.size(),
+              2UL,
+              phi::errors::InvalidArgument(
                   "Must provide 2 stride for width and height only."));
           for (size_t i = 0; i < stride.size(); ++i) {
-            PADDLE_ENFORCE_GT(stride[i], 0.0,
-                              platform::errors::InvalidArgument(
+            PADDLE_ENFORCE_GT(stride[i],
+                              0.0,
+                              phi::errors::InvalidArgument(
                                   "stride[%d] should be larger than 0.", i));
           }
         });
@@ -155,14 +163,19 @@ https://arxiv.org/abs/1506.01497.
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
-    anchor_generator, ops::AnchorGeneratorOp, ops::AnchorGeneratorOpMaker,
+    anchor_generator,
+    ops::AnchorGeneratorOp,
+    ops::AnchorGeneratorOpMaker,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>);
 
-REGISTER_OP_CPU_KERNEL(anchor_generator, ops::AnchorGeneratorOpKernel<float>,
-                       ops::AnchorGeneratorOpKernel<double>);
+PD_REGISTER_STRUCT_KERNEL(anchor_generator,
+                          CPU,
+                          ALL_LAYOUT,
+                          ops::AnchorGeneratorOpKernel,
+                          float,
+                          double) {}

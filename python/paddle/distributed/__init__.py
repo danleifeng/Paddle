@@ -12,79 +12,168 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .spawn import spawn  # noqa: F401
-from .fleet.launch import launch  # noqa: F401
+import atexit  # noqa: F401
 
-from .parallel import init_parallel_env  # noqa: F401
-from .parallel import get_rank  # noqa: F401
-from .parallel import get_world_size  # noqa: F401
+from .value_patch import monkey_patch_value_in_dist
 
-from .parallel_with_gloo import gloo_init_parallel_env
-from .parallel_with_gloo import gloo_barrier
-from .parallel_with_gloo import gloo_release
+monkey_patch_value_in_dist()
+from paddle.base.core import Placement, ReduceType
+from paddle.distributed.fleet.base.topology import ParallelMode
+from paddle.distributed.fleet.dataset import InMemoryDataset, QueueDataset
 
-from paddle.distributed.fleet.dataset import InMemoryDataset  # noqa: F401
-from paddle.distributed.fleet.dataset import QueueDataset  # noqa: F401
-
-from .collective import broadcast  # noqa: F401
-from .collective import all_reduce  # noqa: F401
-from .collective import reduce  # noqa: F401
-from .collective import all_gather  # noqa: F401
-from .collective import scatter  # noqa: F401
-from .collective import barrier  # noqa: F401
-from .collective import ReduceOp  # noqa: F401
-from .collective import split  # noqa: F401
-from .collective import new_group  # noqa: F401
-from .collective import alltoall  # noqa: F401
-from .collective import recv  # noqa: F401
-from .collective import get_group  # noqa: F401
-from .collective import send  # noqa: F401
-from .collective import wait  # noqa: F401
-
+from . import (
+    cloud_utils,  # noqa: F401
+    io,
+    rpc,  # noqa: F401
+)
 from .auto_parallel import shard_op  # noqa: F401
-from .auto_parallel import shard_tensor  # noqa: F401
-from .auto_parallel import set_shard_mask  # noqa: F401
-from .auto_parallel import set_offload_device  # noqa: F401
-from .auto_parallel import set_pipeline_stage  # noqa: F401
-from .auto_parallel import ProcessMesh  # noqa: F401
-
+from .auto_parallel.api import (
+    DistAttr,
+    DistModel,
+    ShardingStage1,
+    ShardingStage2,
+    ShardingStage3,
+    Strategy,
+    dtensor_from_fn,
+    reshard,
+    shard_dataloader,
+    shard_layer,
+    shard_optimizer,
+    shard_scaler,
+    shard_tensor,
+    to_static,
+    unshard_dtensor,
+)
+from .auto_parallel.placement_type import (
+    Partial,
+    Replicate,
+    Shard,
+)
+from .auto_parallel.process_mesh import ProcessMesh
+from .checkpoint.load_state_dict import load_state_dict
+from .checkpoint.save_state_dict import save_state_dict
+from .collective import (
+    is_available,
+    new_group,
+    split,
+)
+from .communication import (  # noqa: F401
+    P2POp,
+    ReduceOp,
+    all_gather,
+    all_gather_object,
+    all_reduce,
+    alltoall,
+    alltoall_single,
+    barrier,
+    batch_isend_irecv,
+    broadcast,
+    broadcast_object_list,
+    destroy_process_group,
+    gather,
+    get_backend,
+    get_group,
+    irecv,
+    is_initialized,
+    isend,
+    recv,
+    reduce,
+    reduce_scatter,
+    scatter,
+    scatter_object_list,
+    send,
+    stream,
+    wait,
+)
+from .entry_attr import (
+    CountFilterEntry,
+    ProbabilityEntry,
+    ShowClickEntry,
+)
 from .fleet import BoxPSDataset  # noqa: F401
+from .launch.main import launch
+from .parallel import (  # noqa: F401
+    DataParallel,
+    ParallelEnv,
+    get_rank,
+    get_world_size,
+    init_parallel_env,
+)
+from .parallel_with_gloo import (
+    gloo_barrier,
+    gloo_init_parallel_env,
+    gloo_release,
+)
+from .sharding import (  # noqa: F401
+    group_sharded_parallel,
+    save_group_sharded_model,
+)
+from .spawn import spawn
 
-from .entry_attr import ProbabilityEntry  # noqa: F401
-from .entry_attr import CountFilterEntry  # noqa: F401
-
-from paddle.fluid.dygraph.parallel import ParallelEnv  # noqa: F401
-
-from . import cloud_utils  # noqa: F401
-from . import utils  # noqa: F401
-
-
-__all__ = [  # noqa
-      "spawn",
-      "launch",
-      "scatter",
-      "broadcast",
-      "ParallelEnv",
-      "new_group",
-      "init_parallel_env",
-      "gloo_init_parallel_env",
-      "gloo_barrier",
-      "gloo_release",
-      "QueueDataset",
-      "split",
-      "CountFilterEntry",
-      "get_world_size",
-      "get_group",
-      "all_gather",
-      "InMemoryDataset",
-      "barrier",
-      "all_reduce",
-      "alltoall",
-      "send",
-      "reduce",
-      "recv",
-      "ReduceOp",
-      "wait",
-      "get_rank",
-      "ProbabilityEntry",
+__all__ = [
+    "io",
+    "spawn",
+    "launch",
+    "scatter",
+    "gather",
+    "scatter_object_list",
+    "broadcast",
+    "broadcast_object_list",
+    "ParallelEnv",
+    "new_group",
+    "init_parallel_env",
+    "gloo_init_parallel_env",
+    "gloo_barrier",
+    "gloo_release",
+    "QueueDataset",
+    "split",
+    "CountFilterEntry",
+    "ShowClickEntry",
+    "get_world_size",
+    "get_group",
+    "all_gather",
+    "all_gather_object",
+    "InMemoryDataset",
+    "barrier",
+    "all_reduce",
+    "alltoall",
+    "alltoall_single",
+    "send",
+    "reduce",
+    "recv",
+    "ReduceOp",
+    "wait",
+    "get_rank",
+    "ProbabilityEntry",
+    "ParallelMode",
+    "is_initialized",
+    "destroy_process_group",
+    "isend",
+    "irecv",
+    "reduce_scatter",
+    "is_available",
+    "get_backend",
+    "ProcessMesh",
+    "DistAttr",
+    "shard_tensor",
+    "dtensor_from_fn",
+    "reshard",
+    "shard_layer",
+    "shard_dataloader",
+    "ReduceType",
+    "Placement",
+    "Shard",
+    "Replicate",
+    "Partial",
+    "save_state_dict",
+    "load_state_dict",
+    "shard_optimizer",
+    "shard_scaler",
+    "ShardingStage1",
+    "ShardingStage2",
+    "ShardingStage3",
+    "to_static",
+    "Strategy",
+    "DistModel",
+    "unshard_dtensor",
 ]

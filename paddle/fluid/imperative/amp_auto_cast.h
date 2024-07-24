@@ -19,6 +19,7 @@
 #include <tuple>
 #include <unordered_set>
 
+#include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/imperative/type_defs.h"
 
 namespace paddle {
@@ -30,14 +31,21 @@ enum class AmpLevel {
   O1,      // amp, mixed fp32-fp16
   O2,      // almost fp16
   O3,      // fp16
+  OD,      // only conv and matmul use low precision.
 };
+
+std::tuple<std::unordered_set<std::string>,
+           std::unordered_set<std::string>,
+           std::unordered_set<std::string>>
+OpSupportedInfos(const std::string& place,
+                 framework::proto::VarType::Type dtype);
 
 class Tracer;
 
 // Singleton implementation with C++ 11
 class AmpOperators {
  public:
-  ~AmpOperators();
+  ~AmpOperators() = default;
   AmpOperators(const AmpOperators& o) = delete;
   const AmpOperators& operator=(const AmpOperators& o) = delete;
 
@@ -47,8 +55,14 @@ class AmpOperators {
 
   std::shared_ptr<std::unordered_set<std::string>> GetMutableBlockOps();
 
+  std::shared_ptr<std::unordered_set<std::string>> GetMutableUnsupportedOps(
+      const phi::DataType& data_type);
+
   std::shared_ptr<std::unordered_set<std::string>>
   GetMutableUnsupportedFp16Ops();
+
+  std::shared_ptr<std::unordered_set<std::string>>
+  GetMutableUnsupportedBf16Ops();
 
  private:
   AmpOperators();  // forbid calling default constructor
@@ -63,14 +77,35 @@ class AmpOperators {
 
   // The set of ops that has no fp16 CUDA kennel.
   std::shared_ptr<std::unordered_set<std::string>> unsupported_fp16_ops_;
+
+  // The set of ops that has no bf16 CUDA kennel.
+  std::shared_ptr<std::unordered_set<std::string>> unsupported_bf16_ops_;
 };
 
 std::ostream& operator<<(std::ostream& os, AmpOperators& ops);
 
+class AmpAttrs {
+ public:
+  AmpAttrs();
+  ~AmpAttrs() = default;
+  bool GetUsePromote() const;
+  void SetUsePromote(bool use_promote);
+  AmpLevel GetAmpLevel() const;
+  void SetAmpLevel(AmpLevel level);
+  std::string GetAmpDtype() const;
+  void SetAmpDtype(std::string amp_dtype);
+  phi::DataType GetAmpPhiDtype() const;
+
+ private:
+  static thread_local bool use_promote_;
+  static thread_local AmpLevel amp_level_;
+  static thread_local phi::DataType amp_dtype_;
+};
+
 // NOTE(zhiqiu): AutoCastGuard is used for RAII.
 class AutoCastGuard {
  public:
-  AutoCastGuard(std::shared_ptr<Tracer> tracer, AmpLevel guard_level);
+  AutoCastGuard(std::shared_ptr<AmpAttrs> state, AmpLevel guard_level);
 
   ~AutoCastGuard();
 
@@ -79,15 +114,22 @@ class AutoCastGuard {
   AutoCastGuard& operator=(const AutoCastGuard& guard) = delete;
 
  private:
-  std::shared_ptr<Tracer> tracer_;
+  std::shared_ptr<AmpAttrs> state_;
   AmpLevel pre_amp_level_;
 };
 
-NameVarBaseMap AutoCastInputs(const std::string& op_type,
-                              const NameVarBaseMap& ins);
-
-NameVarBaseMap CastPureFp16Inputs(const std::string& op_type,
-                                  const NameVarBaseMap& ins);
+template <typename VarType>
+NameVarMap<VarType> AutoCastInputs(const std::string& op_type,
+                                   const NameVarMap<VarType>& ins);
+template <typename VarType>
+NameVarMap<VarType> CastPureFp16Inputs(const std::string& op_type,
+                                       const NameVarMap<VarType>& ins);
+template <typename VarType>
+NameVarMap<VarType> AutoCastBF16Inputs(const std::string& op_type,
+                                       const NameVarMap<VarType>& ins);
+template <typename VarType>
+NameVarMap<VarType> CastPureBf16Inputs(const std::string& op_type,
+                                       const NameVarMap<VarType>& ins);
 
 }  // namespace imperative
 }  // namespace paddle

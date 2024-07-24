@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/collective/c_scatter_op.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CScatterOp : public framework::OperatorWithKernel {
  public:
@@ -27,45 +26,48 @@ class CScatterOp : public framework::OperatorWithKernel {
     int root_id = ctx->Attrs().Get<int>("root");
     int ring_id = ctx->Attrs().Get<int>("ring_id");
     int nranks = ctx->Attrs().Get<int>("nranks");
-    PADDLE_ENFORCE_GE(nranks, 2,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_GE(nranks,
+                      2,
+                      phi::errors::InvalidArgument(
                           "The number of ranks (%d) must be greater than 1 "
                           "to use collective op (c_scatter op).",
                           nranks));
     PADDLE_ENFORCE_GE(
-        root_id, 0,
-        platform::errors::InvalidArgument(
+        root_id,
+        0,
+        phi::errors::InvalidArgument(
             "The root_id (%d) for c_scatter_op must be non-negative.",
             root_id));
     PADDLE_ENFORCE_GE(
-        ring_id, 0,
-        platform::errors::InvalidArgument(
+        ring_id,
+        0,
+        phi::errors::InvalidArgument(
             "The ring_id (%d) for c_scatter_op must be non-negative.",
             root_id));
-    framework::DDim dim = ctx->GetInputDim("X");
+    phi::DDim dim = ctx->GetInputDim("X");
     dim[0] = dim[0] / nranks;
     if (dim[0] < 0) dim[0] = -1;
     ctx->SetOutputDim("Out", dim);
   }
 
  protected:
-  framework::OpKernelType GetExpectedKernelType(
+  phi::KernelKey GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
-    return framework::OpKernelType(
-        OperatorWithKernel::IndicateVarDataType(ctx, "X"), ctx.GetPlace());
+    return phi::KernelKey(OperatorWithKernel::IndicateVarDataType(ctx, "X"),
+                          ctx.GetPlace());
   }
 };
 
 class CScatterOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
-  void Make() {
+  void Make() override {
     AddInput("X", "(Tensor) tensor to be broadcasted.");
     AddOutput("Out", "(Tensor) the result of broadcast.");
     AddAttr<int>("ring_id", "(int default 0) nccl communication ring id.")
         .SetDefault(0);
     AddAttr<int>("root", "(int default 0) root id for broadcasting.")
         .SetDefault(0);
-    AddAttr<int>("nranks", "(int default 1) number of ranks.").SetDefault(0);
+    AddAttr<int>("nranks", "(int default 0) number of ranks.").SetDefault(0);
     AddAttr<bool>(
         "use_calc_stream",
         "(bool default false) eject CUDA operations to calculation stream.")
@@ -77,16 +79,18 @@ Scatter the source to all participators.
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
 REGISTER_OP_WITHOUT_GRADIENT(c_scatter, ops::CScatterOp, ops::CScatterOpMaker);
 
-REGISTER_OP_CPU_KERNEL(c_scatter, ops::CScatterOpCPUKernel<float>,
-                       ops::CScatterOpCPUKernel<double>,
-                       ops::CScatterOpCPUKernel<int>,
-                       ops::CScatterOpCPUKernel<int64_t>,
-                       ops::CScatterOpCPUKernel<plat::float16>);
+PD_REGISTER_STRUCT_KERNEL(c_scatter,
+                          CPU,
+                          ALL_LAYOUT,
+                          ops::CScatterOpCPUKernel,
+                          float,
+                          double,
+                          int,
+                          int64_t,
+                          phi::dtype::float16) {}

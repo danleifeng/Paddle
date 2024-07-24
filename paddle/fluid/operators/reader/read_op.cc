@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/reader.h"
-#include "paddle/fluid/platform/profiler.h"
+#include "paddle/fluid/platform/profiler/event_tracing.h"
 
 namespace paddle {
 namespace operators {
@@ -25,8 +26,8 @@ namespace operators {
 // 2. Each non-negative number of the two dimensions are same.
 // 3. For negative number in a dimension, it means unknown so it is compatible
 //    with any number.
-bool DimensionIsCompatibleWith(const framework::DDim& first,
-                               const framework::DDim& second) {
+bool DimensionIsCompatibleWith(const phi::DDim& first,
+                               const phi::DDim& second) {
   int dim_size = first.size();
   if (dim_size != second.size()) {
     return false;
@@ -45,24 +46,26 @@ class ReadInferShape : public framework::InferShapeBase {
     OP_INOUT_CHECK(ctx->HasInput("Reader"), "Input", "Reader", "read");
     OP_INOUT_CHECK(ctx->HasOutputs("Out"), "Output", "Out", "read");
     if (!ctx->IsRuntime() && ctx->Attrs().Get<bool>("infer_out")) {
-      std::vector<framework::DDim> reader_dims = ctx->GetReaderDims("Reader");
+      std::vector<phi::DDim> reader_dims = ctx->GetReaderDims("Reader");
       std::vector<std::string> out_names = ctx->Outputs("Out");
       PADDLE_ENFORCE_EQ(
-          reader_dims.size(), out_names.size(),
-          platform::errors::InvalidArgument(
+          reader_dims.size(),
+          out_names.size(),
+          phi::errors::InvalidArgument(
               "The reader's dim number doesn't match the output number."));
       ctx->SetOutputsDim("Out", reader_dims);
       auto in_desc =
-          BOOST_GET(framework::VarDesc*, ctx->GetInputVarPtrs("Reader")[0]);
+          PADDLE_GET(framework::VarDesc*, ctx->GetInputVarPtrs("Reader")[0]);
       auto in_lod_levels = in_desc->GetLoDLevels();
       auto out_var_ptrs = ctx->GetOutputVarPtrs("Out");
       PADDLE_ENFORCE_EQ(
-          in_lod_levels.size(), out_var_ptrs.size(),
-          platform::errors::InvalidArgument(
+          in_lod_levels.size(),
+          out_var_ptrs.size(),
+          phi::errors::InvalidArgument(
               "LoDLevels of Input(Reader) must be the same as the "
               "number of Outputs(Out)."));
       for (size_t i = 0; i < out_var_ptrs.size(); ++i) {
-        auto* out_desc = BOOST_GET(framework::VarDesc*, out_var_ptrs[i]);
+        auto* out_desc = PADDLE_GET(framework::VarDesc*, out_var_ptrs[i]);
         out_desc->SetLoDLevel(in_lod_levels[i]);
       }
     }
@@ -72,13 +75,14 @@ class ReadInferShape : public framework::InferShapeBase {
 class ReadInferVarType : public framework::StaticGraphVarTypeInference {
  public:
   void operator()(framework::InferVarTypeContext* ctx) const override {
-    bool infer_out = BOOST_GET_CONST(bool, ctx->GetAttr("infer_out"));
+    bool infer_out = PADDLE_GET_CONST(bool, ctx->GetAttr("infer_out"));
     if (infer_out) {
       std::string reader_name = Input(ctx, "Reader")[0];
       auto& out_names = Output(ctx, "Out");
       auto dtypes = GetDataTypes(ctx, reader_name);
-      PADDLE_ENFORCE_EQ(dtypes.size(), out_names.size(),
-                        platform::errors::InvalidArgument(
+      PADDLE_ENFORCE_EQ(dtypes.size(),
+                        out_names.size(),
+                        phi::errors::InvalidArgument(
                             "The number of input reader's dtypes do not match "
                             "the output variable number."));
       for (size_t i = 0; i < dtypes.size(); ++i) {
@@ -95,17 +99,18 @@ class ReadOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
+               const phi::Place& dev_place) const override {
     VLOG(3) << "read op in";
     framework::ReaderHolder* reader =
-        GET_DATA_SAFELY(scope.FindVar(Input("Reader")), "Input", "Reader",
-                        "Read")
+        GET_DATA_SAFELY(
+            scope.FindVar(Input("Reader")), "Input", "Reader", "Read")
             .GetMutable<framework::ReaderHolder>();
     std::vector<std::string> out_arg_names = Outputs("Out");
-    std::vector<framework::LoDTensor> ins;
+    paddle::framework::LoDTensorArray ins;
 
     // For profiling
-    platform::RecordEvent record_event(Type());
+    platform::RecordEvent record_event(
+        Type().c_str(), platform::TracerEventType::UserDefined, 1);
 
     reader->ReadNext(&ins);
     if (ins.empty()) {
@@ -113,38 +118,48 @@ class ReadOp : public framework::OperatorBase {
       PADDLE_THROW_EOF();
     }
     PADDLE_ENFORCE_EQ(
-        ins.size(), out_arg_names.size(),
-        platform::errors::InvalidArgument("input data number and output data "
-                                          "number of read_op do not match"));
+        ins.size(),
+        out_arg_names.size(),
+        phi::errors::InvalidArgument("input data number and output data "
+                                     "number of read_op do not match"));
 
-    const std::vector<framework::DDim>& shapes = reader->Shapes();
+    const std::vector<phi::DDim>& shapes = reader->Shapes();
     const std::vector<framework::proto::VarType::Type>& var_types =
         reader->VarTypes();
     const std::vector<bool>& need_check_feed = reader->NeedCheckFeed();
     PADDLE_ENFORCE_EQ(
-        out_arg_names.size(), need_check_feed.size(),
-        platform::errors::InvalidArgument(
+        out_arg_names.size(),
+        need_check_feed.size(),
+        phi::errors::InvalidArgument(
             "Output size of read_op and the number of fed "
             "variables of reader do not match. Received size of output is %d, "
             "number of fed variables of reader is %d",
-            out_arg_names.size(), need_check_feed.size()));
+            out_arg_names.size(),
+            need_check_feed.size()));
 
     for (size_t i = 0; i < out_arg_names.size(); ++i) {
       auto* out =
-          scope.FindVar(out_arg_names[i])->GetMutable<framework::LoDTensor>();
+          scope.FindVar(out_arg_names[i])->GetMutable<phi::DenseTensor>();
       if (need_check_feed[i]) {
         auto in_dims = ins[i].dims();
         PADDLE_ENFORCE_EQ(
-            DimensionIsCompatibleWith(shapes[i], in_dims), true,
-            platform::errors::InvalidArgument(
+            DimensionIsCompatibleWith(shapes[i], in_dims),
+            true,
+            phi::errors::InvalidArgument(
                 "The fed Variable %s should have dimensions = %d, "
                 "shape = [%s], but received fed shape [%s]",
-                out_arg_names[i], shapes[i].size(), shapes[i], in_dims));
+                out_arg_names[i],
+                shapes[i].size(),
+                shapes[i],
+                in_dims));
         PADDLE_ENFORCE_EQ(
-            ins[i].type(), var_types[i],
-            platform::errors::InvalidArgument(
+            framework::TransToProtoVarType(ins[i].dtype()),
+            var_types[i],
+            phi::errors::InvalidArgument(
                 "The data type of fed Variable %s must be %s, but received %s",
-                out_arg_names[i], var_types[i], ins[i].type()));
+                out_arg_names[i],
+                var_types[i],
+                ins[i].type()));
       }
       out->ShareDataWith(ins[i]);
       out->set_lod(ins[i].lod());
@@ -156,7 +171,7 @@ class ReadOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
     AddInput("Reader", "(ReaderHolder) The executed reader.");
-    AddOutput("Out", "(LoDTensor) The output data.").AsDuplicable();
+    AddOutput("Out", "(phi::DenseTensor) The output data.").AsDuplicable();
     AddAttr<bool>(
         "throw_eof_exp",
         "If set true, an exception will be thrown when the Reader "
@@ -183,7 +198,10 @@ class ReadOpMaker : public framework::OpProtoAndCheckerMaker {
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
-    read, ops::ReadOp, ops::ReadInferShape, ops::ReadOpMaker,
+    read,
+    ops::ReadOp,
+    ops::ReadInferShape,
+    ops::ReadOpMaker,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
     ops::ReadInferVarType);

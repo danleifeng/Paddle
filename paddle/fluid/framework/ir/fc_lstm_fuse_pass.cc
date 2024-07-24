@@ -13,20 +13,17 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/ir/fc_lstm_fuse_pass.h"
+
 #include <string>
 
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/string/pretty_log.h"
+#include "paddle/utils/string/pretty_log.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Node;
 
@@ -68,13 +65,13 @@ MulLstmFusePass::MulLstmFusePass() {
       .IsType<bool>()
       .End()
       .AddAttr("gate_activation")
-      .IsStringIn({"sigmoid", "tanh", "relu", "identity"})
+      .IsStringIn({"sigmoid"})
       .End()
       .AddAttr("cell_activation")
-      .IsStringIn({"sigmoid", "tanh", "relu", "identity"})
+      .IsStringIn({"tanh", "relu", "identity"})
       .End()
       .AddAttr("candidate_activation")
-      .IsStringIn({"sigmoid", "tanh", "relu", "identity"})
+      .IsStringIn({"tanh", "relu", "identity"})
       .End();
   AddOpCompat(OpCompat("mul"))
       .AddInput("X")
@@ -171,8 +168,10 @@ FCLstmFusePass::FCLstmFusePass() {
       .End();
 }
 
-int FCLstmFusePass::BuildFusion(Graph* graph, const std::string& name_scope,
-                                Scope* scope, bool with_fc_bias) const {
+int FCLstmFusePass::BuildFusion(Graph* graph,
+                                const std::string& name_scope,
+                                Scope* scope,
+                                bool with_fc_bias) const {
   GraphPatternDetector gpd;
   auto* pattern = gpd.mutable_pattern();
 
@@ -187,9 +186,16 @@ int FCLstmFusePass::BuildFusion(Graph* graph, const std::string& name_scope,
   lstm_pattern(fc_out);
 
   // Create New OpDesc
-  auto lstm_creator = [&](Node* lstm, Node* input, Node* weight_x,
-                          Node* weight_h, Node* bias, Node* hidden, Node* cell,
-                          Node* xx, Node* fc_bias, const bool use_mkldnn) {
+  auto lstm_creator = [&](Node* lstm,
+                          Node* input,
+                          Node* weight_x,
+                          Node* weight_h,
+                          Node* bias,
+                          Node* hidden,
+                          Node* cell,
+                          Node* xx,
+                          Node* fc_bias,
+                          const bool use_mkldnn) {
     OpDesc op_desc;
     op_desc.SetType("fusion_lstm");
 #define SET_IN(Key, node__) op_desc.SetInput(#Key, {node__->Name()});
@@ -201,24 +207,23 @@ int FCLstmFusePass::BuildFusion(Graph* graph, const std::string& name_scope,
     if (with_fc_bias) {
       // Add FC-bias with LSTM-bias and create a new weight
       PADDLE_ENFORCE_NOT_NULL(
-          scope, platform::errors::InvalidArgument("Scope cannot be nullptr."));
+          scope, phi::errors::InvalidArgument("Scope cannot be nullptr."));
       auto* lstm_bias_var = scope->FindVar(bias->Name());
       auto* fc_bias_var = scope->FindVar(fc_bias->Name());
-      PADDLE_ENFORCE_NOT_NULL(lstm_bias_var,
-                              platform::errors::InvalidArgument(
-                                  "Lstm bias var ptr cannot be nullptr."));
-      PADDLE_ENFORCE_NOT_NULL(fc_bias_var,
-                              platform::errors::InvalidArgument(
-                                  "FC bias var ptr cannot be nullptr."));
-      auto* lstm_bias_tensor =
-          lstm_bias_var->GetMutable<framework::LoDTensor>();
-      const auto& fc_bias_tensor = fc_bias_var->Get<framework::LoDTensor>();
+      PADDLE_ENFORCE_NOT_NULL(
+          lstm_bias_var,
+          phi::errors::InvalidArgument("Lstm bias var ptr cannot be nullptr."));
+      PADDLE_ENFORCE_NOT_NULL(
+          fc_bias_var,
+          phi::errors::InvalidArgument("FC bias var ptr cannot be nullptr."));
+      auto* lstm_bias_tensor = lstm_bias_var->GetMutable<phi::DenseTensor>();
+      const auto& fc_bias_tensor = fc_bias_var->Get<phi::DenseTensor>();
 
       auto lstm_bias_data =
-          lstm_bias_tensor->mutable_data<float>(platform::CPUPlace());
+          lstm_bias_tensor->mutable_data<float>(phi::CPUPlace());
       auto* fc_bias_data = fc_bias_tensor.data<float>();
 
-      for (int i = 0; i < lstm_bias_tensor->numel(); i++) {
+      for (int i = 0; i < fc_bias_tensor.numel(); i++) {
         lstm_bias_data[i] += fc_bias_data[i];
       }
     }
@@ -309,16 +314,32 @@ int FCLstmFusePass::BuildFusion(Graph* graph, const std::string& name_scope,
       GET_IR_NODE_FROM_SUBGRAPH(fc_bias, bias, fc_pattern);
       GET_IR_NODE_FROM_SUBGRAPH(mul_out, mul_out, fc_pattern);
       GET_IR_NODE_FROM_SUBGRAPH(elementwise_add, elementwise_add, fc_pattern);
-      lstm_creator(lstm, subgraph.at(x), w, Weight, Bias, Hidden, Cell, fc_out,
-                   fc_bias, use_mkldnn);
+      lstm_creator(lstm,
+                   subgraph.at(x),
+                   w,
+                   Weight,
+                   Bias,
+                   Hidden,
+                   Cell,
+                   fc_out,
+                   fc_bias,
+                   use_mkldnn);
       // Remove unneeded nodes.
       std::unordered_set<const Node*> marked_nodes(
           {mul, lstm, elementwise_add, mul_out, BatchGate, BatchCellPreAct});
       GraphSafeRemoveNodes(graph, marked_nodes);
     } else {
       GET_IR_NODE_FROM_SUBGRAPH(fc_out, mul_out, fc_pattern);
-      lstm_creator(lstm, subgraph.at(x), w, Weight, Bias, Hidden, Cell, fc_out,
-                   nullptr, use_mkldnn);
+      lstm_creator(lstm,
+                   subgraph.at(x),
+                   w,
+                   Weight,
+                   Bias,
+                   Hidden,
+                   Cell,
+                   fc_out,
+                   nullptr,
+                   use_mkldnn);
       // Remove unneeded nodes.
       std::unordered_set<const Node*> marked_nodes(
           {mul, lstm, BatchGate, BatchCellPreAct});
@@ -354,9 +375,7 @@ void FCLstmFusePass::ApplyImpl(ir::Graph* graph) const {
                             fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(mul_lstm_fuse_pass, paddle::framework::ir::MulLstmFusePass);
 REGISTER_PASS(fc_lstm_fuse_pass, paddle::framework::ir::FCLstmFusePass);

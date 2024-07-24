@@ -19,9 +19,21 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/flags.h"
 #include "paddle/fluid/framework/inlined_vector.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/allocator.h"
+#include "paddle/phi/core/enforce.h"
+
+#ifdef PADDLE_WITH_NCCL
+#include <nccl.h>
+#include "paddle/phi/backends/dynload/nccl.h"
+#endif
+
+COMMON_DECLARE_string(allocator_strategy);
+COMMON_DECLARE_bool(sync_after_alloc);
+COMMON_DECLARE_int64(alloc_fill_value);
 
 namespace paddle {
 namespace memory {
@@ -30,8 +42,8 @@ namespace allocation {
 // Exception when `Alloc`/`AllocShared` failed
 struct BadAlloc : public std::exception {
   inline explicit BadAlloc(std::string err_msg, const char* file, int line)
-      : err_str_(platform::GetTraceBackString(std::move(err_msg), file, line)) {
-  }
+      : err_str_(platform::GetCompleteTraceBackString(
+            std::move(err_msg), file, line)) {}
 
   const char* what() const noexcept override { return err_str_.c_str(); }
 
@@ -78,40 +90,18 @@ class Allocator;
  * e.g., something what is done in AlignedAllocator, etc.
  * In this case, we should declare a derived class of Allocation, which
  * contains an underlying Allocation allocated by the underlying allocator.
- * Therefore, `decorated_allocators_` of the new Allocation object would
+ * Therefore, `decorated_allocators_` of the new Allocation object
+ * would
  * be a new chain, differing from the underlying Allocation object.
  */
-class Allocation {
+class Allocation : public phi::Allocation {
  public:
-  inline Allocation(void* ptr, size_t size, platform::Place place)
-      : ptr_(ptr), size_(size), place_(place) {}
+  Allocation(void* ptr, size_t size, phi::Place place)
+      : phi::Allocation(ptr, size, place), base_ptr_(ptr) {}
+  Allocation(void* ptr, void* base_ptr, size_t size, const phi::Place& place)
+      : phi::Allocation(ptr, size, place), base_ptr_(base_ptr) {}
 
-  Allocation(const Allocation& o) = delete;
-  Allocation& operator=(const Allocation& o) = delete;
-  Allocation(Allocation&& o) = delete;
-  Allocation& operator=(Allocation&& o) = delete;
-
-  // Returns the holding pointer.
-  // NOTE: For performance consideration, it is better not to make this method
-  // as a virtual method. If we want to implement a `defragmentation` later,
-  // we might need to make `ptr_` field as a protected field, and add a virtual
-  // method like `defragmentation` to change `ptr_`.
-  inline void* ptr() const { return ptr_; }
-
-  // Returns the size of this memory buffer, i.e., ptr() + size() - 1 is the
-  // last valid element.
-  //
-  // NOTE: Some allocator might alloc more memory than request. The size
-  // could larger than its request. For example,
-  //    the AlignedAllocator will always allocate memory as size + kAlignment.
-  //    The raw pointer might not aligned, so an offset might be added to raw
-  //    the pointer. The size of this allocation will be
-  //    `size + kAlignemnt - offset`.
-  inline size_t size() const { return size_; }
-
-  inline const platform::Place& place() const { return place_; }
-
-  virtual ~Allocation() {}
+  void* base_ptr() const { return base_ptr_; }
 
  private:
   inline void RegisterDecoratedAllocator(Allocator* allocator) {
@@ -125,9 +115,7 @@ class Allocation {
   }
 
  private:
-  void* ptr_;
-  size_t size_;
-  platform::Place place_;
+  void* base_ptr_;  // the point that directly requested from system
 
   /**
    * NOTE(zjl): Since decorated_allocators_ is usually a small vector.
@@ -147,55 +135,74 @@ class Allocation {
   friend class Allocator;
 };
 
-// Base interface class of memory Allocator.
-class Allocator {
- public:
-  virtual ~Allocator() {}
+using AllocationPtr = phi::Allocator::AllocationPtr;
+using DecoratedAllocationPtr =
+    std::unique_ptr<Allocation, phi::Allocator::DeleterType>;
 
-  class AllocationDeleter {
-   public:
-    inline void operator()(Allocation* allocation) const {
-      Allocator* allocator = allocation->TopDecoratedAllocator();
-      allocator->Free(allocation);
+template <typename T>
+static T&& FillValue(T&& allocation) {
+#if defined(PADDLE_WITH_CUDA)
+  if (allocation != nullptr) {
+    if (FLAGS_sync_after_alloc || FLAGS_alloc_fill_value >= 0) {
+      bool need_sync = !phi::is_cpu_place(allocation->place());
+      if (need_sync) {
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaDeviceSynchronize());
+      }
+      if (FLAGS_alloc_fill_value >= 0) {
+        VLOG(10) << "Set " << FLAGS_alloc_fill_value << " on "
+                 << allocation->ptr() << " " << allocation->place() << " "
+                 << allocation->size();
+        if (phi::is_gpu_place(allocation->place())) {
+          PADDLE_ENFORCE_GPU_SUCCESS(cudaMemset(
+              allocation->ptr(), FLAGS_alloc_fill_value, allocation->size()));
+        } else {
+          std::memset(
+              allocation->ptr(), FLAGS_alloc_fill_value, allocation->size());
+        }
+        if (need_sync) {
+          PADDLE_ENFORCE_GPU_SUCCESS(cudaDeviceSynchronize());
+        }
+      }
     }
-  };
+  }
+#endif
+  return std::forward<T>(allocation);
+}
 
-  using AllocationPtr = std::unique_ptr<Allocation, AllocationDeleter>;
+// Base interface class of memory Allocator.
+class Allocator : public phi::Allocator {
+ public:
+  static void AllocationDeleter(phi::Allocation* allocation) {
+    Allocator* allocator =
+        static_cast<Allocation*>(allocation)->TopDecoratedAllocator();
+    allocator->Free(allocation);
+  }
 
   // Allocate an allocation.
   // size may be 0, but it would be too complex if we handle size == 0
   // in each Allocator. So we handle size == 0 inside AllocatorFacade
   // in our design.
-  inline AllocationPtr Allocate(size_t size) {
+  AllocationPtr Allocate(size_t size) override {
     auto ptr = AllocateImpl(size);
-    ptr->RegisterDecoratedAllocator(this);
-    return AllocationPtr(ptr);
+    static_cast<Allocation*>(ptr)->RegisterDecoratedAllocator(this);
+    return FillValue(AllocationPtr(ptr, AllocationDeleter));
   }
 
-  // This function should not be called outside Allocator class
-  inline void Free(Allocation* allocation) {
-    allocation->PopDecoratedAllocator();
+  void Free(phi::Allocation* allocation) {
+    static_cast<Allocation*>(allocation)->PopDecoratedAllocator();
     FreeImpl(allocation);
   }
 
-  inline uint64_t Release(const platform::Place& place) {
-    return ReleaseImpl(place);
-  }
-
-  // True if the `Allocate` is thread safe.
-  virtual bool IsAllocThreadSafe() const;
+  uint64_t Release(const phi::Place& place) { return ReleaseImpl(place); }
 
  protected:
-  virtual Allocation* AllocateImpl(size_t size) = 0;
-  virtual void FreeImpl(Allocation* allocation);
-  virtual uint64_t ReleaseImpl(const platform::Place& place) { return 0; }
+  virtual phi::Allocation* AllocateImpl(size_t size) = 0;
+  virtual void FreeImpl(phi::Allocation* allocation);
+  virtual uint64_t ReleaseImpl(const phi::Place& place UNUSED) { return 0; }
 };
 
-using AllocationDeleter = Allocator::AllocationDeleter;
-using AllocationPtr = Allocator::AllocationPtr;
-
 inline size_t AlignedSize(size_t size, size_t alignment) {
-  auto remaining = size % alignment;
+  auto remaining = size % alignment;  // NOLINT
   return remaining == 0 ? size : size + alignment - remaining;
 }
 
@@ -203,6 +210,14 @@ inline size_t AlignedPtrOffset(const void* ptr, size_t alignment) {
   auto ptr_addr = reinterpret_cast<uintptr_t>(ptr);
   auto diff = ptr_addr % alignment;
   return diff == 0 ? 0 : alignment - diff;
+}
+
+template <typename Derived, typename Base, typename BaseDel>
+decltype(auto) static_unique_ptr_cast(std::unique_ptr<Base, BaseDel>&& p) {
+  static_assert(std::is_base_of<Base, Derived>::value,
+                "Derived type must derive from Base.");
+  auto d = static_cast<Derived*>(p.release());
+  return std::unique_ptr<Derived, BaseDel>(d, p.get_deleter());
 }
 
 }  // namespace allocation

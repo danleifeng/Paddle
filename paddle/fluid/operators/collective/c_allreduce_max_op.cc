@@ -14,23 +14,16 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/collective/c_allreduce_op.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class OpDesc;
 template <typename T>
 class EmptyGradOpMaker;
-}  // namespace framework
-namespace imperative {
+}  // namespace paddle::framework
+namespace paddle::imperative {
 class OpBase;
-}  // namespace imperative
-namespace platform {
-struct CPUPlace;
-struct float16;
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::imperative
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CAllReduceMaxOpMaker : public CAllReduceOpMaker {
  protected:
@@ -39,21 +32,22 @@ class CAllReduceMaxOpMaker : public CAllReduceOpMaker {
 
 DECLARE_INPLACE_OP_INFERER(AllreduceMaxInplaceInferer, {"X", "Out"});
 
-}  // namespace operators
-}  // namespace paddle
+DEFINE_C_ALLREDUCE_CPU_KERNEL(CAllReduceMax, kRedMax)
+
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
-REGISTER_OPERATOR(
-    c_allreduce_max, ops::CAllReduceOp, ops::CAllReduceMaxOpMaker,
-    paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
-    paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
-    ops::AllreduceMaxInplaceInferer)
-
-REGISTER_OP_CPU_KERNEL(c_allreduce_max,
-                       ops::CAllReduceOpCPUKernel<ops::kRedMax, float>,
-                       ops::CAllReduceOpCPUKernel<ops::kRedMax, double>,
-                       ops::CAllReduceOpCPUKernel<ops::kRedMax, int>,
-                       ops::CAllReduceOpCPUKernel<ops::kRedMax, int64_t>,
-                       ops::CAllReduceOpCPUKernel<ops::kRedMax, plat::float16>);
+REGISTER_OP_WITHOUT_GRADIENT(c_allreduce_max,
+                             ops::CAllReduceOp,
+                             ops::CAllReduceMaxOpMaker,
+                             ops::AllreduceMaxInplaceInferer)
+PD_REGISTER_STRUCT_KERNEL(c_allreduce_max,
+                          CPU,
+                          ALL_LAYOUT,
+                          ops::CAllReduceMaxCPUKernel,
+                          float,
+                          double,
+                          int,
+                          int64_t,
+                          phi::dtype::float16) {}

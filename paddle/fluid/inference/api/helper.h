@@ -13,8 +13,9 @@
 // limitations under the License.
 
 #pragma once
-
 #include <glog/logging.h>
+#include <sys/stat.h>
+
 #include <fstream>
 #if !defined(_WIN32)
 #include <sys/time.h>
@@ -29,10 +30,13 @@
 #include <vector>
 
 #include "paddle/fluid/framework/data_type.h"
+#include "paddle/fluid/inference/api/paddle_analysis_config.h"
 #include "paddle/fluid/inference/api/paddle_inference_api.h"
+#include "paddle/fluid/memory/stats.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/port.h"
-#include "paddle/fluid/string/printf.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/common/port.h"
+#include "paddle/utils/string/printf.h"
 
 extern std::string paddle::framework::DataTypeToString(
     const framework::proto::VarType::Type type);
@@ -69,13 +73,22 @@ inline PaddleDType ConvertToPaddleDType(
   } else if (type == paddle::framework::proto::VarType::UINT8) {
     return PaddleDType::UINT8;
   } else {
-    PADDLE_THROW(paddle::platform::errors::Unimplemented(
+    PADDLE_THROW(phi::errors::Unimplemented(
         "The paddle dtype convert function only supports FLOAT32, INT64, INT32 "
         "and UINT8 now. But "
         "we get %d here.",
         static_cast<int>(type)));
     return PaddleDType::FLOAT32;
   }
+}
+
+inline bool IsFloatVar(framework::proto::VarType::Type t) {
+  if (t == framework::proto::VarType::FP16 ||
+      t == framework::proto::VarType::FP32 ||
+      t == framework::proto::VarType::FP64 ||
+      t == framework::proto::VarType::BF16)
+    return true;
+  return false;
 }
 
 using paddle::framework::DataTypeToString;
@@ -102,8 +115,10 @@ static int GetUniqueId() {
   return id++;
 }
 
-static void split(const std::string &str, char sep,
-                  std::vector<std::string> *pieces, bool ignore_null = true) {
+static void split(const std::string &str,
+                  char sep,
+                  std::vector<std::string> *pieces,
+                  bool ignore_null = true) {
   pieces->clear();
   if (str.empty()) {
     if (!ignore_null) {
@@ -133,50 +148,59 @@ static T convert(const std::string &item,
     std::string message =
         "invalid_argument exception when try to convert : " + item;
     LOG(ERROR) << message;
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(phi::errors::InvalidArgument(
         "invalid_argument exception when try to convert %s.", item));
   } catch (std::out_of_range &e) {
     std::string message =
         "out_of_range exception when try to convert : " + item;
     LOG(ERROR) << message;
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(phi::errors::InvalidArgument(
         "out_of_range exception when try to convert %s.", item));
   } catch (...) {
     std::string message = "unexpected exception when try to convert " + item;
     LOG(ERROR) << message;
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(phi::errors::InvalidArgument(
         "unexpected exception when try to convert %s.", item));
   }
   return res;
 }
 
-static void split_to_float(const std::string &str, char sep,
+static void split_to_float(const std::string &str,
+                           char sep,
                            std::vector<float> *fs) {
   std::vector<std::string> pieces;
   split(str, sep, &pieces);
-  std::transform(pieces.begin(), pieces.end(), std::back_inserter(*fs),
+  std::transform(pieces.begin(),
+                 pieces.end(),
+                 std::back_inserter(*fs),
                  [](const std::string &v) {
                    return convert<float>(v, [](const std::string &item) {
                      return std::stof(item);
                    });
                  });
 }
-static void split_to_int64(const std::string &str, char sep,
+static void split_to_int64(const std::string &str,
+                           char sep,
                            std::vector<int64_t> *is) {
   std::vector<std::string> pieces;
   split(str, sep, &pieces);
-  std::transform(pieces.begin(), pieces.end(), std::back_inserter(*is),
+  std::transform(pieces.begin(),
+                 pieces.end(),
+                 std::back_inserter(*is),
                  [](const std::string &v) {
                    return convert<int64_t>(v, [](const std::string &item) {
                      return std::stoll(item);
                    });
                  });
 }
-static void split_to_int(const std::string &str, char sep,
+static void split_to_int(const std::string &str,
+                         char sep,
                          std::vector<int> *is) {
   std::vector<std::string> pieces;
   split(str, sep, &pieces);
-  std::transform(pieces.begin(), pieces.end(), std::back_inserter(*is),
+  std::transform(pieces.begin(),
+                 pieces.end(),
+                 std::back_inserter(*is),
                  [](const std::string &v) {
                    return convert<int>(v, [](const std::string &item) {
                      return std::stoi(item);
@@ -212,13 +236,16 @@ void CheckAssignedData(const std::vector<std::vector<T>> &data,
     num += (*it).size();
   }
   PADDLE_ENFORCE_EQ(
-      num, num_elems,
-      platform::errors::OutOfRange(
+      num,
+      num_elems,
+      phi::errors::OutOfRange(
           "The number of elements out of bounds. "
           "Expected number of elements = %d. But received %d. Suggested Fix: "
           "If the tensor is expected to assign %d elements, check the number "
           "of elements of your 'infer_data'.",
-          num_elems, num, num_elems));
+          num_elems,
+          num,
+          num_elems));
 }
 
 template <typename T>
@@ -313,7 +340,7 @@ static bool CompareTensor(const PaddleTensor &a, const PaddleTensor &b) {
 }
 
 static std::string DescribeTensor(const PaddleTensor &tensor,
-                                  int max_num_of_data = 15) {
+                                  int max_num_of_data UNUSED = 15) {
   std::stringstream os;
   os << "Tensor [" << tensor.name << "]\n";
   os << " - type: ";
@@ -373,12 +400,16 @@ static std::string DescribeZeroCopyTensor(const ZeroCopyTensor &tensor) {
   return os.str();
 }
 
-static void PrintTime(int batch_size, int repeat, int num_threads, int tid,
-                      double batch_latency, int epoch = 1,
+static void PrintTime(int batch_size,
+                      int repeat,
+                      int num_threads,
+                      int tid,
+                      double batch_latency,
+                      int epoch = 1,
                       const framework::proto::VarType::Type data_type =
                           framework::proto::VarType::FP32) {
-  PADDLE_ENFORCE_GT(batch_size, 0, platform::errors::InvalidArgument(
-                                       "Non-positive batch size."));
+  PADDLE_ENFORCE_GT(
+      batch_size, 0, phi::errors::InvalidArgument("Non-positive batch size."));
   double sample_latency = batch_latency / batch_size;
   LOG(INFO) << "====== threads: " << num_threads << ", thread id: " << tid
             << " ======";
@@ -398,7 +429,71 @@ static bool IsFileExists(const std::string &path) {
   return exists;
 }
 
-void RegisterAllCustomOperator();
+static bool IsDirectory(const std::string &path) {
+  struct stat info;
+  if (stat(path.c_str(), &info) != 0) {
+    return false;
+  } else if (info.st_mode & S_IFDIR) {
+    return true;
+  }
+  return false;
+}
+
+void RegisterAllCustomOperator(bool use_pir);
+
+void InitGflagsFromEnv();
+
+static inline double ToMegaBytes(size_t bytes) {
+  return static_cast<double>(bytes) / (1 << 20);
+}
+
+static inline void DisplayMemoryInfo(phi::Place place,
+                                     const std::string &hint) {
+#ifdef PADDLE_WITH_CUDA
+  // size_t free, total;
+  // cudaSetDevice(place.GetDeviceId());
+  // cudaMemGetInfo(&free, &total);
+  // VLOG(1) << "[" << ToMegaBytes(total - free) << "MB/" << ToMegaBytes(total)
+  // << "MB]";
+
+  VLOG(1) << hint << " : [gpu current allocated memory: "
+          << ToMegaBytes(paddle::memory::DeviceMemoryStatCurrentValue(
+                 "Allocated", place.GetDeviceId()))
+          << "MB], [gpu current reserved memory: "
+          << ToMegaBytes(paddle::memory::DeviceMemoryStatCurrentValue(
+                 "Reserved", place.GetDeviceId()))
+          << "MB], [gpu peak allocated memory: "
+          << ToMegaBytes(paddle::memory::DeviceMemoryStatPeakValue(
+                 "Allocated", place.GetDeviceId()))
+          << "MB], [gpu peak reserved memory: "
+          << ToMegaBytes(paddle::memory::DeviceMemoryStatPeakValue(
+                 "Reserved", place.GetDeviceId()))
+          << "MB]";
+#endif
+  VLOG(1)
+      << hint << " : [cpu current allocated memory: "
+      << ToMegaBytes(paddle::memory::HostMemoryStatCurrentValue("Allocated", 0))
+      << "MB], [cpu current reserved memory: "
+      << ToMegaBytes(paddle::memory::HostMemoryStatCurrentValue("Reserved", 0))
+      << "MB], [cpu peak allocated memory: "
+      << ToMegaBytes(paddle::memory::HostMemoryStatPeakValue("Allocated", 0))
+      << "MB], [cpu peak reserved memory: "
+      << ToMegaBytes(paddle::memory::HostMemoryStatPeakValue("Reserved", 0))
+      << "MB]";
+}
+
+static std::string Precision2String(AnalysisConfig::Precision precision) {
+  if (precision == AnalysisConfig::Precision::kFloat32)
+    return "fp32";
+  else if (precision == AnalysisConfig::Precision::kHalf)
+    return "fp16";
+  else if (precision == AnalysisConfig::Precision::kInt8)
+    return "int8";
+  else if (precision == AnalysisConfig::Precision::kBf16)
+    return "bf16";
+  else
+    return "none";
+}
 
 }  // namespace inference
 }  // namespace paddle

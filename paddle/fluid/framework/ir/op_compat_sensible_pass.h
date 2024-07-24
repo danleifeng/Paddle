@@ -16,6 +16,7 @@ limitations under the License. */
 
 #include <map>
 #include <vector>
+
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/ir/graph_pattern_detector.h"
 #include "paddle/fluid/framework/ir/pass.h"
@@ -48,7 +49,7 @@ class AttrCompat {
   //! Assert the attribute is an integer in the `candidates` domain.
   AttrCompat& IsIntIn(const std::set<int>& candidates);
 
-  // @{ Number-releated methods
+  // @{ Number-related methods
   //! Assert the attribute is a number and > `v`.
   template <typename T>
   AttrCompat& IsNumGT(T v);
@@ -161,11 +162,11 @@ class OpCompat {
  *   void AddOpCompat(OpCompat&& judger);
  *
  * Most of the Passes are used for fusing ops, so we define a method for such
- * scenerios.
+ * scenarios.
  *   void AccessSubgraph(const GraphPatternDetector::subgraph_t& subgraph,
  Graph* g);
  * It will check the Op compatibility automatically.
- * For other scenirios, one should call `IsCompat` by himself.
+ * For other scenarios, one should call `IsCompat` by himself.
  *
  * A FC fuse pass example:
  * class FcFusePass : public OpCompatSensiblePass {
@@ -176,7 +177,7 @@ class OpCompat {
  *        .AddInput("Input").IsTensor().End()
  *        .AddAttr("in_num_col_dims").IsNumGE(1);
  *     AddOpCompat(OpCompat("Add")). ...;
- *     // There are multiple activation implemention.
+ *     // There are multiple activation implementation.
  *     AddOpCompat(OpCompat("Tanh")). ...;
  *     AddOpCompat(OpCompat("Sigmoid")). ...;
  *   }
@@ -223,7 +224,7 @@ AttrCompat& AttrCompat::IsType() {
 template <typename T>
 AttrCompat& AttrCompat::IsNumGT(T v) {
   conditions_.emplace_back([v](const Attribute& attr) -> bool {
-    T value = BOOST_GET_CONST(T, attr);
+    T value = PADDLE_GET_CONST(T, attr);
     return value > v;
   });
   return *this;
@@ -232,7 +233,7 @@ AttrCompat& AttrCompat::IsNumGT(T v) {
 template <typename T>
 AttrCompat& AttrCompat::IsNumGE(T v) {
   conditions_.emplace_back([v](const Attribute& attr) -> bool {
-    T value = BOOST_GET_CONST(T, attr);
+    T value = PADDLE_GET_CONST(T, attr);
     return value >= v;
   });
   return *this;
@@ -241,7 +242,7 @@ AttrCompat& AttrCompat::IsNumGE(T v) {
 template <typename T>
 AttrCompat& AttrCompat::IsNumLT(T v) {
   conditions_.emplace_back([v](const Attribute& attr) -> bool {
-    T value = BOOST_GET_CONST(T, attr);
+    T value = PADDLE_GET_CONST(T, attr);
     return value < v;
   });
   return *this;
@@ -250,7 +251,7 @@ AttrCompat& AttrCompat::IsNumLT(T v) {
 template <typename T>
 AttrCompat& AttrCompat::IsNumLE(T v) {
   conditions_.emplace_back([v](const Attribute& attr) -> bool {
-    T value = BOOST_GET_CONST(T, attr);
+    T value = PADDLE_GET_CONST(T, attr);
     return value <= v;
   });
   return *this;
@@ -259,7 +260,7 @@ AttrCompat& AttrCompat::IsNumLE(T v) {
 template <typename T>
 AttrCompat& AttrCompat::IsNumEQ(T v) {
   conditions_.emplace_back([v](const Attribute& attr) -> bool {
-    T value = BOOST_GET_CONST(T, attr);
+    T value = PADDLE_GET_CONST(T, attr);
     return value == v;
   });
   return *this;
@@ -268,7 +269,7 @@ AttrCompat& AttrCompat::IsNumEQ(T v) {
 template <typename T>
 AttrCompat& AttrCompat::IsNumMatch(bool (*func)(T)) {
   conditions_.emplace_back([func](const Attribute& attr) -> bool {
-    T value = BOOST_GET_CONST(T, attr);
+    T value = PADDLE_GET_CONST(T, attr);
     return func(value);
   });
   return *this;

@@ -12,44 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import Callable, Generator, TypeVar
+
+_T = TypeVar('_T')
 __all__ = []
 
 
-def batch(reader, batch_size, drop_last=False):
+def batch(
+    reader: Callable[[], Generator[_T, None, None]],
+    batch_size: int,
+    drop_last: bool = False,
+) -> Callable[[], Generator[list[_T], None, None]]:
     """
-    This operator creates a batched reader which combines the data from the 
+    This operator creates a batched reader which combines the data from the
     input reader to batched data.
-    
+
     Args:
         reader(generator): the data reader to read from.
         batch_size(int): size of each mini-batch.
-        drop_last(bool, optional): If set to True, the last batch is dropped when 
+        drop_last(bool, optional): If set to True, the last batch is dropped when
             the size of last batch is not equal to batch_size, if set to False,
             it will not. Default: False.
     Returns:
-        The batched reader. 
-    
+        The batched reader.
+
     Return Type:
-        generator   
+        generator
 
     Examples:
         .. code-block:: python
-           
-            import paddle
-            def reader():
-                for i in range(10):
-                    yield i
-            batch_reader = paddle.batch(reader, batch_size=2)
-            
-            for data in batch_reader():
-                print(data)
 
-            # Output is
-            # [0, 1]
-            # [2, 3]
-            # [4, 5]
-            # [6, 7]
-            # [8, 9]
+            >>> import paddle
+            >>> def reader():
+            ...     for i in range(10):
+            ...         yield i
+            >>> batch_reader = paddle.batch(reader, batch_size=2)
+
+            >>> for data in batch_reader():
+            ...     print(data)
+            ...
+            [0, 1]
+            [2, 3]
+            [4, 5]
+            [6, 7]
+            [8, 9]
     """
 
     def batch_reader():
@@ -66,7 +74,9 @@ def batch(reader, batch_size, drop_last=False):
     # Batch size check
     batch_size = int(batch_size)
     if batch_size <= 0:
-        raise ValueError("batch_size should be a positive integeral value, "
-                         "but got batch_size={}".format(batch_size))
+        raise ValueError(
+            "batch_size should be a positive integer value, "
+            f"but got batch_size={batch_size}"
+        )
 
     return batch_reader

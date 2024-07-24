@@ -14,6 +14,7 @@
 
 #pragma once
 #include <ThreadPool.h>
+
 #include <algorithm>
 #include <iostream>
 #include <map>
@@ -29,15 +30,10 @@
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/fluid/framework/variable.h"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/platform/for_range.h"
+#include "paddle/phi/kernels/funcs/for_range.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
-namespace platform {
-class DeviceContext;
-
-}  // namespace platform
-
 namespace imperative {
 class ParallelContext;
 class VarBase;
@@ -48,8 +44,9 @@ class VariableWrapper;
 namespace paddle {
 namespace imperative {
 
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
-    defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_GLOO)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) ||     \
+    defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_GLOO) || \
+    defined(PADDLE_WITH_CUSTOM_DEVICE)
 
 template <typename T>
 struct DivNRanksFunctor {
@@ -64,18 +61,19 @@ struct DivNRanksFunctor {
 
 template <typename Dex>
 struct DivNRanksForAllReduce {
-  framework::Tensor* in_;
+  phi::DenseTensor* in_;
   int64_t nranks_;
-  const platform::DeviceContext& ctx_;
-  DivNRanksForAllReduce(framework::Tensor* in, int64_t nranks,
-                        const platform::DeviceContext& ctx)
+  const phi::DeviceContext& ctx_;
+  DivNRanksForAllReduce(phi::DenseTensor* in,
+                        int64_t nranks,
+                        const phi::DeviceContext& ctx)
       : in_(in), nranks_(nranks), ctx_(ctx) {}
 
   template <typename T>
   void apply() const {
     T* data = in_->mutable_data<T>(ctx_.GetPlace());
-    platform::ForRange<Dex> for_range(static_cast<const Dex&>(ctx_),
-                                      static_cast<size_t>(in_->numel()));
+    phi::funcs::ForRange<Dex> for_range(static_cast<const Dex&>(ctx_),
+                                        static_cast<size_t>(in_->numel()));
     DivNRanksFunctor<T> functor(nranks_, data);
     for_range(functor);
   }
@@ -91,7 +89,7 @@ class Group {
   bool is_sparse_ = false;
 
   // for concat kernel
-  std::vector<framework::Tensor> dense_tensors_;
+  std::vector<phi::DenseTensor> dense_tensors_;
 
   std::vector<size_t> length_;
 
@@ -107,16 +105,17 @@ class Group {
   framework::proto::VarType::Type dtype_;
 
   // context is used to select the stream for concat
-  void ConcatTensors(const platform::DeviceContext& context);
+  void ConcatTensors(const phi::DeviceContext& context);
 
   // context is used to select the stream for split
-  void SplitTensors(const platform::DeviceContext& context);
+  void SplitTensors(const phi::DeviceContext& context);
 
   // use it in CUDA
-  void DivNRanks(framework::Tensor* tensor, int64_t nranks,
-                 const platform::DeviceContext& context);
+  void DivNRanks(phi::DenseTensor* tensor,
+                 int64_t nranks,
+                 const phi::DeviceContext& context);
 
-  void DivNRanks(const platform::DeviceContext& context, int64_t nranks);
+  void DivNRanks(const phi::DeviceContext& context, int64_t nranks);
 
   friend std::ostream& operator<<(std::ostream&, const Group&);
 };
@@ -134,7 +133,8 @@ class Reducer {
       const std::vector<std::vector<size_t>>& group_indices,
       const std::vector<bool>& is_sparse_gradient,
       std::shared_ptr<imperative::ParallelContext> parallel_ctx,
-      const std::vector<size_t>& group_size_limits, bool find_unused_vars);
+      const std::vector<size_t>& group_size_limits,
+      bool find_unused_vars);
 
   virtual ~Reducer() {}
 
@@ -154,12 +154,13 @@ class Reducer {
 
   void MarkGroupReady(size_t group_index);
 
-  void FusedAllReduceSchedule(const int run_order, Group& group,  // NOLINT
+  void FusedAllReduceSchedule(const int run_order,
+                              Group& group,  // NOLINT
                               const int curr_group_index);
 
   void FinalizeBackward();
 
-  std::vector<std::vector<size_t>> RebuildGruops();
+  std::vector<std::vector<size_t>> RebuildGroups();
 
   inline bool NeedRebuildGroup() {
     return !has_rebuilt_group_ && !find_unused_vars_each_step_;
@@ -177,7 +178,7 @@ class Reducer {
   std::vector<std::vector<size_t>> group_indices_;
   std::vector<Group> groups_;
   size_t next_group_ = 0;
-  platform::Place place_;
+  phi::Place place_;
   std::once_flag once_flag_;
   std::vector<bool> is_sparse_gradient_;
   std::shared_ptr<imperative::ParallelContext> parallel_ctx_;

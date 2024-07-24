@@ -14,6 +14,10 @@
 
 #include "paddle/fluid/memory/allocation/buffered_allocator.h"
 
+#include "paddle/common/macros.h"
+
+REGISTER_FILE_SYMBOLS(buffered_allocator);
+
 namespace paddle {
 namespace memory {
 namespace allocation {
@@ -22,10 +26,10 @@ BufferedAllocator::BufferedAllocator(std::shared_ptr<Allocator> allocator)
     : underlying_allocator_(std::move(allocator)) {
   PADDLE_ENFORCE_NOT_NULL(
       underlying_allocator_,
-      platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "Underlying allocator of BufferedAllocator is NULL"));
   if (underlying_allocator_->IsAllocThreadSafe()) {
-    mtx_.reset(new std::mutex());
+    mtx_ = std::make_unique<std::mutex>();
   }
 }
 
@@ -46,12 +50,13 @@ void BufferedAllocator::FreeCache(size_t size) {
 
 bool BufferedAllocator::IsAllocThreadSafe() const { return mtx_ != nullptr; }
 
-void BufferedAllocator::FreeImpl(Allocation *allocation) {
+void BufferedAllocator::FreeImpl(phi::Allocation *allocation) {
   platform::LockGuardPtr<std::mutex> guard(mtx_);
-  allocations_.emplace(allocation->size(), AllocationPtr(allocation));
+  allocations_.emplace(allocation->size(),
+                       AllocationPtr(allocation, Allocator::AllocationDeleter));
 }
 
-Allocation *BufferedAllocator::AllocateImpl(size_t size) {
+phi::Allocation *BufferedAllocator::AllocateImpl(size_t size) {
   {
     platform::LockGuardPtr<std::mutex> guard(mtx_);
     auto it = allocations_.lower_bound(size);

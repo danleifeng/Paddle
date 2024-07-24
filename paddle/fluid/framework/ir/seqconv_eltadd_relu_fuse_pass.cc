@@ -13,19 +13,16 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/ir/seqconv_eltadd_relu_fuse_pass.h"
+
 #include <string>
 
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 SeqConvEltAddReluFusePass::SeqConvEltAddReluFusePass() {
   AddOpCompat(OpCompat("sequence_conv"))
@@ -89,8 +86,11 @@ void SeqConvEltAddReluFusePass::ApplyImpl(ir::Graph* graph) const {
   fuse_pattern(x);
 
   // Create New OpDesc
-  auto fuse_creator = [&](Node* seqconv, Node* input, Node* seqconv_weight,
-                          Node* eltadd_bias, Node* relu_out) {
+  auto fuse_creator = [&](Node* seqconv,
+                          Node* input,
+                          Node* seqconv_weight,
+                          Node* eltadd_bias,
+                          Node* relu_out) {
     OpDesc op_desc;
     op_desc.SetType("fusion_seqconv_eltadd_relu");
     op_desc.SetInput("X", {input->Name()});
@@ -133,8 +133,8 @@ void SeqConvEltAddReluFusePass::ApplyImpl(ir::Graph* graph) const {
     GET_IR_NODE_FROM_SUBGRAPH(relu, relu, fuse_pattern);
     GET_IR_NODE_FROM_SUBGRAPH(relu_out, relu_out, fuse_pattern);
 
-    fuse_creator(seqconv, subgraph.at(x), seqconv_weight, eltadd_bias,
-                 relu_out);
+    fuse_creator(
+        seqconv, subgraph.at(x), seqconv_weight, eltadd_bias, relu_out);
     std::unordered_set<const Node*> marked_nodes(
         {seqconv, seqconv_out, eltadd, eltadd_out, relu});
     GraphSafeRemoveNodes(graph, marked_nodes);
@@ -145,9 +145,7 @@ void SeqConvEltAddReluFusePass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(seqconv_eltadd_relu_fuse_pass,
               paddle::framework::ir::SeqConvEltAddReluFusePass);

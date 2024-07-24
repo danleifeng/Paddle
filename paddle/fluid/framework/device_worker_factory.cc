@@ -14,12 +14,12 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/device_worker_factory.h"
 
-#include <stdlib.h>
+#include <cstdlib>
+
 #include <memory>
 #include <string>
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class DeviceWorker;
 
@@ -45,7 +45,8 @@ device_workerMap g_device_worker_map;
 std::string DeviceWorkerFactory::DeviceWorkerTypeList() {
   std::string device_worker_types;
   for (auto iter = g_device_worker_map.begin();
-       iter != g_device_worker_map.end(); ++iter) {
+       iter != g_device_worker_map.end();
+       ++iter) {
     if (iter != g_device_worker_map.begin()) {
       device_worker_types += ", ";
     }
@@ -65,18 +66,23 @@ std::shared_ptr<DeviceWorker> DeviceWorkerFactory::CreateDeviceWorker(
 REGISTER_DEVICE_WORKER_CLASS(HogwildWorker);
 REGISTER_DEVICE_WORKER_CLASS(DownpourWorker);
 REGISTER_DEVICE_WORKER_CLASS(DownpourWorkerOpt);
-#ifdef PADDLE_WITH_PSLIB
+
+#if defined(PADDLE_WITH_PSCORE)
+REGISTER_DEVICE_WORKER_CLASS(DownpourLiteWorker);
+REGISTER_DEVICE_WORKER_CLASS(HeterSectionWorker);
+#endif
+
+#if defined(PADDLE_WITH_PSLIB) && !defined(PADDLE_WITH_HETERPS)
 REGISTER_DEVICE_WORKER_CLASS(HeterCpuWorker);
 #endif
 
-#if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL) && \
+#if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL || \
+     defined PADDLE_WITH_XPU_BKCL) &&                        \
     (defined PADDLE_WITH_PSLIB)
 REGISTER_DEVICE_WORKER_CLASS(PSGPUWorker);
 #endif
 
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
-    defined(PADDLE_WITH_ASCEND_CL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 REGISTER_DEVICE_WORKER_CLASS(SectionWorker);
 #endif
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

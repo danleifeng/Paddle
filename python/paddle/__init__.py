@@ -11,520 +11,1159 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import typing
+
+__is_metainfo_generated = False
 try:
-    from paddle.version import full_version as __version__
-    from paddle.version import commit as __git_commit__
-    from paddle.cuda_env import *
+    from paddle.cuda_env import *  # noqa: F403
+    from paddle.version import (  # noqa: F401
+        commit as __git_commit__,
+        full_version as __version__,
+    )
+
+    __is_metainfo_generated = True
+
 except ImportError:
     import sys
-    sys.stderr.write('''Warning with import paddle: you should not
+
+    sys.stderr.write(
+        '''Warning with import paddle: you should not
      import paddle from the source directory; please install paddlepaddle*.whl firstly.'''
-                     )
+    )
 
-from .batch import batch  # noqa: F401
-from .fluid import monkey_patch_variable
-from .fluid.dygraph import monkey_patch_math_varbase
+# NOTE(SigureMo): We should place the import of base.core before other modules,
+# because there are some initialization codes in base/core/__init__.py.
+from .base import core  # noqa: F401
+from .batch import batch
+
+# Do the *DUPLICATED* monkey-patch for the tensor object.
+# We need remove the duplicated code here once we fix
+# the illogical implement in the monkey-patch methods later.
+from .framework import monkey_patch_math_tensor, monkey_patch_variable
+from .pir import monkey_patch_dtype, monkey_patch_program, monkey_patch_value
+
 monkey_patch_variable()
-monkey_patch_math_varbase()
-from .framework.dtype import dtype as dtype  # noqa: F401
-from paddle.framework.dtype import uint8  # noqa: F401
-from paddle.framework.dtype import int8  # noqa: F401
-from paddle.framework.dtype import int16  # noqa: F401
-from paddle.framework.dtype import int32  # noqa: F401
-from paddle.framework.dtype import int64  # noqa: F401
-from paddle.framework.dtype import float16  # noqa: F401
-from paddle.framework.dtype import float32  # noqa: F401
-from paddle.framework.dtype import float64  # noqa: F401
-from paddle.framework.dtype import bfloat16  # noqa: F401
-from paddle.framework.dtype import bool  # noqa: F401
-from paddle.framework.dtype import complex64  # noqa: F401
-from paddle.framework.dtype import complex128  # noqa: F401
-from .framework import VarBase as Tensor  # noqa: F401
-Tensor.__qualname__ = 'Tensor'  # noqa: F401
-import paddle.compat  # noqa: F401
-import paddle.distributed  # noqa: F401
-import paddle.sysconfig  # noqa: F401
-import paddle.distribution  # noqa: F401
-import paddle.nn  # noqa: F401
-import paddle.distributed.fleet  # noqa: F401
-import paddle.optimizer  # noqa: F401
-import paddle.metric  # noqa: F401
-import paddle.regularizer  # noqa: F401
-import paddle.incubate  # noqa: F401
-import paddle.autograd  # noqa: F401
-import paddle.device  # noqa: F401
+monkey_patch_math_tensor()
+monkey_patch_value()
+monkey_patch_program()
+monkey_patch_dtype()
 
-import paddle.jit  # noqa: F401
-import paddle.amp  # noqa: F401
-import paddle.dataset  # noqa: F401
-import paddle.inference  # noqa: F401
-import paddle.io  # noqa: F401
-import paddle.onnx  # noqa: F401
-import paddle.reader  # noqa: F401
-import paddle.static  # noqa: F401
-import paddle.vision  # noqa: F401
+from .base.dataset import *  # noqa: F403
+from .framework import (
+    disable_signal_handler,
+    disable_static,
+    enable_static,
+    get_flags,
+    in_dynamic_mode,
+    set_flags,
+)
+from .framework.dtype import (
+    bfloat16,
+    bool,
+    complex64,
+    complex128,
+    dtype,
+    finfo,
+    float8_e4m3fn,
+    float8_e5m2,
+    float16,
+    float32,
+    float64,
+    iinfo,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+)
 
-from .tensor.random import bernoulli  # noqa: F401
+if typing.TYPE_CHECKING:
+    from .tensor.tensor import Tensor
+else:
+    Tensor = framework.core.eager.Tensor
+    Tensor.__qualname__ = 'Tensor'
 
-from .tensor.attribute import rank  # noqa: F401
-from .tensor.attribute import shape  # noqa: F401
-from .tensor.attribute import real  # noqa: F401
-from .tensor.attribute import imag  # noqa: F401
-from .tensor.creation import to_tensor  # noqa: F401
-from .tensor.creation import diag  # noqa: F401
-from .tensor.creation import diagflat  # noqa: F401
-from .tensor.creation import eye  # noqa: F401
-from .tensor.creation import linspace  # noqa: F401
-from .tensor.creation import ones  # noqa: F401
-from .tensor.creation import ones_like  # noqa: F401
-from .tensor.creation import zeros  # noqa: F401
-from .tensor.creation import zeros_like  # noqa: F401
-from .tensor.creation import arange  # noqa: F401
-from .tensor.creation import full  # noqa: F401
-from .tensor.creation import full_like  # noqa: F401
-from .tensor.creation import triu  # noqa: F401
-from .tensor.creation import tril  # noqa: F401
-from .tensor.creation import meshgrid  # noqa: F401
-from .tensor.creation import empty  # noqa: F401
-from .tensor.creation import empty_like  # noqa: F401
-from .tensor.creation import assign  # noqa: F401
-from .tensor.linalg import matmul  # noqa: F401
-from .tensor.linalg import dot  # noqa: F401
-from .tensor.linalg import norm  # noqa: F401
-from .tensor.linalg import transpose  # noqa: F401
-from .tensor.linalg import dist  # noqa: F401
-from .tensor.linalg import t  # noqa: F401
-from .tensor.linalg import cross  # noqa: F401
-from .tensor.linalg import cholesky  # noqa: F401
-from .tensor.linalg import bmm  # noqa: F401
-from .tensor.linalg import histogram  # noqa: F401
-from .tensor.linalg import mv  # noqa: F401
-from .tensor.logic import equal  # noqa: F401
-from .tensor.logic import greater_equal  # noqa: F401
-from .tensor.logic import greater_than  # noqa: F401
-from .tensor.logic import is_empty  # noqa: F401
-from .tensor.logic import less_equal  # noqa: F401
-from .tensor.logic import less_than  # noqa: F401
-from .tensor.logic import logical_and  # noqa: F401
-from .tensor.logic import logical_not  # noqa: F401
-from .tensor.logic import logical_or  # noqa: F401
-from .tensor.logic import logical_xor  # noqa: F401
-from .tensor.logic import bitwise_and  # noqa: F401
-from .tensor.logic import bitwise_not  # noqa: F401
-from .tensor.logic import bitwise_or  # noqa: F401
-from .tensor.logic import bitwise_xor  # noqa: F401
-from .tensor.logic import not_equal  # noqa: F401
-from .tensor.logic import allclose  # noqa: F401
-from .tensor.logic import equal_all  # noqa: F401
-from .tensor.logic import is_tensor  # noqa: F401
-from .tensor.manipulation import cast  # noqa: F401
-from .tensor.manipulation import concat  # noqa: F401
-from .tensor.manipulation import broadcast_tensors  # noqa: F401
-from .tensor.manipulation import expand  # noqa: F401
-from .tensor.manipulation import broadcast_to  # noqa: F401
-from .tensor.manipulation import expand_as  # noqa: F401
-from .tensor.manipulation import tile  # noqa: F401
-from .tensor.manipulation import flatten  # noqa: F401
-from .tensor.manipulation import gather  # noqa: F401
-from .tensor.manipulation import gather_nd  # noqa: F401
-from .tensor.manipulation import reshape  # noqa: F401
-from .tensor.manipulation import reshape_  # noqa: F401
-from .tensor.manipulation import flip as reverse  # noqa: F401
-from .tensor.manipulation import scatter  # noqa: F401
-from .tensor.manipulation import scatter_  # noqa: F401
-from .tensor.manipulation import scatter_nd_add  # noqa: F401
-from .tensor.manipulation import scatter_nd  # noqa: F401
-from .tensor.manipulation import shard_index  # noqa: F401
-from .tensor.manipulation import slice  # noqa: F401
-from .tensor.manipulation import split  # noqa: F401
-from .tensor.manipulation import squeeze  # noqa: F401
-from .tensor.manipulation import squeeze_  # noqa: F401
-from .tensor.manipulation import stack  # noqa: F401
-from .tensor.manipulation import strided_slice  # noqa: F401
-from .tensor.manipulation import unique  # noqa: F401
-from .tensor.manipulation import unique_consecutive  # noqa: F401
-from .tensor.manipulation import unsqueeze  # noqa: F401
-from .tensor.manipulation import unsqueeze_  # noqa: F401
-from .tensor.manipulation import unstack  # noqa: F401
-from .tensor.manipulation import flip  # noqa: F401
-from .tensor.manipulation import unbind  # noqa: F401
-from .tensor.manipulation import roll  # noqa: F401
-from .tensor.manipulation import chunk  # noqa: F401
-from .tensor.manipulation import tolist  # noqa: F401
-from .tensor.manipulation import tensordot  # noqa: F401
-from .tensor.math import abs  # noqa: F401
-from .tensor.math import acos  # noqa: F401
-from .tensor.math import asin  # noqa: F401
-from .tensor.math import atan  # noqa: F401
-from .tensor.math import atan2  # noqa: F401
-from .tensor.math import ceil  # noqa: F401
-from .tensor.math import cos  # noqa: F401
-from .tensor.math import tan  # noqa: F401
-from .tensor.math import cosh  # noqa: F401
-from .tensor.math import cumsum  # noqa: F401
-from .tensor.math import cumprod  # noqa: F401
-from .tensor.math import exp  # noqa: F401
-from .tensor.math import expm1  # noqa: F401
-from .tensor.math import floor  # noqa: F401
-from .tensor.math import increment  # noqa: F401
-from .tensor.math import log  # noqa: F401
-from .tensor.math import log2  # noqa: F401
-from .tensor.math import log10  # noqa: F401
-from .tensor.math import multiplex  # noqa: F401
-from .tensor.math import pow  # noqa: F401
-from .tensor.math import reciprocal  # noqa: F401
-from .tensor.math import all  # noqa: F401
-from .tensor.math import any  # noqa: F401
-from .tensor.math import round  # noqa: F401
-from .tensor.math import rsqrt  # noqa: F401
-from .tensor.math import scale  # noqa: F401
-from .tensor.math import sign  # noqa: F401
-from .tensor.math import sin  # noqa: F401
-from .tensor.math import sinh  # noqa: F401
-from .tensor.math import sqrt  # noqa: F401
-from .tensor.math import square  # noqa: F401
-from .tensor.math import stanh  # noqa: F401
-from .tensor.math import sum  # noqa: F401
-from .tensor.math import tanh  # noqa: F401
-from .tensor.math import tanh_  # noqa: F401
-from .tensor.math import add_n  # noqa: F401
-from .tensor.math import max  # noqa: F401
-from .tensor.math import maximum  # noqa: F401
-from .tensor.math import min  # noqa: F401
-from .tensor.math import minimum  # noqa: F401
-from .tensor.math import mm  # noqa: F401
-from .tensor.math import divide  # noqa: F401
-from .tensor.math import floor_divide  # noqa: F401
-from .tensor.math import remainder  # noqa: F401
-from .tensor.math import mod  # noqa: F401
-from .tensor.math import floor_mod  # noqa: F401
-from .tensor.math import multiply  # noqa: F401
-from .tensor.math import add  # noqa: F401
-from .tensor.math import subtract  # noqa: F401
-from .tensor.math import logsumexp  # noqa: F401
-from .tensor.math import inverse  # noqa: F401
-from .tensor.math import log1p  # noqa: F401
-from .tensor.math import erf  # noqa: F401
-from .tensor.math import addmm  # noqa: F401
-from .tensor.math import clip  # noqa: F401
-from .tensor.math import trace  # noqa: F401
-from .tensor.math import diagonal  # noqa: F401
-from .tensor.math import kron  # noqa: F401
-from .tensor.math import isfinite  # noqa: F401
-from .tensor.math import isinf  # noqa: F401
-from .tensor.math import isnan  # noqa: F401
-from .tensor.math import prod  # noqa: F401
-from .tensor.math import broadcast_shape  # noqa: F401
-from .tensor.math import conj  # noqa: F401
-from .tensor.math import trunc  # noqa: F401
-from .tensor.math import digamma  # noqa: F401
-from .tensor.math import neg  # noqa: F401
-from .tensor.math import lgamma  # noqa: F401
-
-from .tensor.random import multinomial  # noqa: F401
-from .tensor.random import standard_normal  # noqa: F401
-from .tensor.random import normal  # noqa: F401
-from .tensor.random import uniform  # noqa: F401
-from .tensor.random import randn  # noqa: F401
-from .tensor.random import rand  # noqa: F401
-from .tensor.random import randint  # noqa: F401
-from .tensor.random import randperm  # noqa: F401
-from .tensor.search import argmax  # noqa: F401
-from .tensor.search import argmin  # noqa: F401
-from .tensor.search import argsort  # noqa: F401
-from .tensor.search import searchsorted  # noqa: F401
-from .tensor.search import masked_select  # noqa: F401
-from .tensor.search import topk  # noqa: F401
-from .tensor.search import where  # noqa: F401
-from .tensor.search import index_select  # noqa: F401
-from .tensor.search import nonzero  # noqa: F401
-from .tensor.search import sort  # noqa: F401
-
-from .tensor.to_string import set_printoptions  # noqa: F401
-
-from .tensor.einsum import einsum  # noqa: F401
-
-from .framework.random import seed  # noqa: F401
-from .framework.random import get_cuda_rng_state  # noqa: F401
-from .framework.random import set_cuda_rng_state  # noqa: F401
-from .framework import ParamAttr  # noqa: F401
-from .framework import create_parameter  # noqa: F401
-from .framework import CPUPlace  # noqa: F401
-from .framework import CUDAPlace  # noqa: F401
-from .framework import NPUPlace  # noqa: F401
-from .framework import CUDAPinnedPlace  # noqa: F401
-
-from .autograd import grad  # noqa: F401
-from .autograd import no_grad  # noqa: F401
-from .autograd import set_grad_enabled  # noqa: F401
-from .framework import save  # noqa: F401
-from .framework import load  # noqa: F401
-from .framework import DataParallel  # noqa: F401
-
-from .framework import set_default_dtype  # noqa: F401
-from .framework import get_default_dtype  # noqa: F401
-
-from .tensor.search import index_sample  # noqa: F401
-from .tensor.stat import mean  # noqa: F401
-from .tensor.stat import std  # noqa: F401
-from .tensor.stat import var  # noqa: F401
-from .tensor.stat import numel  # noqa: F401
-from .tensor.stat import median  # noqa: F401
-from .device import get_cudnn_version  # noqa: F401
-from .device import set_device  # noqa: F401
-from .device import get_device  # noqa: F401
-from .fluid.framework import is_compiled_with_cuda  # noqa: F401
-from .fluid.framework import is_compiled_with_rocm  # noqa: F401
-from .fluid.framework import disable_signal_handler  # noqa: F401
-from .fluid.framework import get_flags  # noqa: F401
-from .fluid.framework import set_flags  # noqa: F401
-from .device import is_compiled_with_xpu  # noqa: F401
-from .device import is_compiled_with_npu  # noqa: F401
-from .device import XPUPlace  # noqa: F401
-
-from .fluid.dygraph.base import enable_dygraph as disable_static  # noqa: F401
-from .fluid.dygraph.base import disable_dygraph as enable_static  # noqa: F401
-from .fluid.framework import in_dygraph_mode as in_dynamic_mode  # noqa: F401
-from .fluid.layers import crop_tensor as crop  # noqa: F401
+import paddle.distributed.fleet
+import paddle.text
+import paddle.vision
+from paddle import (  # noqa: F401
+    amp,
+    audio,
+    autograd,
+    dataset,
+    decomposition,
+    device,
+    distributed,
+    distribution,
+    geometric,
+    incubate,
+    inference,
+    io,
+    jit,
+    metric,
+    nn,
+    onnx,
+    optimizer,
+    quantization,
+    reader,
+    regularizer,
+    sparse,
+    static,
+    sysconfig,
+    vision,
+)
 
 # high-level api
-from .hapi import Model  # noqa: F401
-from . import callbacks  # noqa: F401
-from .hapi import summary  # noqa: F401
-from .hapi import flops  # noqa: F401
-from . import hub  # noqa: F401
-from . import linalg  # noqa: F401
-from . import fft  # noqa: F401
+from . import (  # noqa: F401
+    _pir_ops,
+    _typing as _typing,
+    callbacks,
+    fft,
+    hub,
+    linalg,
+    signal,
+)
+from .autograd import (
+    enable_grad,
+    grad,
+    is_grad_enabled,
+    no_grad,
+    set_grad_enabled,
+)
+from .device import (  # noqa: F401
+    get_cudnn_version,
+    get_device,
+    is_compiled_with_cinn,
+    is_compiled_with_cuda,
+    is_compiled_with_custom_device,
+    is_compiled_with_distribute,
+    is_compiled_with_ipu,
+    is_compiled_with_rocm,
+    is_compiled_with_xpu,
+    set_device,
+)
+from .distributed import DataParallel
+from .framework import (  # noqa: F401
+    CPUPlace,
+    CUDAPinnedPlace,
+    CUDAPlace,
+    CustomPlace,
+    IPUPlace,
+    ParamAttr,
+    XPUPlace,
+    async_save,
+    clear_async_save_task_queue,
+    get_default_dtype,
+    load,
+    save,
+    set_default_dtype,
+)
+from .framework.random import (
+    get_cuda_rng_state,
+    get_rng_state,
+    seed,
+    set_cuda_rng_state,
+    set_rng_state,
+)
+from .hapi import (
+    Model,
+    flops,
+    summary,
+)
+from .nn.functional.distance import (
+    pdist,
+)
+from .nn.initializer.lazy_init import LazyGuard
+from .tensor.attribute import (
+    imag,
+    is_complex,
+    is_floating_point,
+    is_integer,
+    rank,
+    real,
+    shape,
+)
+from .tensor.creation import (
+    arange,
+    assign,
+    cauchy_,
+    clone,
+    complex,
+    create_parameter,
+    diag,
+    diag_embed,
+    diagflat,
+    empty,
+    empty_like,
+    eye,
+    full,
+    full_like,
+    geometric_,
+    linspace,
+    logspace,
+    meshgrid,
+    ones,
+    ones_like,
+    polar,
+    to_tensor,
+    tril,
+    tril_,
+    tril_indices,
+    triu,
+    triu_,
+    triu_indices,
+    zeros,
+    zeros_like,
+)
+from .tensor.einsum import einsum
+from .tensor.linalg import (  # noqa: F401
+    bincount,
+    bmm,
+    cdist,
+    cholesky,
+    cross,
+    dist,
+    dot,
+    eigvalsh,
+    histogram,
+    histogram_bin_edges,
+    histogramdd,
+    matmul,
+    mv,
+    norm,
+    t,
+    t_,
+    transpose,
+    transpose_,
+)
+from .tensor.logic import (
+    allclose,
+    bitwise_and,
+    bitwise_and_,
+    bitwise_not,
+    bitwise_not_,
+    bitwise_or,
+    bitwise_or_,
+    bitwise_xor,
+    bitwise_xor_,
+    equal,
+    equal_,
+    equal_all,
+    greater_equal,
+    greater_equal_,
+    greater_than,
+    greater_than_,
+    is_empty,
+    is_tensor,
+    isclose,
+    less_equal,
+    less_equal_,
+    less_than,
+    less_than_,
+    logical_and,
+    logical_and_,
+    logical_not,
+    logical_not_,
+    logical_or,
+    logical_or_,
+    logical_xor,
+    logical_xor_,  # noqa: F401
+    not_equal,
+    not_equal_,  # noqa: F401
+)
+from .tensor.manipulation import (
+    as_complex,
+    as_real,
+    as_strided,
+    atleast_1d,
+    atleast_2d,
+    atleast_3d,
+    block_diag,
+    broadcast_tensors,
+    broadcast_to,
+    cast,
+    cast_,
+    chunk,
+    column_stack,
+    concat,
+    crop,
+    diagonal_scatter,
+    dsplit,
+    dstack,
+    expand,
+    expand_as,
+    flatten,
+    flatten_,
+    flip,
+    flip as reverse,
+    gather,
+    gather_nd,
+    hsplit,
+    hstack,
+    index_add,
+    index_add_,
+    index_fill,
+    index_fill_,
+    index_put,
+    index_put_,
+    masked_fill,
+    masked_fill_,
+    masked_scatter,
+    masked_scatter_,
+    moveaxis,
+    put_along_axis,
+    repeat_interleave,
+    reshape,
+    reshape_,
+    roll,
+    rot90,
+    row_stack,
+    scatter,
+    scatter_,
+    scatter_nd,
+    scatter_nd_add,
+    select_scatter,
+    shard_index,
+    slice,
+    slice_scatter,
+    split,
+    squeeze,
+    squeeze_,
+    stack,
+    strided_slice,
+    take_along_axis,
+    tensor_split,
+    tensordot,
+    tile,
+    tolist,
+    unbind,
+    unflatten,
+    unfold,
+    unique,
+    unique_consecutive,
+    unsqueeze,
+    unsqueeze_,
+    unstack,
+    view,
+    view_as,
+    vsplit,
+    vstack,
+)
+from .tensor.math import (  # noqa: F401
+    abs,
+    abs_,
+    acos,
+    acos_,
+    acosh,
+    acosh_,
+    add,
+    add_n,
+    addmm,
+    addmm_,
+    all,
+    amax,
+    amin,
+    angle,
+    any,
+    asin,
+    asin_,
+    asinh,
+    asinh_,
+    atan,
+    atan2,
+    atan_,
+    atanh,
+    atanh_,
+    bitwise_left_shift,
+    bitwise_left_shift_,
+    bitwise_right_shift,
+    bitwise_right_shift_,
+    broadcast_shape,
+    cartesian_prod,
+    ceil,
+    clip,
+    combinations,
+    conj,
+    copysign,
+    copysign_,
+    cos,
+    cos_,
+    cosh,
+    cosh_,
+    count_nonzero,
+    cummax,
+    cummin,
+    cumprod,
+    cumprod_,
+    cumsum,
+    cumsum_,
+    cumulative_trapezoid,
+    deg2rad,
+    diagonal,
+    diff,
+    digamma,
+    digamma_,
+    divide,
+    divide_,
+    erf,
+    erf_,
+    erfinv,
+    exp,
+    expm1,
+    expm1_,
+    floor,
+    floor_divide,
+    floor_divide_,
+    floor_mod,
+    floor_mod_,
+    fmax,
+    fmin,
+    frac,
+    frac_,
+    frexp,
+    gammainc,
+    gammainc_,
+    gammaincc,
+    gammaincc_,
+    gammaln,
+    gammaln_,
+    gcd,
+    gcd_,
+    heaviside,
+    hypot,
+    hypot_,
+    i0,
+    i0_,
+    i0e,
+    i1,
+    i1e,
+    increment,
+    inner,
+    inverse,
+    isfinite,
+    isin,
+    isinf,
+    isnan,
+    isneginf,
+    isposinf,
+    isreal,
+    kron,
+    lcm,
+    lcm_,
+    ldexp,
+    ldexp_,
+    lerp,
+    lgamma,
+    lgamma_,
+    log,
+    log1p,
+    log1p_,
+    log2,
+    log2_,
+    log10,
+    log10_,
+    log_,
+    logaddexp,
+    logcumsumexp,
+    logit,
+    logit_,
+    logsumexp,
+    max,
+    maximum,
+    min,
+    minimum,
+    mm,
+    mod,
+    mod_,
+    multigammaln,
+    multigammaln_,
+    multiplex,
+    multiply,
+    multiply_,
+    nan_to_num,
+    nan_to_num_,
+    nanmean,
+    nansum,
+    neg,
+    neg_,
+    nextafter,
+    outer,
+    polygamma,
+    polygamma_,
+    pow,
+    pow_,
+    prod,
+    rad2deg,
+    reciprocal,
+    reduce_as,
+    remainder,
+    remainder_,
+    renorm,
+    renorm_,
+    round,
+    rsqrt,
+    scale,
+    sgn,
+    sign,
+    signbit,
+    sin,
+    sin_,
+    sinc,
+    sinc_,
+    sinh,
+    sinh_,
+    sqrt,
+    square,
+    square_,
+    stanh,
+    subtract,
+    sum,
+    take,
+    tan,
+    tan_,
+    tanh,
+    tanh_,
+    trace,
+    trapezoid,
+    trunc,
+    trunc_,
+    vander,
+)
+from .tensor.random import (
+    bernoulli,
+    bernoulli_,
+    binomial,
+    check_shape,
+    log_normal,
+    log_normal_,
+    multinomial,
+    normal,
+    normal_,
+    poisson,
+    rand,
+    randint,
+    randint_like,
+    randn,
+    randperm,
+    standard_gamma,
+    standard_normal,
+    uniform,
+)
+from .tensor.search import (
+    argmax,
+    argmin,
+    argsort,
+    bucketize,
+    index_sample,
+    index_select,
+    kthvalue,
+    masked_select,
+    mode,
+    nonzero,
+    searchsorted,
+    sort,
+    topk,
+    where,
+    where_,
+)
+from .tensor.stat import (
+    mean,
+    median,
+    nanmedian,
+    nanquantile,
+    numel,
+    quantile,
+    std,
+    var,
+)
+from .tensor.to_string import set_printoptions
 
-import paddle.text  # noqa: F401
-import paddle.vision  # noqa: F401
+# CINN has to set a flag to include a lib
+if is_compiled_with_cinn():
+    import os
 
-from .tensor.random import check_shape  # noqa: F401
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    runtime_include_dir = os.path.join(package_dir, "libs")
+    cuh_file = os.path.join(runtime_include_dir, "cinn_cuda_runtime_source.cuh")
+    if os.path.exists(cuh_file):
+        os.environ.setdefault('runtime_include_dir', runtime_include_dir)
+
+if __is_metainfo_generated and is_compiled_with_cuda():
+    import os
+    import platform
+
+    if (
+        platform.system() == 'Linux'
+        and platform.machine() == 'x86_64'
+        and paddle.version.with_pip_cuda_libraries == 'ON'
+    ):
+        package_dir = os.path.dirname(os.path.abspath(__file__))
+        nvidia_package_path = package_dir + "/.." + "/nvidia"
+        set_flags({"FLAGS_nvidia_package_dir": nvidia_package_path})
+
+        cublas_lib_path = package_dir + "/.." + "/nvidia/cublas/lib"
+        set_flags({"FLAGS_cublas_dir": cublas_lib_path})
+
+        cudnn_lib_path = package_dir + "/.." + "/nvidia/cudnn/lib"
+        set_flags({"FLAGS_cudnn_dir": cudnn_lib_path})
+
+        curand_lib_path = package_dir + "/.." + "/nvidia/curand/lib"
+        set_flags({"FLAGS_curand_dir": curand_lib_path})
+
+        cusolver_lib_path = package_dir + "/.." + "/nvidia/cusolver/lib"
+        set_flags({"FLAGS_cusolver_dir": cusolver_lib_path})
+
+        cusparse_lib_path = package_dir + "/.." + "/nvidia/cusparse/lib"
+        set_flags({"FLAGS_cusparse_dir": cusparse_lib_path})
+
+        nccl_lib_path = package_dir + "/.." + "/nvidia/nccl/lib"
+        set_flags({"FLAGS_nccl_dir": nccl_lib_path})
+
+        cupti_dir_lib_path = package_dir + "/.." + "/nvidia/cuda_cupti/lib"
+        set_flags({"FLAGS_cupti_dir": cupti_dir_lib_path})
+
+    elif (
+        platform.system() == 'Windows'
+        and platform.machine() in ('x86_64', 'AMD64')
+        and paddle.version.with_pip_cuda_libraries == 'ON'
+    ):
+        package_dir = os.path.dirname(os.path.abspath(__file__))
+        win_cuda_bin_path = package_dir + "\\.." + "\\nvidia"
+        set_flags({"FLAGS_win_cuda_bin_dir": win_cuda_bin_path})
+
+        import sys
+
+        if sys.platform == 'win32':
+            pfiles_path = os.getenv('ProgramFiles', 'C:\\Program Files')
+            py_dll_path = os.path.join(sys.exec_prefix, 'Library', 'bin')
+            th_dll_path = os.path.join(os.path.dirname(__file__), 'libs')
+            site_cuda_base_path = os.path.join(
+                os.path.dirname(__file__), '..', 'nvidia'
+            )
+            site_cuda_list = [
+                "cublas",
+                "cuda_nvrtc",
+                "cuda_runtime",
+                "cudnn",
+                "cufft",
+                "curand",
+                "cusolver",
+                "cusparse",
+                "nvjitlink",
+            ]
+
+            if sys.exec_prefix != sys.base_exec_prefix:
+                base_py_dll_path = os.path.join(
+                    sys.base_exec_prefix, 'Library', 'bin'
+                )
+            else:
+                base_py_dll_path = ''
+
+            dll_paths = list(
+                filter(
+                    os.path.exists, [th_dll_path, py_dll_path, base_py_dll_path]
+                )
+            )
+            for site_cuda_package in site_cuda_list:
+                site_cuda_path = os.path.join(
+                    site_cuda_base_path, site_cuda_package, 'bin'
+                )
+                if os.path.exists(site_cuda_path):
+                    dll_paths.append(site_cuda_path)
+
+            import ctypes
+
+            kernel32 = ctypes.WinDLL('kernel32.dll', use_last_error=True)
+            with_load_library_flags = hasattr(kernel32, 'AddDllDirectory')
+            prev_error_mode = kernel32.SetErrorMode(0x0001)
+
+            kernel32.LoadLibraryW.restype = ctypes.c_void_p
+            if with_load_library_flags:
+                kernel32.LoadLibraryExW.restype = ctypes.c_void_p
+
+            for dll_path in dll_paths:
+                os.add_dll_directory(dll_path)
+
+            try:
+                ctypes.CDLL('vcruntime140.dll')
+                ctypes.CDLL('msvcp140.dll')
+                ctypes.CDLL('vcruntime140_1.dll')
+            except OSError:
+                import logging
+
+                logging.error(
+                    '''Microsoft Visual C++ Redistributable is not installed, this may lead to the DLL load failure.
+                        It can be downloaded at https://aka.ms/vs/16/release/vc_redist.x64.exe'''
+                )
+            import glob
+
+            dlls = glob.glob(os.path.join(th_dll_path, '*.dll'))
+            for site_cuda_package in site_cuda_list:
+                site_cuda_path = os.path.join(
+                    site_cuda_base_path, site_cuda_package, 'bin'
+                )
+                if os.path.exists(site_cuda_path):
+                    dlls.extend(
+                        glob.glob(os.path.join(site_cuda_path, '*.dll'))
+                    )
+            # Not load 32 bit dlls in 64 bit python.
+            dlls = [dll for dll in dlls if '32_' not in dll]
+            path_patched = False
+            for dll in dlls:
+                is_loaded = False
+                if with_load_library_flags:
+                    res = kernel32.LoadLibraryExW(dll, None, 0x00001100)
+                    last_error = ctypes.get_last_error()
+                    if res is None and last_error != 126:
+                        err = ctypes.WinError(last_error)
+                        err.strerror += f' Error loading "{dll}" or one of its dependencies.'
+                        raise err
+                    elif res is not None:
+                        is_loaded = True
+                if not is_loaded:
+                    if not path_patched:
+                        prev_path = os.environ['PATH']
+                        os.environ['PATH'] = ';'.join(
+                            dll_paths + [os.environ['PATH']]
+                        )
+                        path_patched = True
+                    res = kernel32.LoadLibraryW(dll)
+                    if path_patched:
+                        os.environ['PATH'] = prev_path
+                    if res is None:
+                        err = ctypes.WinError(ctypes.get_last_error())
+                        err.strerror += f' Error loading "{dll}" or one of its dependencies.'
+                        raise err
+            kernel32.SetErrorMode(prev_error_mode)
+
 disable_static()
 
-__all__ = [  # noqa
-           'dtype',
-           'uint8',
-           'int8',
-           'int16',
-           'int32',
-           'int64',
-           'float16',
-           'float32',
-           'float64',
-           'bfloat16',
-           'bool',
-           'complex64',
-           'complex128',
-           'addmm',
-           'allclose',
-           't',
-           'add',
-           'subtract',
-           'diag',
-           'diagflat',
-           'isnan',
-           'scatter_nd_add',
-           'unstack',
-           'get_default_dtype',
-           'save',
-           'multinomial',
-           'get_cuda_rng_state',
-           'rank',
-           'empty_like',
-           'eye',
-           'cumsum',
-           'cumprod',
-           'sign',
-           'is_empty',
-           'equal',
-           'equal_all',
-           'is_tensor',
-           'cross',
-           'where',
-           'log1p',
-           'cos',
-           'tan',
-           'mean',
-           'mv',
-           'in_dynamic_mode',
-           'min',
-           'any',
-           'slice',
-           'normal',
-           'logsumexp',
-           'full',
-           'unsqueeze',
-           'unsqueeze_',
-           'argmax',
-           'Model',
-           'summary',
-           'flops',
-           'sort',
-           'searchsorted',
-           'split',
-           'logical_and',
-           'full_like',
-           'less_than',
-           'kron',
-           'clip',
-           'Tensor',
-           'crop',
-           'ParamAttr',
-           'stanh',
-           'randint',
-           'assign',
-           'gather',
-           'scale',
-           'zeros',
-           'rsqrt',
-           'squeeze',
-           'squeeze_',
-           'to_tensor',
-           'gather_nd',
-           'isinf',
-           'uniform',
-           'floor_divide',
-           'remainder',
-           'floor_mod',
-           'roll',
-           'batch',
-           'max',
-           'norm',
-           'logical_or',
-           'bitwise_and',
-           'bitwise_or',
-           'bitwise_xor',
-           'bitwise_not',
-           'mm',
-           'flip',
-           'histogram',
-           'multiplex',
-           'CUDAPlace',
-           'NPUPlace',
-           'empty',
-           'shape',
-           'real',
-           'imag',
-           'reciprocal',
-           'rand',
-           'less_equal',
-           'triu',
-           'sin',
-           'dist',
-           'unbind',
-           'meshgrid',
-           'arange',
-           'load',
-           'numel',
-           'median',
-           'inverse',
-           'no_grad',
-           'set_grad_enabled',
-           'mod',
-           'abs',
-           'tril',
-           'pow',
-           'zeros_like',
-           'maximum',
-           'topk',
-           'index_select',
-           'CPUPlace',
-           'matmul',
-           'seed',
-           'acos',
-           'logical_xor',
-           'exp',
-           'expm1',
-           'bernoulli',
-           'sinh',
-           'round',
-           'DataParallel',
-           'argmin',
-           'prod',
-           'broadcast_shape',
-           'conj',
-           'neg',
-           'lgamma',
-           'square',
-           'divide',
-           'ceil',
-           'atan',
-           'atan2',
-           'expand',
-           'broadcast_to',
-           'ones_like',
-           'index_sample',
-           'cast',
-           'grad',
-           'all',
-           'ones',
-           'not_equal',
-           'sum',
-           'tile',
-           'greater_equal',
-           'isfinite',
-           'create_parameter',
-           'dot',
-           'increment',
-           'erf',
-           'bmm',
-           'chunk',
-           'tolist',
-           'tensordot',
-           'greater_than',
-           'shard_index',
-           'argsort',
-           'tanh',
-           'tanh_',
-           'transpose',
-           'randn',
-           'strided_slice',
-           'unique',
-           'unique_consecutive',
-           'set_cuda_rng_state',
-           'set_printoptions',
-           'std',
-           'flatten',
-           'asin',
-           'multiply',
-           'disable_static',
-           'masked_select',
-           'var',
-           'trace',
-           'enable_static',
-           'scatter_nd',
-           'set_default_dtype',
-           'disable_signal_handler',
-           'expand_as',
-           'stack',
-           'sqrt',
-           'cholesky',
-           'randperm',
-           'linspace',
-           'reshape',
-           'reshape_',
-           'reverse',
-           'nonzero',
-           'CUDAPinnedPlace',
-           'logical_not',
-           'add_n',
-           'minimum',
-           'scatter',
-           'scatter_',
-           'floor',
-           'cosh',
-           'log',
-           'log2',
-           'log10',
-           'concat',
-           'check_shape',
-           'trunc',
-           'digamma',
-           'standard_normal',
-           'diagonal',
-           'broadcast_tensors',
-           'einsum',
-           'set_flags',
-           'get_flags'
+from .pir_utils import IrGuard
+
+ir_guard = IrGuard()
+ir_guard._switch_to_pir()
+
+__all__ = [
+    'block_diag',
+    'iinfo',
+    'finfo',
+    'dtype',
+    'uint8',
+    'int8',
+    'int16',
+    'int32',
+    'int64',
+    'float8_e4m3fn',
+    'float8_e5m2',
+    'float16',
+    'float32',
+    'float64',
+    'bfloat16',
+    'bool',
+    'complex64',
+    'complex128',
+    'addmm',
+    'addmm_',
+    'allclose',
+    'isclose',
+    't',
+    't_',
+    'add',
+    'subtract',
+    'diag',
+    'diagflat',
+    'diag_embed',
+    'isnan',
+    'scatter_nd_add',
+    'unstack',
+    'get_default_dtype',
+    'save',
+    'multinomial',
+    'get_cuda_rng_state',
+    'get_rng_state',
+    'rank',
+    'empty_like',
+    'eye',
+    'cumsum',
+    'cumsum_',
+    'cummax',
+    'cummin',
+    'cumprod',
+    'cumprod_',
+    'logaddexp',
+    'logcumsumexp',
+    'logit',
+    'logit_',
+    'LazyGuard',
+    'sign',
+    'is_empty',
+    'equal',
+    'equal_',
+    'equal_all',
+    'is_tensor',
+    'is_complex',
+    'is_integer',
+    'cartesian_prod',
+    'cross',
+    'where',
+    'where_',
+    'log1p',
+    'cos',
+    'cos_',
+    'tan',
+    'tan_',
+    'mean',
+    'mode',
+    'mv',
+    'in_dynamic_mode',
+    'min',
+    'amin',
+    'any',
+    'slice',
+    'slice_scatter',
+    'normal',
+    'normal_',
+    'log_normal',
+    'log_normal_',
+    'logsumexp',
+    'full',
+    'unsqueeze',
+    'unsqueeze_',
+    'argmax',
+    'Model',
+    'summary',
+    'flops',
+    'sort',
+    'searchsorted',
+    'bucketize',
+    'split',
+    'tensor_split',
+    'hsplit',
+    'dsplit',
+    'vsplit',
+    'logical_and',
+    'logical_and_',
+    'full_like',
+    'less_than',
+    'less_than_',
+    'kron',
+    'clip',
+    'Tensor',
+    'crop',
+    'ParamAttr',
+    'stanh',
+    'randint',
+    'randint_like',
+    'assign',
+    'gather',
+    'scale',
+    'zeros',
+    'rsqrt',
+    'squeeze',
+    'squeeze_',
+    'to_tensor',
+    'gather_nd',
+    'isin',
+    'isinf',
+    'isneginf',
+    'isposinf',
+    'isreal',
+    'uniform',
+    'floor_divide',
+    'floor_divide_',
+    'remainder',
+    'remainder_',
+    'floor_mod',
+    'floor_mod_',
+    'roll',
+    'batch',
+    'max',
+    'amax',
+    'logical_or',
+    'logical_or_',
+    'bitwise_and',
+    'bitwise_and_',
+    'bitwise_or',
+    'bitwise_or_',
+    'bitwise_xor',
+    'bitwise_xor_',
+    'bitwise_not',
+    'bitwise_not_',
+    'mm',
+    'flip',
+    'rot90',
+    'bincount',
+    'histogram',
+    'histogramdd',
+    'multiplex',
+    'CUDAPlace',
+    'empty',
+    'shape',
+    'real',
+    'imag',
+    'is_floating_point',
+    'complex',
+    'reciprocal',
+    'rand',
+    'less_equal',
+    'less_equal_',
+    'triu',
+    'triu_',
+    'sin',
+    'sin_',
+    'dist',
+    'cdist',
+    'pdist',
+    'unbind',
+    'meshgrid',
+    'arange',
+    'load',
+    'numel',
+    'median',
+    'nanmedian',
+    'quantile',
+    'nanquantile',
+    'no_grad',
+    'enable_grad',
+    'set_grad_enabled',
+    'is_grad_enabled',
+    'mod',
+    'mod_',
+    'abs',
+    'abs_',
+    'tril',
+    'tril_',
+    'pow',
+    'pow_',
+    'zeros_like',
+    'maximum',
+    'topk',
+    'index_select',
+    'CPUPlace',
+    'matmul',
+    'seed',
+    'acos',
+    'acos_',
+    'logical_xor',
+    'exp',
+    'expm1',
+    'expm1_',
+    'bernoulli',
+    'bernoulli_',
+    'binomial',
+    'poisson',
+    'standard_gamma',
+    'sinh',
+    'sinh_',
+    'sinc',
+    'sinc_',
+    'round',
+    'DataParallel',
+    'argmin',
+    'prod',
+    'broadcast_shape',
+    'conj',
+    'neg',
+    'neg_',
+    'lgamma',
+    'lgamma_',
+    'gammaincc',
+    'gammaincc_',
+    'gammainc',
+    'gammainc_',
+    'lerp',
+    'erfinv',
+    'inner',
+    'outer',
+    'square',
+    'square_',
+    'divide',
+    'divide_',
+    'gammaln',
+    'gammaln_',
+    'ceil',
+    'atan',
+    'atan_',
+    'atan2',
+    'rad2deg',
+    'deg2rad',
+    'gcd',
+    'gcd_',
+    'lcm',
+    'lcm_',
+    'expand',
+    'broadcast_to',
+    'ones_like',
+    'index_sample',
+    'cast',
+    'cast_',
+    'grad',
+    'all',
+    'ones',
+    'not_equal',
+    'sum',
+    'reduce_as',
+    'nansum',
+    'nanmean',
+    'count_nonzero',
+    'tile',
+    'greater_equal',
+    'greater_equal_',
+    'isfinite',
+    'create_parameter',
+    'dot',
+    'increment',
+    'erf',
+    'erf_',
+    'bmm',
+    'chunk',
+    'tolist',
+    'tensordot',
+    'greater_than',
+    'greater_than_',
+    'shard_index',
+    'argsort',
+    'tanh',
+    'tanh_',
+    'transpose',
+    'transpose_',
+    'cauchy_',
+    'geometric_',
+    'randn',
+    'strided_slice',
+    'unique',
+    'unique_consecutive',
+    'set_cuda_rng_state',
+    'set_rng_state',
+    'set_printoptions',
+    'std',
+    'flatten',
+    'flatten_',
+    'asin',
+    'multiply',
+    'multiply_',
+    'disable_static',
+    'masked_select',
+    'var',
+    'trace',
+    'enable_static',
+    'scatter_nd',
+    'set_default_dtype',
+    'disable_signal_handler',
+    'expand_as',
+    'stack',
+    'hstack',
+    'vstack',
+    'dstack',
+    'column_stack',
+    'row_stack',
+    'sqrt',
+    'randperm',
+    'linspace',
+    'logspace',
+    'reshape',
+    'reshape_',
+    'atleast_1d',
+    'atleast_2d',
+    'atleast_3d',
+    'reverse',
+    'nonzero',
+    'CUDAPinnedPlace',
+    'logical_not',
+    'logical_not_',
+    'add_n',
+    'minimum',
+    'scatter',
+    'scatter_',
+    'floor',
+    'cosh',
+    'log',
+    'log_',
+    'log2',
+    'log2_',
+    'log10',
+    'log10_',
+    'concat',
+    'check_shape',
+    'trunc',
+    'trunc_',
+    'frac',
+    'frac_',
+    'digamma',
+    'digamma_',
+    'standard_normal',
+    'diagonal',
+    'broadcast_tensors',
+    'einsum',
+    'set_flags',
+    'get_flags',
+    'asinh',
+    'acosh',
+    'atanh',
+    'as_complex',
+    'as_real',
+    'diff',
+    'angle',
+    'fmax',
+    'fmin',
+    'moveaxis',
+    'repeat_interleave',
+    'clone',
+    'kthvalue',
+    'renorm',
+    'renorm_',
+    'take_along_axis',
+    'put_along_axis',
+    'select_scatter',
+    'multigammaln',
+    'multigammaln_',
+    'nan_to_num',
+    'nan_to_num_',
+    'heaviside',
+    'tril_indices',
+    'index_add',
+    "index_add_",
+    "index_put",
+    "index_put_",
+    'sgn',
+    'triu_indices',
+    'take',
+    'frexp',
+    'ldexp',
+    'ldexp_',
+    'trapezoid',
+    'cumulative_trapezoid',
+    'polar',
+    'vander',
+    'unflatten',
+    'as_strided',
+    'view',
+    'view_as',
+    'unfold',
+    'nextafter',
+    'i0',
+    'i0_',
+    'i0e',
+    'i1',
+    'i1e',
+    'polygamma',
+    'polygamma_',
+    'copysign',
+    'copysign_',
+    'bitwise_left_shift',
+    'bitwise_left_shift_',
+    'bitwise_right_shift',
+    'bitwise_right_shift_',
+    'masked_fill',
+    'masked_fill_',
+    'masked_scatter',
+    'masked_scatter_',
+    'hypot',
+    'hypot_',
+    'index_fill',
+    "index_fill_",
+    'diagonal_scatter',
+    'combinations',
+    'signbit',
 ]

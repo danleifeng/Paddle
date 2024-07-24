@@ -19,6 +19,7 @@
 #include <memory>
 #include <numeric>
 #include <vector>
+
 #include "paddle/fluid/inference/api/paddle_api.h"
 #include "paddle/fluid/inference/capi/c_api_internal.h"
 #include "paddle/fluid/inference/capi/paddle_c_api.h"
@@ -50,8 +51,7 @@ inline void VisitDataType(PD_DataType type, Visitor visitor) {
 
   _DataType_(VisitDataTypeCallback);
 #undef VisitDataTypeCallback
-  PADDLE_THROW(
-      paddle::platform::errors::InvalidArgument("Unsupported data type."));
+  PADDLE_THROW(phi::errors::InvalidArgument("Unsupported data type."));
 }
 
 struct PD_ZeroCopyFunctor {
@@ -65,13 +65,15 @@ struct PD_ZeroCopyFunctor {
   template <typename OutT>
   void apply() {
     std::vector<OutT> out_data;
-    int out_num =
-        std::accumulate(output_i->shape, output_i->shape + output_i->shape_size,
-                        1, std::multiplies<int>());
+    int out_num = std::accumulate(output_i->shape,
+                                  output_i->shape + output_i->shape_size,
+                                  1,
+                                  std::multiplies<int>());
     out_data.resize(out_num);
     output_t->copy_to_cpu(out_data.data());
     output_i->data = reinterpret_cast<void*>(malloc(out_num * sizeof(OutT)));
-    memmove(static_cast<OutT*>(output_i->data), out_data.data(),
+    memmove(static_cast<OutT*>(output_i->data),
+            out_data.data(),
             out_num * sizeof(OutT));
   }
 };
@@ -79,14 +81,17 @@ struct PD_ZeroCopyFunctor {
 }  // namespace
 
 extern "C" {
-bool PD_PredictorRun(const PD_AnalysisConfig* config, PD_Tensor* inputs,
-                     int in_size, PD_Tensor** output_data, int* out_size,
+bool PD_PredictorRun(const PD_AnalysisConfig* config,
+                     PD_Tensor* inputs,
+                     int in_size,
+                     PD_Tensor** output_data,
+                     int* out_size,
                      int batch_size) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
-  VLOG(3) << "Predoctor: PD_PredictorRun. ";
+  VLOG(3) << "Predictor: PD_PredictorRun. ";
   static std::map<std::string, std::unique_ptr<paddle::PaddlePredictor>>
       predictors;
   if (!predictors.count(config->config.model_dir())) {
@@ -113,11 +118,13 @@ bool PD_PredictorRun(const PD_AnalysisConfig* config, PD_Tensor* inputs,
 }
 
 bool PD_PredictorZeroCopyRun(const PD_AnalysisConfig* config,
-                             PD_ZeroCopyData* inputs, int in_size,
-                             PD_ZeroCopyData** output, int* out_size) {
+                             PD_ZeroCopyData* inputs,
+                             int in_size,
+                             PD_ZeroCopyData** output,
+                             int* out_size) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   static std::map<std::string, std::unique_ptr<paddle::PaddlePredictor>>
       predictors;
@@ -129,11 +136,13 @@ bool PD_PredictorZeroCopyRun(const PD_AnalysisConfig* config,
   auto input_names = predictor->GetInputNames();
   VLOG(3) << "The inputs' size is " << input_names.size();
   PADDLE_ENFORCE_EQ(
-      input_names.size(), in_size,
-      paddle::platform::errors::InvalidArgument(
+      input_names.size(),
+      in_size,
+      phi::errors::InvalidArgument(
           "The number of input and the number of model's input must match. The "
           "number of input is %d, the number of model's input is %d.",
-          input_names.size(), in_size));
+          input_names.size(),
+          in_size));
   for (int i = 0; i < in_size; ++i) {
     auto input_t = predictor->GetInputTensor(inputs[i].name);
     std::vector<int> tensor_shape;
@@ -154,8 +163,7 @@ bool PD_PredictorZeroCopyRun(const PD_AnalysisConfig* config,
         input_t->copy_from_cpu(static_cast<uint8_t*>(inputs[i].data));
         break;
       default:
-        PADDLE_THROW(paddle::platform::errors::InvalidArgument(
-            "Unsupported data type."));
+        PADDLE_THROW(phi::errors::InvalidArgument("Unsupported data type."));
         break;
     }
   }
@@ -169,14 +177,17 @@ bool PD_PredictorZeroCopyRun(const PD_AnalysisConfig* config,
   for (int i = 0; i < *out_size; ++i) {
     auto& output_i = (*output)[i];
     output_i.name = new char[output_names[i].length() + 1];
-    snprintf(output_i.name, output_names[i].length() + 1, "%s",
+    snprintf(output_i.name,
+             output_names[i].length() + 1,
+             "%s",
              output_names[i].c_str());
     auto output_t = predictor->GetOutputTensor(output_names[i]);
-    output_i.dtype = ConvertToPDDataType(output_t->type());
+    output_i.dtype =
+        ConvertToPDDataType(framework::TransToProtoVarType(output_t->dtype()));
     std::vector<int> output_shape = output_t->shape();
     output_i.shape = new int[output_shape.size()];
-    memmove(output_i.shape, output_shape.data(),
-            output_shape.size() * sizeof(int));
+    memmove(
+        output_i.shape, output_shape.data(), output_shape.size() * sizeof(int));
     output_i.shape_size = output_shape.size();
     VisitDataType(output_i.dtype,
                   PD_ZeroCopyFunctor(&output_i, std::move(output_t.get())));
@@ -241,8 +252,7 @@ void PD_SetZeroCopyInput(PD_Predictor* predictor,
       input->copy_from_cpu(static_cast<uint8_t*>(tensor->data.data));
       break;
     default:
-      PADDLE_THROW(
-          paddle::platform::errors::InvalidArgument("Unsupported data type."));
+      PADDLE_THROW(phi::errors::InvalidArgument("Unsupported data type."));
       break;
   }
 
@@ -256,7 +266,8 @@ void PD_SetZeroCopyInput(PD_Predictor* predictor,
 
 void PD_GetZeroCopyOutput(PD_Predictor* predictor, PD_ZeroCopyTensor* tensor) {
   auto output = predictor->predictor->GetOutputTensor(tensor->name);
-  tensor->dtype = ConvertToPDDataType(output->type());
+  tensor->dtype =
+      ConvertToPDDataType(framework::TransToProtoVarType(output->dtype()));
   auto shape = output->shape();
   size_t shape_size = shape.size();
   if (tensor->shape.capacity < shape_size * sizeof(int)) {
@@ -271,7 +282,8 @@ void PD_GetZeroCopyOutput(PD_Predictor* predictor, PD_ZeroCopyTensor* tensor) {
 
   int n =
       std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
-  size_t length = n * paddle::PaddleDtypeSize(output->type());
+  size_t length = n * paddle::PaddleDtypeSize(
+                          framework::TransToProtoVarType(output->dtype()));
   if (tensor->data.capacity < length) {
     if (tensor->data.data) {
       std::free(tensor->data.data);
@@ -292,7 +304,8 @@ void PD_GetZeroCopyOutput(PD_Predictor* predictor, PD_ZeroCopyTensor* tensor) {
       tensor->lod.data = std::malloc(lod.front().size() * sizeof(size_t));
       tensor->lod.capacity = lod.front().size() * sizeof(size_t);
     }
-    std::copy(lod.front().begin(), lod.front().end(),
+    std::copy(lod.front().begin(),
+              lod.front().end(),
               reinterpret_cast<size_t*>(tensor->lod.data));
   }
   switch (tensor->dtype) {
@@ -309,8 +322,7 @@ void PD_GetZeroCopyOutput(PD_Predictor* predictor, PD_ZeroCopyTensor* tensor) {
       output->copy_to_cpu(reinterpret_cast<uint8_t*>(tensor->data.data));
       break;
     default:
-      PADDLE_THROW(
-          paddle::platform::errors::InvalidArgument("Unsupported data type."));
+      PADDLE_THROW(phi::errors::InvalidArgument("Unsupported data type."));
       break;
   }
 }

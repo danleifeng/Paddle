@@ -24,49 +24,53 @@ limitations under the License. */
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "google/protobuf/text_format.h"
-#include "paddle/fluid/framework/async_executor.h"
 #include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/data_feed.pb.h"
 #include "paddle/fluid/framework/data_set.h"
 #include "paddle/fluid/framework/dataset_factory.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/io.h"
-#include "paddle/fluid/platform/place.h"
-#include "paddle/fluid/platform/variant.h"
+#include "paddle/phi/common/place.h"
+
 #include "paddle/fluid/pybind/data_set_py.h"
 
 namespace py = pybind11;
-namespace pd = paddle::framework;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 
 class IterableDatasetWrapper {
  public:
   IterableDatasetWrapper(framework::Dataset *dataset,
                          const std::vector<std::string> &slots,
-                         const std::vector<platform::Place> &places,
-                         size_t batch_size, bool drop_last)
+                         const std::vector<phi::Place> &places,
+                         size_t batch_size,
+                         bool drop_last)
       : dataset_(dataset),
         slots_(slots),
         places_(places),
         batch_size_(batch_size),
-        drop_last_(drop_last) {
+        drop_last_(drop_last),
+        data_feeds_(),
+        is_exhaustive_(),
+        scopes_(),
+        tensors_() {
 #if defined _WIN32
     PADDLE_THROW(
-        platform::errors::Unimplemented("Dataset is not supported on Windows"));
+        phi::errors::Unimplemented("Dataset is not supported on Windows"));
 #elif defined __APPLE__
-    PADDLE_THROW(
-        platform::errors::Unimplemented("Dataset is not supported on MAC"));
+    PADDLE_THROW(phi::errors::Unimplemented("Dataset is not supported on MAC"));
 #else
     size_t device_num = places_.size();
-    PADDLE_ENFORCE_GT(device_num, 0,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_GT(device_num,
+                      0,
+                      phi::errors::InvalidArgument(
                           "The number of devices must be larger than 0"));
-    PADDLE_ENFORCE_GT(slots_.size(), 0,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_GT(slots_.size(),
+                      0,
+                      phi::errors::InvalidArgument(
                           "The number of slots must be larger than 0"));
     scopes_.reserve(device_num);
     tensors_.reserve(device_num);
@@ -75,7 +79,7 @@ class IterableDatasetWrapper {
       tensors_.emplace_back();
       for (auto &var_name : slots_) {
         auto *var = scopes_.back()->Var(var_name);
-        auto *t = var->GetMutable<framework::LoDTensor>();
+        auto *t = var->GetMutable<phi::DenseTensor>();
         tensors_.back().emplace_back(t);
       }
     }
@@ -87,17 +91,20 @@ class IterableDatasetWrapper {
 
   void Start() {
     PADDLE_ENFORCE_EQ(
-        is_started_, false,
-        platform::errors::AlreadyExists("Reader has been started already"));
+        is_started_,
+        false,
+        phi::errors::AlreadyExists("Reader has been started already"));
     data_feeds_ = dataset_->GetReaders();
-    PADDLE_ENFORCE_EQ(data_feeds_.size(), places_.size(),
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_EQ(data_feeds_.size(),
+                      places_.size(),
+                      phi::errors::InvalidArgument(
                           "Device number does not match reader number"));
     for (size_t i = 0; i < places_.size(); ++i) {
       data_feeds_[i]->AssignFeedVar(*scopes_[i]);
-      data_feeds_[i]->SetPlace(platform::CPUPlace());
-      PADDLE_ENFORCE_EQ(data_feeds_[i]->Start(), true,
-                        platform::errors::Unavailable(
+      data_feeds_[i]->SetPlace(phi::CPUPlace());
+      PADDLE_ENFORCE_EQ(data_feeds_[i]->Start(),
+                        true,
+                        phi::errors::Unavailable(
                             "Failed to start the reader on device %d.", i));
     }
     is_started_ = true;
@@ -106,14 +113,15 @@ class IterableDatasetWrapper {
     exhaustive_num_ = 0;
   }
 
-  std::vector<std::unordered_map<std::string, framework::LoDTensor>> Next() {
+  std::vector<std::unordered_map<std::string, phi::DenseTensor>> Next() {
     PADDLE_ENFORCE_EQ(
-        is_started_, true,
-        platform::errors::PreconditionNotMet(
+        is_started_,
+        true,
+        phi::errors::PreconditionNotMet(
             "Reader must be started when getting next batch data."));
     size_t device_num = places_.size();
 
-    std::vector<std::unordered_map<std::string, framework::LoDTensor>> result(
+    std::vector<std::unordered_map<std::string, phi::DenseTensor>> result(
         device_num);
 
     size_t read_num = 0;
@@ -139,7 +147,8 @@ class IterableDatasetWrapper {
           if (tensors_[i][j]->place() == places_[read_num]) {
             result[read_num].emplace(slots_[j], std::move(*tensors_[i][j]));
           } else {
-            framework::TensorCopy(std::move(*tensors_[i][j]), places_[read_num],
+            framework::TensorCopy(*tensors_[i][j],
+                                  places_[read_num],
                                   &result[read_num][slots_[j]]);
           }
         }
@@ -166,11 +175,12 @@ class IterableDatasetWrapper {
   }
 
  private:
-  bool IsValidLoDTensor(const framework::LoDTensor &tensor) const {
+  bool IsValidLoDTensor(const phi::DenseTensor &tensor) const {
     auto &lod = tensor.lod();
-    PADDLE_ENFORCE_LE(lod.size(), 1,
-                      platform::errors::InvalidArgument(
-                          "LoD level must be not larger than 1"));
+    PADDLE_ENFORCE_LE(
+        lod.size(),
+        1,
+        phi::errors::InvalidArgument("LoD level must be not larger than 1"));
     if (!drop_last_) return true;
 
     if (lod.empty()) {
@@ -183,7 +193,7 @@ class IterableDatasetWrapper {
  private:
   framework::Dataset *dataset_;
   std::vector<std::string> slots_;
-  std::vector<platform::Place> places_;
+  std::vector<phi::Place> places_;
   size_t batch_size_;
   bool drop_last_;
 
@@ -192,7 +202,7 @@ class IterableDatasetWrapper {
   size_t exhaustive_num_;
 
   std::vector<std::unique_ptr<framework::Scope>> scopes_;
-  std::vector<std::vector<framework::LoDTensor *>> tensors_;
+  std::vector<std::vector<phi::DenseTensor *>> tensors_;
   bool is_started_{false};
 };
 
@@ -202,85 +212,132 @@ void BindDataset(py::module *m) {
       .def(py::init([](const std::string &name = "MultiSlotDataset") {
         return framework::DatasetFactory::CreateDataset(name);
       }))
-      .def("set_filelist", &framework::Dataset::SetFileList,
+      .def("tdm_sample",
+           &framework::Dataset::TDMSample,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_thread_num", &framework::Dataset::SetThreadNum,
+      .def("set_filelist",
+           &framework::Dataset::SetFileList,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_trainer_num", &framework::Dataset::SetTrainerNum,
+      .def("set_thread_num",
+           &framework::Dataset::SetThreadNum,
+           py::call_guard<py::gil_scoped_release>())
+      .def("set_trainer_num",
+           &framework::Dataset::SetTrainerNum,
            py::call_guard<py::gil_scoped_release>())
       .def("set_fleet_send_batch_size",
            &framework::Dataset::SetFleetSendBatchSize,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_hdfs_config", &framework::Dataset::SetHdfsConfig,
+      .def("set_hdfs_config",
+           &framework::Dataset::SetHdfsConfig,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_download_cmd", &framework::Dataset::SetDownloadCmd,
+      .def("set_download_cmd",
+           &framework::Dataset::SetDownloadCmd,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_data_feed_desc", &framework::Dataset::SetDataFeedDesc,
+      .def("set_data_feed_desc",
+           &framework::Dataset::SetDataFeedDesc,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_filelist", &framework::Dataset::GetFileList,
+      .def("get_filelist",
+           &framework::Dataset::GetFileList,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_thread_num", &framework::Dataset::GetThreadNum,
+      .def("get_thread_num",
+           &framework::Dataset::GetThreadNum,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_trainer_num", &framework::Dataset::GetTrainerNum,
+      .def("get_trainer_num",
+           &framework::Dataset::GetTrainerNum,
            py::call_guard<py::gil_scoped_release>())
       .def("get_fleet_send_batch_size",
            &framework::Dataset::GetFleetSendBatchSize,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_hdfs_config", &framework::Dataset::GetHdfsConfig,
+      .def("get_hdfs_config",
+           &framework::Dataset::GetHdfsConfig,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_download_cmd", &framework::Dataset::GetDownloadCmd,
+      .def("get_download_cmd",
+           &framework::Dataset::GetDownloadCmd,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_data_feed_desc", &framework::Dataset::GetDataFeedDesc,
+      .def("get_data_feed_desc",
+           &framework::Dataset::GetDataFeedDesc,
            py::call_guard<py::gil_scoped_release>())
       .def("register_client2client_msg_handler",
            &framework::Dataset::RegisterClientToClientMsgHandler,
            py::call_guard<py::gil_scoped_release>())
-      .def("create_channel", &framework::Dataset::CreateChannel,
+      .def("create_channel",
+           &framework::Dataset::CreateChannel,
            py::call_guard<py::gil_scoped_release>())
-      .def("create_readers", &framework::Dataset::CreateReaders,
+      .def("create_readers",
+           &framework::Dataset::CreateReaders,
            py::call_guard<py::gil_scoped_release>())
-      .def("destroy_readers", &framework::Dataset::DestroyReaders,
+      .def("destroy_readers",
+           &framework::Dataset::DestroyReaders,
            py::call_guard<py::gil_scoped_release>())
-      .def("load_into_memory", &framework::Dataset::LoadIntoMemory,
+      .def("load_into_memory",
+           &framework::Dataset::LoadIntoMemory,
            py::call_guard<py::gil_scoped_release>())
-      .def("preload_into_memory", &framework::Dataset::PreLoadIntoMemory,
+      .def("preload_into_memory",
+           &framework::Dataset::PreLoadIntoMemory,
            py::call_guard<py::gil_scoped_release>())
-      .def("wait_preload_done", &framework::Dataset::WaitPreLoadDone,
+      .def("wait_preload_done",
+           &framework::Dataset::WaitPreLoadDone,
            py::call_guard<py::gil_scoped_release>())
-      .def("release_memory", &framework::Dataset::ReleaseMemory,
+      .def("release_memory",
+           &framework::Dataset::ReleaseMemory,
            py::call_guard<py::gil_scoped_release>())
-      .def("local_shuffle", &framework::Dataset::LocalShuffle,
+      .def("local_shuffle",
+           &framework::Dataset::LocalShuffle,
            py::call_guard<py::gil_scoped_release>())
-      .def("global_shuffle", &framework::Dataset::GlobalShuffle,
+      .def("global_shuffle",
+           &framework::Dataset::GlobalShuffle,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_memory_data_size", &framework::Dataset::GetMemoryDataSize,
+      .def("get_memory_data_size",
+           &framework::Dataset::GetMemoryDataSize,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_pv_data_size", &framework::Dataset::GetPvDataSize,
+      .def("get_epoch_finish",
+           &framework::Dataset::GetEpochFinish,
            py::call_guard<py::gil_scoped_release>())
-      .def("get_shuffle_data_size", &framework::Dataset::GetShuffleDataSize,
+      .def("clear_sample_state",
+           &framework::Dataset::ClearSampleState,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_queue_num", &framework::Dataset::SetChannelNum,
+      .def("get_pv_data_size",
+           &framework::Dataset::GetPvDataSize,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_parse_ins_id", &framework::Dataset::SetParseInsId,
+      .def("get_shuffle_data_size",
+           &framework::Dataset::GetShuffleDataSize,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_parse_content", &framework::Dataset::SetParseContent,
+      .def("set_queue_num",
+           &framework::Dataset::SetChannelNum,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_parse_logkey", &framework::Dataset::SetParseLogKey,
+      .def("set_parse_ins_id",
+           &framework::Dataset::SetParseInsId,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_merge_by_sid", &framework::Dataset::SetMergeBySid,
+      .def("set_parse_content",
+           &framework::Dataset::SetParseContent,
            py::call_guard<py::gil_scoped_release>())
-      .def("preprocess_instance", &framework::Dataset::PreprocessInstance,
+      .def("set_parse_logkey",
+           &framework::Dataset::SetParseLogKey,
            py::call_guard<py::gil_scoped_release>())
-      .def("postprocess_instance", &framework::Dataset::PostprocessInstance,
+      .def("set_merge_by_sid",
+           &framework::Dataset::SetMergeBySid,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_current_phase", &framework::Dataset::SetCurrentPhase,
+      .def("set_shuffle_by_uid",
+           &framework::Dataset::SetShuffleByUid,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_enable_pv_merge", &framework::Dataset::SetEnablePvMerge,
+      .def("preprocess_instance",
+           &framework::Dataset::PreprocessInstance,
+           py::call_guard<py::gil_scoped_release>())
+      .def("postprocess_instance",
+           &framework::Dataset::PostprocessInstance,
+           py::call_guard<py::gil_scoped_release>())
+      .def("set_current_phase",
+           &framework::Dataset::SetCurrentPhase,
+           py::call_guard<py::gil_scoped_release>())
+      .def("set_enable_pv_merge",
+           &framework::Dataset::SetEnablePvMerge,
            py::call_guard<py::gil_scoped_release>())
 
-      .def("set_merge_by_lineid", &framework::Dataset::SetMergeByInsId,
+      .def("set_merge_by_lineid",
+           &framework::Dataset::SetMergeByInsId,
            py::call_guard<py::gil_scoped_release>())
-      .def("merge_by_lineid", &framework::Dataset::MergeByInsId,
+      .def("merge_by_lineid",
+           &framework::Dataset::MergeByInsId,
            py::call_guard<py::gil_scoped_release>())
       .def("set_generate_unique_feasigns",
            &framework::Dataset::SetGenerateUniqueFeasign,
@@ -288,13 +345,17 @@ void BindDataset(py::module *m) {
       .def("generate_local_tables_unlock",
            &framework::Dataset::GenerateLocalTablesUnlock,
            py::call_guard<py::gil_scoped_release>())
-      .def("slots_shuffle", &framework::Dataset::SlotsShuffle,
+      .def("slots_shuffle",
+           &framework::Dataset::SlotsShuffle,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_fea_eval", &framework::Dataset::SetFeaEval,
+      .def("set_fea_eval",
+           &framework::Dataset::SetFeaEval,
            py::call_guard<py::gil_scoped_release>())
-      .def("set_preload_thread_num", &framework::Dataset::SetPreLoadThreadNum,
+      .def("set_preload_thread_num",
+           &framework::Dataset::SetPreLoadThreadNum,
            py::call_guard<py::gil_scoped_release>())
-      .def("create_preload_readers", &framework::Dataset::CreatePreLoadReaders,
+      .def("create_preload_readers",
+           &framework::Dataset::CreatePreLoadReaders,
            py::call_guard<py::gil_scoped_release>())
       .def("destroy_preload_readers",
            &framework::Dataset::DestroyPreLoadReaders,
@@ -308,15 +369,33 @@ void BindDataset(py::module *m) {
       .def("set_fleet_send_sleep_seconds",
            &framework::Dataset::SetFleetSendSleepSeconds,
            py::call_guard<py::gil_scoped_release>())
-      .def("enable_pv_merge", &framework::Dataset::EnablePvMerge,
+      .def("enable_pv_merge",
+           &framework::Dataset::EnablePvMerge,
+           py::call_guard<py::gil_scoped_release>())
+      .def("set_gpu_graph_mode",
+           &framework::Dataset::SetGpuGraphMode,
+           py::call_guard<py::gil_scoped_release>())
+      .def("set_pass_id",
+           &framework::Dataset::SetPassId,
+           py::call_guard<py::gil_scoped_release>())
+      .def("get_pass_id",
+           &framework::Dataset::GetPassID,
+           py::call_guard<py::gil_scoped_release>())
+      .def("dump_walk_path",
+           &framework::Dataset::DumpWalkPath,
+           py::call_guard<py::gil_scoped_release>())
+      .def("dump_sample_neighbors",
+           &framework::Dataset::DumpSampleNeighbors,
            py::call_guard<py::gil_scoped_release>());
 
   py::class_<IterableDatasetWrapper>(*m, "IterableDatasetWrapper")
-      .def(py::init<framework::Dataset *, const std::vector<std::string> &,
-                    const std::vector<platform::Place> &, size_t, bool>())
+      .def(py::init<framework::Dataset *,
+                    const std::vector<std::string> &,
+                    const std::vector<phi::Place> &,
+                    size_t,
+                    bool>())
       .def("_start", &IterableDatasetWrapper::Start)
       .def("_next", &IterableDatasetWrapper::Next);
 }
 
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

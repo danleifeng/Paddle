@@ -18,11 +18,19 @@ namespace paddle {
 namespace imperative {
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-void Group::DivNRanks(framework::Tensor *tensor, int64_t nranks,
-                      const platform::DeviceContext &context) {
-  framework::VisitDataTypeSmall(
-      dtype_, DivNRanksForAllReduce<platform::CUDADeviceContext>(tensor, nranks,
-                                                                 context));
+void Group::DivNRanks(phi::DenseTensor *tensor,
+                      int64_t nranks,
+                      const phi::DeviceContext &context) {
+#ifdef PADDLE_WITH_HIP
+  if (dtype_ == paddle::framework::proto::VarType_Type_BF16) {
+    PADDLE_THROW(phi::errors::Fatal("Unsupport BF16 in DataParallel for now"));
+  }
+  framework::VisitDataTypeForHIP(
+      dtype_, DivNRanksForAllReduce<phi::GPUContext>(tensor, nranks, context));
+#else
+  framework::VisitDataType(
+      dtype_, DivNRanksForAllReduce<phi::GPUContext>(tensor, nranks, context));
+#endif
 }
 #endif
 

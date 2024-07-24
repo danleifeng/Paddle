@@ -27,6 +27,11 @@ limitations under the License. */
 #include <utility>        // NOLINT
 #include <vector>
 
+#if defined(PADDLE_WITH_PSCORE)
+#include "paddle/fluid/distributed/ps/wrapper/fleet.h"
+#endif
+#include "paddle/common/macros.h"
+#include "paddle/fluid/framework/barrier.h"
 #include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/executor_gc_helper.h"
 #include "paddle/fluid/framework/heter_util.h"
@@ -37,36 +42,43 @@ limitations under the License. */
 #include "paddle/fluid/framework/trainer_desc.pb.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #include "paddle/fluid/operators/reader/blocking_queue.h"
-#include "paddle/fluid/platform/place.h"
-#include "paddle/fluid/platform/port.h"
 #include "paddle/fluid/platform/timer.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/common/port.h"
 
 namespace paddle {
 namespace framework {
-class LoDTensor;
 class ProgramDesc;
 class Scope;
-class Tensor;
 }  // namespace framework
-namespace platform {
-class DeviceContext;
-}  // namespace platform
 }  // namespace paddle
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #endif
 
 namespace paddle {
 namespace framework {
 
-std::string PrintLodTensor(Tensor* tensor, int64_t start, int64_t end);
-std::pair<int64_t, int64_t> GetTensorBound(LoDTensor* tensor, int index);
-bool CheckValidOutput(LoDTensor* tensor, size_t batch_size);
+TEST_API std::string PrintLodTensor(phi::DenseTensor* tensor,
+                                    int64_t start,
+                                    int64_t end,
+                                    char separator = ',',
+                                    bool need_leading_separator = false);
+TEST_API void PrintLodTensor(phi::DenseTensor* tensor,
+                             int64_t start,
+                             int64_t end,
+                             std::string& output_str,  // NOLINT
+                             char separator = ',',
+                             bool need_leading_separator = false,
+                             int num_decimals = 9);
+TEST_API std::pair<int64_t, int64_t> GetTensorBound(phi::DenseTensor* tensor,
+                                                    int index);
+TEST_API bool CheckValidOutput(phi::DenseTensor* tensor, size_t batch_size);
 
 class FleetWrapper;
 
-#ifdef PADDLE_WITH_PSLIB
+#if defined(PADDLE_WITH_PSLIB) && !defined(PADDLE_WITH_HETERPS)
 class HeterWrapper;
 #endif
 
@@ -80,9 +92,7 @@ class PullDenseWorker {
 
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
     defined(PADDLE_WITH_XPU)
-  void AddPlace(const paddle::platform::Place place) {
-    places_.push_back(place);
-  }
+  void AddPlace(const phi::Place place) { places_.push_back(place); }
 
   void AddThreadScope(Scope* scope) { thread_scopes_.push_back(scope); }
 #endif
@@ -112,7 +122,12 @@ class PullDenseWorker {
   bool CheckUpdateParam(uint64_t table_id);
 
  private:
+#if defined(PADDLE_WITH_PSCORE)
+  std::shared_ptr<paddle::distributed::FleetWrapper> fleet_ptr_;
+#else
   std::shared_ptr<paddle::framework::FleetWrapper> fleet_ptr_;
+#endif
+
   PullDenseWorkerParameter param_;
   DownpourWorkerParameter dwp_param_;
   Scope* root_scope_;
@@ -142,7 +157,7 @@ class PullDenseWorker {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   std::vector<gpuStream_t> copy_streams_;
 #endif
-  std::vector<paddle::platform::Place> places_;
+  std::vector<phi::Place> places_;
   std::vector<Scope*> thread_scopes_;
 };
 
@@ -165,14 +180,14 @@ class DeviceWorker {
   virtual void BindingDataFeedMemory() = 0;
   virtual void SetRootScope(Scope* root_scope);
   virtual void SetDataFeed(DataFeed* data_feed);
-  virtual void SetWorkerNum(int num) {}
-  virtual void CacheProgram(const ProgramDesc& main_program) {}
+  virtual void SetWorkerNum(int num UNUSED) {}
+  virtual void CacheProgram(const ProgramDesc& main_program UNUSED) {}
   virtual void ProduceTasks() {}
   virtual void GetXpuOpIndex() {}
-  virtual void Schedule(int taskid) {}
+  virtual void Schedule(int taskid UNUSED) {}
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  virtual void SetStream(const gpuStream_t stream) {}
-  virtual void SetEvent(const gpuEvent_t event) {}
+  virtual void SetStream(const gpuStream_t stream UNUSED) {}
+  virtual void SetEvent(const gpuEvent_t event UNUSED) {}
 #endif
   virtual void SetNeedDumpField(bool need_dump_field) {
     need_dump_field_ = need_dump_field;
@@ -189,25 +204,30 @@ class DeviceWorker {
   virtual void SetChannelWriter(ChannelObject<std::string>* queue) {
     writer_.Reset(queue);
   }
-  virtual void SetPlace(const paddle::platform::Place& place) {
-    place_ = place;
-  }
-  virtual void SetReaderPlace(const paddle::platform::Place& place) {
+  virtual void SetPlace(const phi::Place& place) { place_ = place; }
+  virtual void SetReaderPlace(const phi::Place& place) {
     device_reader_->SetPlace(place);
   }
-  virtual void SetDeviceContext(platform::DeviceContext* dev_ctx) {
+  virtual void SetDeviceContext(phi::DeviceContext* dev_ctx) {
     dev_ctx_ = dev_ctx;
   }
+
+  virtual phi::DeviceContext* GetDeviceContext() { return dev_ctx_; }
+
+  virtual void SetThreadNum(int thread_num) { thread_num_ = thread_num; }
+
   virtual Scope* GetThreadScope() { return thread_scope_; }
   DataFeed* device_reader_ = nullptr;
+  virtual void Finalize() {}
 
  protected:
   virtual void DumpParam(const Scope& scope, const int batch_id);
-  virtual void DumpField(const Scope& scope, int dump_mode,
+  virtual void DumpField(const Scope& scope,
+                         int dump_mode,
                          int dump_interval = 10000);
   Scope* root_scope_ = nullptr;
   Scope* thread_scope_;
-  paddle::platform::Place place_;
+  phi::Place place_;
   int64_t batch_num_ = 0;
   FetchConfig fetch_config_;
   bool use_cvm_;
@@ -224,8 +244,11 @@ class DeviceWorker {
 
   int dump_mode_ = 0;
   int dump_interval_ = 10000;
+  int dump_num_decimals_ = 9;
   ChannelWriter<std::string> writer_;
-  platform::DeviceContext* dev_ctx_ = nullptr;
+  const size_t tensor_iterator_thread_num = 16;
+  phi::DeviceContext* dev_ctx_ = nullptr;
+  int thread_num_;
 };
 
 class CPUWorkerBase : public DeviceWorker {
@@ -236,41 +259,89 @@ class CPUWorkerBase : public DeviceWorker {
   virtual void TrainFiles() = 0;
   virtual void TrainFilesWithProfiler() {}
   virtual void PrintFetchVars() {}
-  virtual void CreateDeviceResource(const ProgramDesc& main_prog) {}
+  virtual void CreateDeviceResource(const ProgramDesc& main_prog UNUSED) {}
 
  protected:
   int thread_id_;
 };
-
 class HogwildWorker : public CPUWorkerBase {
+  struct OffLoadVarInfo {
+    std::vector<std::string> copy_vars;
+    std::vector<std::string> backup_vars;
+    std::vector<std::pair<std::string, std::string>> cast_vars;
+    template <typename TCopyer>
+    void CopyInputs(const Scope* root,
+                    const phi::Place& place,
+                    Scope* scope,
+                    TCopyer* copyer);
+    template <typename TCopyer>
+    void BackUpInputs(Scope* root, Scope* scope, TCopyer* copyer);
+  };
+
  public:
   HogwildWorker() {}
-  virtual ~HogwildWorker() {
-    for (OperatorBase* op : ops_) {
-      delete op;
-    }
-    std::vector<OperatorBase*>().swap(ops_);
-  }
+  virtual ~HogwildWorker() {}
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
   virtual void TrainFilesWithProfiler();
   virtual void PrintFetchVars();
   virtual void CreateDeviceResource(const ProgramDesc& main_prog);
   virtual void BindingDataFeedMemory();
+  virtual void Finalize();
   template <typename T>
-  void SetZero(LoDTensor* tensor, LoDTensor* root_tensor, int tensor_dim);
+  void SetZero(phi::DenseTensor* tensor, const phi::DenseTensor& root_tensor);
 
  protected:
   void CreateThreadOperators(const ProgramDesc& program);
   void CreateThreadScope(const ProgramDesc& program);
+  // check batch num
+  bool CheckBatchNum(int flag);
+  bool GetPassEnd(int flag);
+  // build thread sharding depends
+  void BuildShardingDepends(const ProgramDesc& program);
+  int IsParameter(const std::string& name, bool full_match);
+  bool IsNeedOffload(const std::string& name);
+  size_t AdjustOffloadOps(const ProgramDesc& program);
 
   std::vector<std::string> op_names_;
-  std::vector<OperatorBase*> ops_;
+  std::vector<std::unique_ptr<OperatorBase>> ops_;
   bool thread_barrier_;
   // Scope* thread_scope_;
   HogwildWorkerParameter param_;
   std::vector<std::string> skip_ops_;
   std::map<std::string, int> stat_var_name_map_;
+  static std::atomic<bool> quit_flag_;
+  phi::DenseTensor sync_stat_;
+  // skip vars
+  std::vector<std::string> skip_vars_;
+  std::unordered_map<const OperatorBase*, std::vector<std::string>>
+      unused_vars_;
+  int ring_id_ = 0;
+  int nccl_rank_id_ = 0;
+  std::unordered_map<std::string, int> params2rootid_;
+  std::multiset<std::string> remove_vars_;
+  std::multiset<std::string> unpersist_vars_;
+  std::multiset<std::string> persist_param_vars_;
+  std::multiset<OpDesc*> remove_ops_;
+  std::vector<std::string> need_copy_vars_;
+  std::vector<std::string> shard_dump_params_;
+  std::vector<std::string> shard_dump_fields_;
+  std::multiset<std::string> free_param_vars_;
+  bool is_multi_node_ = false;
+  bool sharding_mode_ = false;
+  bool enable_adjust_op_order_ = false;
+  // offload vars
+  bool is_offload_communication_ = false;
+  bool is_offload_param_ = false;
+  std::vector<std::string> offload_exts_;
+  std::multiset<std::string> offload_names_;
+  std::unordered_map<const OperatorBase*, OffLoadVarInfo> offload_vars_;
+  // enable MixedPrecision
+  std::unordered_map<std::string, std::string> cast_fp16_vars_;
+  std::unordered_map<std::string, std::string> param_cast_vars_;
+  std::unordered_map<std::string, std::string> need_cast_vars_;
+  bool use_ps_gpu_ = false;
+  bool use_gpu_graph_ = false;
 };
 
 class DownpourWorker : public HogwildWorker {
@@ -346,6 +417,79 @@ class DownpourWorker : public HogwildWorker {
   // std::vector<std::pair<uint64_t, uint64_t>> copy_dense_tables_;
 };
 
+// Based on DownpourWorker, remove push pull code into operator
+#if defined(PADDLE_WITH_PSCORE)
+class DownpourLiteWorker : public HogwildWorker {
+ public:
+  DownpourLiteWorker() {}
+  virtual ~DownpourLiteWorker() {}
+  virtual void Initialize(const TrainerDesc& desc);
+  virtual void TrainFiles();
+  virtual void TrainFilesWithProfiler();
+
+ protected:
+  std::shared_ptr<paddle::distributed::FleetWrapper> fleet_ptr_;
+  std::shared_ptr<paddle::framework::PullDenseWorker> pull_dense_worker_;
+  void PushGradients();
+  void CopySparseTable();
+  void CopyDenseTable();
+  void CopyDenseVars();
+
+  DownpourWorkerParameter param_;
+  // copy table
+  CopyTableConfig copy_table_config_;
+  std::vector<std::pair<uint64_t, uint64_t>> copy_sparse_tables_;
+  std::unordered_map<uint64_t, std::unordered_set<uint64_t>> feasign_set_;
+  // actually pushed feasign of each table
+  std::map<uint64_t, std::vector<uint64_t>> sparse_push_keys_;
+  std::map<uint64_t, std::vector<std::string>> sparse_key_names_;
+  // feasign
+  std::map<uint64_t, std::vector<uint64_t>> features_;
+  // feasign embedding
+  std::map<uint64_t, std::vector<std::vector<float>>> feature_values_;
+  std::map<uint64_t, std::vector<std::string>> sparse_value_names_;
+  // adjust ins weight
+  AdjustInsWeightConfig adjust_ins_weight_config_;
+  // check nan and inf during training
+  std::vector<std::string> check_nan_var_names_;
+  bool need_to_push_sparse_;
+  // feasign stats
+  std::map<uint64_t, std::vector<float>> feature_labels_;
+  std::map<uint64_t, std::vector<std::string>> sparse_grad_names_;
+  // feasign embedding gradient
+  std::map<uint64_t, std::vector<std::vector<float>>> feature_grads_;
+  std::vector<::std::future<int32_t>> push_sparse_status_;
+  bool dump_slot_;
+  bool need_to_push_dense_;
+  std::map<uint64_t, std::vector<std::string>> dense_grad_names_;
+  float scale_datanorm_;
+  std::vector<::std::future<int32_t>> push_dense_status_;
+  // skipped ops
+  std::vector<std::string> skip_ops_;
+  // just save the value in param_ for easy access
+  std::map<uint64_t, std::string> label_var_name_;
+  std::map<uint64_t, std::vector<std::string>> dense_value_names_;
+  std::map<uint64_t, uint64_t> table_dependency_;
+  std::vector<std::pair<uint64_t, uint64_t>> copy_dense_tables_;
+  // multitask
+  std::map<int32_t, uint64_t> cond2table_map_;
+  std::set<uint64_t> condvalue_set_;
+  bool flag_partial_push_;
+
+ private:
+  // std::vector<std::string> dump_param_;
+  // just save the value in param_ for easy access
+  // std::map<uint64_t, std::string> label_var_name_;
+  // std::map<uint64_t, std::vector<std::string>> dense_value_names_;
+
+  std::shared_ptr<PullDenseWorker> _pull_dense_worker;
+
+  std::vector<float> nid_show_;
+  // std::map<uint64_t, uint64_t> table_dependency_;
+  // std::vector<std::pair<uint64_t, uint64_t>> copy_dense_tables_;
+};
+#endif
+
 class DownpourWorkerOpt : public DownpourWorker {
  public:
   DownpourWorkerOpt() {}
@@ -364,7 +508,7 @@ class DownpourWorkerOpt : public DownpourWorker {
   uint64_t async_tid_ = 0;
 };
 
-#ifdef PADDLE_WITH_PSLIB
+#if defined(PADDLE_WITH_PSLIB) && !defined(PADDLE_WITH_HETERPS)
 class HeterCpuWorker : public HogwildWorker {
  public:
   HeterCpuWorker() {}
@@ -421,7 +565,7 @@ class HeterCpuWorker : public HogwildWorker {
   std::map<uint64_t, std::vector<std::string>> sparse_grad_names_;
   std::map<uint64_t, std::vector<std::string>> dense_value_names_;
   std::map<uint64_t, std::vector<std::string>> dense_grad_names_;
-  platform::Place root_place_;
+  phi::Place root_place_;
   // actually pushed feasign of each table
   std::map<uint64_t, std::vector<uint64_t>> sparse_push_keys_;
 
@@ -445,12 +589,13 @@ class HeterCpuWorker : public HogwildWorker {
 };
 #endif
 
-#if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL) && \
+#if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL || \
+     defined PADDLE_WITH_XPU_BKCL) &&                        \
     (defined PADDLE_WITH_PSLIB)
 class PSGPUWorker : public HogwildWorker {
  public:
   PSGPUWorker() {}
-  virtual ~PSGPUWorker() {}
+  virtual ~PSGPUWorker();
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
   virtual void TrainFilesWithProfiler();
@@ -460,15 +605,32 @@ class PSGPUWorker : public HogwildWorker {
     new (&program_) ProgramDesc(main_program);
   }
   void ProduceTasks() override;
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   virtual void SetStream(const gpuStream_t stream) { copy_stream_ = stream; }
   virtual void SetEvent(const gpuEvent_t event) { event_ = event; }
+#endif
   void ResetStat();
+
+  // async infershape
+  virtual void CreateDeviceResource(const ProgramDesc& main_prog);
+  virtual void BindingDataFeedMemory();
 
  protected:
   void PushGradients();
   void CopySparseTable();
   void CopyDenseTable();
   void CopyDenseVars();
+
+  struct InferShapeCheckData {
+    std::vector<std::vector<DDim>> pre_dims;
+    std::vector<std::vector<LoD>> pre_lods;
+    std::vector<std::vector<DDim>> after_dims;
+    std::vector<std::vector<LoD>> after_lods;
+  };
+
+  int OpRunAndShapeCheck(OperatorBase& op,  // NOLINT
+                         const Scope& scope,
+                         const phi::Place& place);
 
  private:
   int mpi_rank_;
@@ -488,7 +650,7 @@ class PSGPUWorker : public HogwildWorker {
   std::map<uint64_t, std::vector<std::string>> sparse_grad_names_;
   std::map<uint64_t, std::vector<std::string>> dense_value_names_;
   std::map<uint64_t, std::vector<std::string>> dense_grad_names_;
-  platform::Place root_place_;
+  phi::Place root_place_;
   // actually pushed feasign of each table
   std::map<uint64_t, std::vector<uint64_t>> sparse_push_keys_;
 
@@ -511,8 +673,10 @@ class PSGPUWorker : public HogwildWorker {
   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> feasign_set_;
   paddle::framework::Channel<std::shared_ptr<HeterTask>> pull_queue_;
   paddle::framework::Channel<std::shared_ptr<HeterTask>> push_queue_;
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   gpuEvent_t event_;
   gpuStream_t copy_stream_;
+#endif
   int batch_cnt_{0};
   std::atomic<int> done_cnt_{0};
 
@@ -530,11 +694,32 @@ class PSGPUWorker : public HogwildWorker {
   double gpu_2_cpu_time_;
   double cpu_2_gpu_time_;
   uint64_t total_inst_;
+
+  // async infershape
+  int task_threads_num_{6};
+  int scope_num_{task_threads_num_ + 1};
+  std::atomic<int> thread_count_{0};
+  std::atomic<bool> stop_token_{false};
+  std::atomic<bool> pack_is_end_{false};
+  std::vector<std::thread> task_threads_;
+  std::vector<Scope*> thread_scope_vec_;
+  std::map<Scope*, std::vector<Variable*>> need_reuse_var_vec_;
+  std::vector<Variable*> need_reuse_var_;
+
+  struct TaskData {
+    int ins_num;
+    Scope* scope;
+    MiniBatchGpuPack* pack;
+  };
+  paddle::framework::BlockingQueue<TaskData> free_task_queue_;
+  paddle::framework::BlockingQueue<TaskData> using_task_queue_;
+
+  static std::atomic<int> shape_check_count_;
+  static std::atomic<bool> shape_check_flag_;
 };
 #endif
 
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
-    defined(PADDLE_WITH_ASCEND_CL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 class SectionWorker : public DeviceWorker {
  public:
   SectionWorker() {}
@@ -544,16 +729,16 @@ class SectionWorker : public DeviceWorker {
   void PrepareUnusedVar();
 
   void BindingDataFeedMemory() override {}
-  void CreateDeviceResource(const ProgramDesc& main_prog) override{};
+  void CreateDeviceResource(const ProgramDesc& main_prog UNUSED) override{};
 
   void TrainFiles() override;
   void TrainFilesWithProfiler() override{};
 
   void PrintFetchVars() override {}
 
-  const platform::Place& place() const { return place_; }
+  const phi::Place& place() const { return place_; }
 
-  void SetDeviceIndex(int tid) override {}
+  void SetDeviceIndex(int tid UNUSED) override {}
   void SetThreadIndex(int thread_id) { thread_id_ = thread_id; }
   void SetMicrobatchNum(int num) { num_microbatches_ = num; }
   void SetPipelineStageNum(int num) { num_pipeline_stages_ = num; }
@@ -567,10 +752,12 @@ class SectionWorker : public DeviceWorker {
     skip_vars_ = skip_vars;
   }
   void RunBackward(
-      int micro_id, std::unique_ptr<GarbageCollector>&,
+      int micro_id,
+      std::unique_ptr<GarbageCollector>&,
       std::unordered_map<const OperatorBase*, std::vector<std::string>>&);
   void RunForward(
-      int micro_id, std::unique_ptr<GarbageCollector>&,
+      int micro_id,
+      std::unique_ptr<GarbageCollector>&,
       std::unordered_map<const OperatorBase*, std::vector<std::string>>&);
   void RunUpdate(
       std::unique_ptr<GarbageCollector>&,
@@ -602,7 +789,97 @@ class SectionWorker : public DeviceWorker {
       unused_vars_;
   static uint64_t batch_id_;
 
-  platform::DeviceContext* dev_ctx_ = nullptr;
+  phi::DeviceContext* dev_ctx_ = nullptr;
+};
+#endif
+
+#if defined(PADDLE_WITH_PSCORE)
+class HeterSectionWorker : public DeviceWorker {
+ public:
+  HeterSectionWorker() {}
+  ~HeterSectionWorker() override {}
+
+  void Initialize(const TrainerDesc& desc) override;
+  void CreateDeviceResource(const ProgramDesc& main_prog UNUSED) override{};
+
+  void TrainFiles() override;
+  void TrainFilesWithProfiler() override;
+
+  void BindingDataFeedMemory() override {}
+  void BindingDataFeedMemory(int micro_id);
+  void PrintFetchVars() override;
+  const phi::Place& place() const { return place_; }
+
+  void SetDeviceIndex(int tid) override { thread_id_ = tid; }
+  // void SetThreadNum(int thread_num) { thread_num_ = thread_num; }
+  void SetMicrobatchNum(int num) { num_microbatches_ = num; }
+  void SetPipelineStageNum(int num) { num_pipeline_stages_ = num; }
+  void SetPipelineStage(int stage) { pipeline_stage_ = stage; }
+  std::shared_ptr<std::vector<Scope*>> GetMicrobatchScopes() {
+    return microbatch_scopes_;
+  }
+  void SetMicrobatchScopes(
+      std::shared_ptr<std::vector<Scope*>> microbatch_scopes) {
+    microbatch_scopes_ = microbatch_scopes;
+  }
+  using SHARED_THREAD_QUEUE = std::shared_ptr<
+      ::paddle::framework::BlockingQueue<std::pair<std::string, int>>>;
+
+  SHARED_THREAD_QUEUE GetThreadQueue() { return thread_queue_; }
+  void SetThreadQueue(SHARED_THREAD_QUEUE thread_queue) {
+    thread_queue_ = thread_queue;
+  }
+  void CopyParameters(int microbatch_id,
+                      const ProgramDesc& program,
+                      const phi::Place& place);
+  void SetMinibatchScope(Scope* scope) { minibatch_scope_ = scope; }
+  void SetTrainerId(int trainer_id) { this->trainer_id_ = trainer_id; }
+  void SetTrainers(int trainers) { this->trainers_ = trainers; }
+  void CreateMicrobatchScopes();
+  void RunForward(int micro_id);
+  void RunBackward(int micro_id);
+  void RunListen();
+  void MiniBatchBarrier();
+  void Run();
+  void BatchPostProcess();
+  void SetDebug(bool debug) { debug_ = debug; }
+  Scope* GetThreadScope() override { return minibatch_scope_; }
+
+  // multi-stream
+  // #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  //  void SetStream(const gpuStream_t stream) override {}
+  //  void SetEvent(const gpuEvent_t event) override {}
+  // #endif
+
+ protected:
+  int trainer_id_;
+  int trainers_;
+  // int thread_num_;
+  int thread_id_;
+  int num_microbatches_;
+  int num_pipeline_stages_;
+  int pipeline_stage_;
+  bool epoch_finish_;
+
+  std::shared_ptr<std::vector<Scope*>> microbatch_scopes_;
+  Scope* minibatch_scope_;
+  std::vector<int> micro_ids_{};
+  std::unique_ptr<OperatorBase> listen_op_{nullptr};
+  std::vector<std::unique_ptr<OperatorBase>> forward_ops_;
+  std::vector<std::unique_ptr<OperatorBase>> backward_ops_;
+  std::shared_ptr<framework::ProgramDesc> program_;
+  std::shared_ptr<
+      ::paddle::framework::BlockingQueue<std::pair<std::string, int>>>
+      thread_queue_;
+  static uint64_t batch_id_;
+  uint64_t total_ins_num_ = 0;
+  phi::DeviceContext* dev_ctx_ = nullptr;
+  bool debug_ = false;
+  std::vector<double> op_total_time_;
+  std::vector<std::string> op_name_;
+  platform::Timer timeline_;
+  double total_time_ = 0.0;
+  double read_time_ = 0.0;
 };
 #endif
 

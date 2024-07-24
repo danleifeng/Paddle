@@ -12,15 +12,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include "paddle/fluid/framework/string_array.h"
+
 #include <utf8proc.h>
 
 #include <exception>
 
 #include "glog/logging.h"
-#include "paddle/fluid/framework/string_array.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::wstring_convert<std::codecvt_utf8<wchar_t>> kConverter;
 
@@ -46,8 +46,8 @@ void NFD(const std::string& s, std::string* ret) {
   char* result = reinterpret_cast<char*>(
       utf8proc_NFD(reinterpret_cast<const unsigned char*>(s.c_str())));
   if (result) {
-    *ret = std::move(std::string(result));
-    free(result);
+    *ret = std::string(result);
+    free(result);  // NOLINT
   }
 }
 
@@ -62,13 +62,13 @@ void StringMapToStream(std::ostream& os,
   }
   {
     // then write the data
-    for (auto it = data.begin(); it != data.end(); ++it) {
-      std::string token = it->first;
-      int32_t token_id = it->second;
+    for (const auto& item : data) {
+      std::string token = item.first;
+      int32_t token_id = item.second;
       // write the token
       size_t length = token.size();
       os.write(reinterpret_cast<const char*>(&length), sizeof(length));
-      os.write(token.c_str(), length);
+      os.write(token.c_str(), length);  // NOLINT
       // write the token_id
       os.write(reinterpret_cast<const char*>(&token_id), sizeof(token_id));
     }
@@ -80,25 +80,24 @@ void StringMapToStream(std::ostream& os,
 void StringMapFromStream(std::istream& is,
                          std::unordered_map<std::string, int32_t>* data) {
   // first read the map size
-  size_t map_size;
+  size_t map_size = 0;
   is.read(reinterpret_cast<char*>(&map_size), sizeof(map_size));
   data->reserve(map_size);
   // then read the data
   for (size_t i = 0; i < map_size; ++i) {
     // read the token
-    size_t token_length;
+    size_t token_length = 0;
     is.read(reinterpret_cast<char*>(&token_length), sizeof(token_length));
     char* tmp = new char[token_length];
-    is.read(tmp, token_length);
+    is.read(tmp, token_length);  // NOLINT
     std::string token(tmp, tmp + token_length);
     delete[] tmp;
     // read the token_id
-    int32_t token_id;
+    int32_t token_id = 0;
     is.read(reinterpret_cast<char*>(&token_id), sizeof(token_id));
 
     data->emplace(token, token_id);
   }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

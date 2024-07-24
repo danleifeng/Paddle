@@ -14,39 +14,40 @@
 
 #include "paddle/fluid/memory/allocation/cpu_allocator.h"
 
-#include <stdlib.h>
+#include <cstdlib>
 
+#include "paddle/fluid/memory/stats.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace memory {
-namespace allocation {
+namespace paddle::memory::allocation {
 
 bool CPUAllocator::IsAllocThreadSafe() const { return true; }
 
-void CPUAllocator::FreeImpl(Allocation *allocation) {
+void CPUAllocator::FreeImpl(phi::Allocation *allocation) {
+  auto size = allocation->size();
   void *p = allocation->ptr();
 #ifdef _WIN32
   _aligned_free(p);
 #else
-  free(p);
+  free(p);  // NOLINT
 #endif
+  HOST_MEMORY_STAT_UPDATE(Reserved, 0, -size);
   delete allocation;
 }
 
-Allocation *CPUAllocator::AllocateImpl(size_t size) {
-  void *p;
+phi::Allocation *CPUAllocator::AllocateImpl(size_t size) {
+  void *p = nullptr;
 #ifdef _WIN32
   p = _aligned_malloc(size, kAlignment);
 #else
   int error = posix_memalign(&p, kAlignment, size);
   PADDLE_ENFORCE_EQ(
-      error, 0,
-      platform::errors::ResourceExhausted(
+      error,
+      0,
+      phi::errors::ResourceExhausted(
           "Fail to alloc memory of %ld size, error code is %d.", size, error));
 #endif
-  return new Allocation(p, size, platform::CPUPlace());
+  HOST_MEMORY_STAT_UPDATE(Reserved, 0, size);
+  return new Allocation(p, size, phi::CPUPlace());
 }
-}  // namespace allocation
-}  // namespace memory
-}  // namespace paddle
+}  // namespace paddle::memory::allocation

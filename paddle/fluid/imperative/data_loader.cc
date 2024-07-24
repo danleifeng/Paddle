@@ -16,17 +16,17 @@
 
 #include "paddle/fluid/imperative/data_loader.h"
 
-#include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cstdlib>
+
 #include <csignal>
 
 #include "glog/logging.h"
 #include "paddle/fluid/memory/allocation/mmap_allocator.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace imperative {
+namespace paddle::imperative {
 
 static std::map<int64_t, std::set<pid_t>> load_process_pids;
 
@@ -44,7 +44,7 @@ void EraseLoadProcessPIDs(int64_t key) {
             << ")";
     load_process_pids.erase(it);
   } else {
-    VLOG(3) << "Dygraph Data Loader: The dygrph loader (id: " << key
+    VLOG(3) << "Dygraph Data Loader: The dygraph loader (id: " << key
             << ") you want erase does not exist.";
   }
 }
@@ -60,7 +60,7 @@ void EraseLoadProcessPIDs(int64_t key) {
 #define SIGNAL_HANDLE(SIGNAL)                               \
   do {                                                      \
     memory::allocation::MemoryMapFdSet::Instance().Clear(); \
-    struct sigaction sa;                                    \
+    struct sigaction sa = {};                               \
     sa.sa_handler = SIG_DFL;                                \
     sa.sa_flags = 0;                                        \
     if (sigemptyset(&sa.sa_mask) != 0 ||                    \
@@ -72,7 +72,8 @@ void EraseLoadProcessPIDs(int64_t key) {
   } while (0)
 
 #define REGISTER_SIGNAL_HANDLER(SIGNAL, HANDLER_NAME, ERROR_MSG)           \
-  static void HANDLER_NAME(int sig, siginfo_t *info, void *ctx) {          \
+  static void HANDLER_NAME(                                                \
+      int sig UNUSED, siginfo_t *info UNUSED, void *ctx UNUSED) {          \
     auto _w =                                                              \
         write(STDERR_FILENO, ERROR_MSG, sizeof(ERROR_MSG) / sizeof(char)); \
     (void)_w;                                                              \
@@ -87,16 +88,19 @@ void EraseLoadProcessPIDs(int64_t key) {
     SIGNAL_HANDLE(SIGNAL);                                        \
   }
 
-REGISTER_SIGNAL_HANDLER(SIGSEGV, SIGSEGV_handler,
+REGISTER_SIGNAL_HANDLER(SIGSEGV,
+                        SIGSEGV_handler,
                         "ERROR: Unexpected segmentation fault encountered in "
                         "DataLoader workers.\n");
 REGISTER_SIGNAL_HANDLER(
-    SIGBUS, SIGBUS_handler,
+    SIGBUS,
+    SIGBUS_handler,
     "ERROR: Unexpected BUS error encountered in DataLoader worker. "
     "This might be caused by insufficient shared memory (shm), "
     "please check whether use_shared_memory is set and storage space "
     "in /dev/shm is enough\n");
-REGISTER_SIGNAL_HANDLER(SIGFPE, SIGFPE_handler,
+REGISTER_SIGNAL_HANDLER(SIGFPE,
+                        SIGFPE_handler,
                         "ERROR: Unexpected floating-point exception "
                         "encountered in DataLoader worker.\n")
 REGISTER_SPEC_SIGNAL_HANDLER(SIGTERM, SIGTERM_handler);
@@ -109,7 +113,7 @@ static inline void setSignalHandler(int signal,
   sa.sa_flags = SA_RESTART | SA_SIGINFO | SA_NOCLDSTOP | SA_NODEFER;
   if (sigemptyset(&sa.sa_mask) != 0 ||
       sigaction(signal, &sa, old_sa_ptr) != 0) {
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(phi::errors::Fatal(
         "An error occurred while setting handler for %s.", strsignal(signal)));
   }
 }
@@ -123,9 +127,9 @@ void SetLoadProcessSignalHandler() {
 }
 
 void ThrowErrorIfLoadProcessFailed() {
-  int error;
-  std::set<pid_t> *pids_set;
-  pid_t process_pid;
+  int error = 0;
+  std::set<pid_t> *pids_set = nullptr;
+  pid_t process_pid = 0;
   siginfo_t infop;
 
   for (auto &p : load_process_pids) {
@@ -143,7 +147,7 @@ void ThrowErrorIfLoadProcessFailed() {
       if (infop.si_code == CLD_EXITED &&
           infop.si_status != EXIT_SUCCESS) {  // exit with error
         pids_set->clear();
-        PADDLE_THROW(platform::errors::Fatal(
+        PADDLE_THROW(phi::errors::Fatal(
             "DataLoader process (pid %ld) exited unexpectedly with code %d. "
             "Error detailed are lost due to multiprocessing. Rerunning with:\n"
             "  1. If run DataLoader by DataLoader.from_generator(...), run "
@@ -153,12 +157,13 @@ void ThrowErrorIfLoadProcessFailed() {
             "  2. If run DataLoader by DataLoader(dataset, ...), run with "
             "DataLoader(dataset, ..., num_workers=0) may give better error "
             "trace",
-            process_pid, infop.si_status));
+            process_pid,
+            infop.si_status));
       } else if (infop.si_code == CLD_KILLED ||
                  infop.si_code == CLD_DUMPED) {  // killed by signal
         if (infop.si_status == SIGBUS) {
           pids_set->clear();
-          PADDLE_THROW(platform::errors::Fatal(
+          PADDLE_THROW(phi::errors::Fatal(
               "DataLoader process (pid %ld) exited is killed by signal: %s.\n"
               "  It may be caused by insufficient shared storage space. This "
               "problem usually occurs when using docker as a development "
@@ -174,18 +179,19 @@ void ThrowErrorIfLoadProcessFailed() {
               "len(places).\n"
               "  3. If run by DataLoader(dataset, ..., use_shared_memory=True),"
               " set use_shared_memory=False for not using shared memory.",
-              process_pid, strsignal(infop.si_status)));
+              process_pid,
+              strsignal(infop.si_status)));
         } else {
-          PADDLE_THROW(platform::errors::Fatal(
+          PADDLE_THROW(phi::errors::Fatal(
               "DataLoader process (pid %ld) exited is killed by signal: %s.",
-              process_pid, strsignal(infop.si_status)));
+              process_pid,
+              strsignal(infop.si_status)));
         }
       }
     }
   }
 }
 
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative
 
 #endif

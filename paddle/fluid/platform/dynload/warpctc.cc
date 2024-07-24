@@ -14,17 +14,10 @@ limitations under the License. */
 
 #include "paddle/fluid/platform/dynload/warpctc.h"
 
-namespace paddle {
-namespace platform {
-namespace dynload {
-
-std::once_flag warpctc_dso_flag;
-void* warpctc_dso_handle = nullptr;
+namespace paddle::platform::dynload {
 
 #define DEFINE_WRAP(__name) DynLoad__##__name __name
 
 WARPCTC_ROUTINE_EACH(DEFINE_WRAP);
 
-}  // namespace dynload
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform::dynload

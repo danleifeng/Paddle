@@ -16,9 +16,7 @@ limitations under the License. */
 
 #include "glog/logging.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Graph;
 class Node;
@@ -45,7 +43,9 @@ ExtractInputAndOutputOfSubGraph(std::vector<Node *> &graph) {  // NOLINT
       }
     }
     for (auto *out : node->outputs) {
-      if (!nodes.count(out) && out->IsVar()) {
+      // we forbid out is a persistable var, for case when weight is shared
+      // between within and outside this tensorrt_engine op.
+      if (!nodes.count(out) && out->IsVar() && !out->Var()->Persistable()) {
         outputs.insert(out);
       }
     }
@@ -120,7 +120,7 @@ void SubgraphDetector::MarkNodesInsideSubGraph() {
 using node_map_t = std::map<int, Node *>;
 // Find the ancestor id of a node.
 int UnionFindGetAncestor(const node_map_t &node_map, size_t id) {
-  int tmp = id;
+  int tmp = static_cast<int>(id);
   do {
     tmp = Agent(node_map.at(tmp)).union_find_parent();
   } while (Agent(node_map.at(tmp)).union_find_parent() != tmp);
@@ -132,8 +132,8 @@ void UnionFindCombine(const node_map_t &node_map, size_t a, size_t b) {
   int a_ancestor = UnionFindGetAncestor(node_map, a);
   int b_ancestor = UnionFindGetAncestor(node_map, b);
   Agent(node_map.at(b_ancestor)).set_union_find_parent(a_ancestor);
-  Agent(node_map.at(a)).set_union_find_parent(a_ancestor);
-  Agent(node_map.at(b)).set_union_find_parent(a_ancestor);
+  Agent(node_map.at(a)).set_union_find_parent(a_ancestor);  // NOLINT
+  Agent(node_map.at(b)).set_union_find_parent(a_ancestor);  // NOLINT
 }
 
 // This is a simple representation of a graph.
@@ -156,7 +156,8 @@ struct BriefNode {
 // corresponding inlinks and outlinks to src node.
 // 4. delete all dst's inlinks and outlinks.
 void UnionContractedNodes(const std::map<int, BriefNode *> &node_map,
-                          int src_id, int dst_id) {
+                          int src_id,
+                          int dst_id) {
   // merge the two adjacent nodes into one node.
   BriefNode *src_node = node_map.at(src_id);
   BriefNode *dst_node = node_map.at(dst_id);
@@ -221,7 +222,8 @@ void UnionContractedNodes(const std::map<int, BriefNode *> &node_map,
 // of node.
 // If leave func not nullptr, calls leave(node) after visiting all parents of
 // node.
-void FlexibleDFS(const std::vector<BriefNode *> &source, bool reverse,
+void FlexibleDFS(const std::vector<BriefNode *> &source,
+                 bool reverse,
                  const std::function<bool(const BriefNode *)> &enter,
                  const std::function<bool(const BriefNode *)> &leave) {
   typedef struct {
@@ -230,6 +232,7 @@ void FlexibleDFS(const std::vector<BriefNode *> &source, bool reverse,
   } FNode;
 
   std::vector<FNode> stack;
+  stack.reserve(source.size());
   for (auto &node : source) {
     stack.push_back(FNode{node, false});
   }
@@ -284,7 +287,7 @@ std::vector<std::vector<Node *>> SubgraphDetector::ExtractSubGraphs() {
     node_map[n->id()] = n;
   }
 
-  // create breif node map
+  // create brief node map
   for (auto &itr : brief_node_map) {
     for (Node *node : itr.second->node->inputs) {
       if (!valid_node_ids.count(node->id())) {
@@ -341,7 +344,9 @@ std::vector<std::vector<Node *>> SubgraphDetector::ExtractSubGraphs() {
 
         // Reverse DFS from the source_nodes.
         bool have_excess_path = false;
-        FlexibleDFS(source_nodes, true, nullptr,
+        FlexibleDFS(source_nodes,
+                    true,
+                    nullptr,
                     [&have_excess_path, brief_node](const BriefNode *n) {
                       if (n == brief_node) {
                         have_excess_path = true;
@@ -355,10 +360,10 @@ std::vector<std::vector<Node *>> SubgraphDetector::ExtractSubGraphs() {
       if (contract_nodes.empty()) break;
 
       for (auto dst_node : contract_nodes) {
-        UnionFindCombine(node_map, brief_node->node->id(),
-                         dst_node->node->id());
-        UnionContractedNodes(brief_node_map, brief_node->node->id(),
-                             dst_node->node->id());
+        UnionFindCombine(
+            node_map, brief_node->node->id(), dst_node->node->id());
+        UnionContractedNodes(
+            brief_node_map, brief_node->node->id(), dst_node->node->id());
       }
     }
   }
@@ -371,7 +376,8 @@ std::vector<std::vector<Node *>> SubgraphDetector::ExtractSubGraphs() {
     }
   }
   std::vector<std::vector<Node *>> result;
-  std::for_each(clusters.begin(), clusters.end(),
+  std::for_each(clusters.begin(),
+                clusters.end(),
                 [&](const decltype(clusters)::value_type &it) {
                   result.push_back(it.second);
                 });
@@ -388,10 +394,14 @@ void RemoveIntermediateOutputInSubgraph(const std::vector<Node *> &subgraph,
   std::unordered_set<Node *> valid_output;
 
   for (auto *output : *outputs) {
-    int num_used = 0;
-    for (auto *node : output->outputs) {
-      if (!subgraph_set.count(node)) ++num_used;
-      if (num_used > 0) valid_output.insert(output);
+    if (output->IsSubgraphOutput()) {
+      valid_output.insert(output);
+    } else {
+      int num_used = 0;
+      for (auto *node : output->outputs) {
+        if (!subgraph_set.count(node)) ++num_used;
+        if (num_used > 0) valid_output.insert(output);
+      }
     }
   }
 
@@ -411,7 +421,21 @@ void DetachDeletedNodes(framework::ir::Graph *graph) {
 void SubGraphFuser::ReplaceNodesWithSubGraphs() {
   auto subgraphs = SubgraphDetector(graph_, node_inside_subgraph_teller_)();
   for (auto &subgraph : subgraphs) {
-    if (subgraph.size() <= (size_t)min_subgraph_size_) continue;
+    if (subgraph.size() <= static_cast<size_t>(min_subgraph_size_)) continue;
+
+    bool continue_run = true;
+
+    for (auto *node : subgraph) {
+      for (const auto tmp_name : node->outputs) {
+        if (std::find(trt_exclude_var_names_.begin(),
+                      trt_exclude_var_names_.end(),
+                      tmp_name->Name()) != trt_exclude_var_names_.end()) {
+          continue_run = false;
+        }
+      }
+    }
+
+    if (continue_run == false) continue;
     std::unordered_set<Node *> subgraph_uniq(subgraph.begin(), subgraph.end());
     // replace this sub-graph with the first node. Two steps: 1. Create a Block
     // Node that contains this subgraph 2. Mark the nodes inside the sub-graph
@@ -459,6 +483,4 @@ inline bool CheckNodeIndegreeEquals(const Node &node, size_t n) {
   return node.inputs.size() == n;
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

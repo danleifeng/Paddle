@@ -32,21 +32,23 @@ class SelectInputOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
-    platform::DeviceContextPool &pool = platform::DeviceContextPool::Instance();
+               const phi::Place &dev_place) const override {
+    phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
     auto &dev_ctx = *pool.Get(dev_place);
 
-    auto &mask = scope.FindVar(Input("Mask"))->Get<framework::LoDTensor>();
+    auto &mask = scope.FindVar(Input("Mask"))->Get<phi::DenseTensor>();
     size_t output_branch = static_cast<size_t>(GetBranchNumber(mask));
 
     const std::vector<std::string> &x_names = Inputs("X");
     PADDLE_ENFORCE_LT(
-        output_branch, x_names.size(),
-        platform::errors::InvalidArgument(
+        output_branch,
+        x_names.size(),
+        phi::errors::InvalidArgument(
             "Input 'Mask' in SelectInputOp is invalid. "
             "'Mask' must be less than the size of input vector 'X'. "
             "But received Mask = %d, X's size = %d.",
-            output_branch, x_names.size()));
+            output_branch,
+            x_names.size()));
 
     const framework::Variable *selected_x =
         scope.FindVar(x_names[output_branch]);
@@ -71,7 +73,7 @@ class SelectInputOpProtoMaker : public framework::OpProtoAndCheckerMaker {
     // Because this op is blocking whole control flow. I am implementing MVP
     // (minimal viable product) here.
     AddComment(R"DOC(
-Merge branches of LoDTensor into a single Output with a mask integer
+Merge branches of phi::DenseTensor into a single Output with a mask integer
 specifying the output branchi.
 )DOC");
   }
@@ -107,7 +109,9 @@ class SelectInputGradMaker : public framework::SingleGradOpMaker<T> {
 
 namespace ops = paddle::operators;
 
-REGISTER_OPERATOR(select_input, ops::SelectInputOp,
-                  ops::SelectInputOpProtoMaker, ops::SelectInputInferShape,
+REGISTER_OPERATOR(select_input,
+                  ops::SelectInputOp,
+                  ops::SelectInputOpProtoMaker,
+                  ops::SelectInputInferShape,
                   ops::SelectInputGradMaker<paddle::framework::OpDesc>,
                   ops::SelectInputGradMaker<paddle::imperative::OpBase>);

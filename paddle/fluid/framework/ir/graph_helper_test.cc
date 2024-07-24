@@ -12,14 +12,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/framework/ir/graph.h"
-#include "gtest/gtest.h"
 #include "paddle/fluid/framework/ir/graph_helper.h"
+
+#include "gtest/gtest.h"
+#include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/program_desc.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void BuildCircleGraph(Graph* g) {
   ir::Node* o1 = g->CreateEmptyNode("op1", Node::Type::kOperation);
@@ -221,6 +220,4 @@ TEST(GraphHelperTest, GraphNum) {
   ASSERT_EQ(GraphNum(g3), 2UL);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

@@ -26,12 +26,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #ifdef PADDLE_WITH_NCCL
-#include "paddle/fluid/platform/dynload/nccl.h"
+#include "paddle/phi/backends/dynload/nccl.h"
 #endif
 #ifdef PADDLE_WITH_RCCL
-#include "paddle/fluid/platform/dynload/rccl.h"
+#include "paddle/phi/backends/dynload/rccl.h"
 #endif
-#include "paddle/fluid/platform/macros.h"  // for DISABLE_COPY_AND_ASSIGN
+#include "paddle/common/macros.h"  // for DISABLE_COPY_AND_ASSIGN
 
 namespace paddle {
 namespace framework {
@@ -66,9 +66,11 @@ class NCCLWrapper {
   void InitNCCL();
   void SetNCCLId(const NCCLInfo& nccl_info);
   NCCLInfo GetNCCLId();
-  void SetRankInfo(const int local_rank, const int global_rank,
+  void SetRankInfo(const int local_rank,
+                   const int global_rank,
                    const int ranks);
-  void SyncVar(const int root_rank, const Scope& scope,
+  void SyncVar(const int root_rank,
+               const Scope& scope,
                const std::vector<std::string>& var_names);
 
   static std::shared_ptr<NCCLWrapper> GetInstance() {

@@ -45,17 +45,19 @@ float random(float low, float high) {
   return dist(mt);
 }
 
-void RandomizeTensor(framework::LoDTensor* tensor, const platform::Place& place,
-                     const platform::DeviceContext& ctx) {
+void RandomizeTensor(phi::DenseTensor* tensor,
+                     const phi::Place& place,
+                     const phi::DeviceContext& ctx) {
   auto dims = tensor->dims();
   size_t num_elements = analysis::AccuDims(dims, dims.size());
   PADDLE_ENFORCE_GT(
-      num_elements, 0UL,
-      platform::errors::PermissionDenied("RandomizeTensor only can be used for "
-                                         "tensor which dims is not zero."));
+      num_elements,
+      0UL,
+      phi::errors::PermissionDenied("RandomizeTensor only can be used for "
+                                    "tensor which dims is not zero."));
 
-  platform::CPUPlace cpu_place;
-  framework::LoDTensor temp_tensor;
+  phi::CPUPlace cpu_place;
+  phi::DenseTensor temp_tensor;
   temp_tensor.Resize(dims);
   auto* temp_data = temp_tensor.mutable_data<float>(cpu_place);
 
@@ -63,7 +65,7 @@ void RandomizeTensor(framework::LoDTensor* tensor, const platform::Place& place,
     *(temp_data + i) = random(0., 1.);
   }
 
-  TensorCopySync(temp_tensor, place, tensor);
+  paddle::framework::TensorCopySync(temp_tensor, place, tensor);
 }
 
 /*
@@ -77,19 +79,25 @@ class TRTConvertValidation {
   TRTConvertValidation(int max_batch_size,
                        const std::unordered_set<std::string>& parameters,
                        framework::Scope& scope,  // NOLINT
-                       int workspace_size = 1 << 10, bool if_add_batch = true)
+                       int64_t workspace_size = 1 << 30,
+                       bool if_add_batch = true)
       : parameters_(parameters),
         scope_(scope),
         if_add_batch_(if_add_batch),
         max_batch_size_(max_batch_size) {
-    PADDLE_ENFORCE_EQ(cudaStreamCreate(&stream_), 0,
-                      platform::errors::External("cudaStreamCreate error."));
-    engine_.reset(new TensorRTEngine(max_batch_size, workspace_size));
+    PADDLE_ENFORCE_EQ(cudaStreamCreate(&stream_),
+                      0,
+                      phi::errors::External("cudaStreamCreate error."));
+    TensorRTEngine::ConstructionParams params;
+    params.max_batch_size = max_batch_size;
+    params.max_workspace_size = workspace_size;
+    engine_ = std::make_unique<TensorRTEngine>(params);
     engine_->InitNetwork();
   }
 
   // Declare a Variable as input with random initialization.
-  void DeclInputVar(const std::string& name, const std::vector<int> tensor_dims,
+  void DeclInputVar(const std::string& name,
+                    const std::vector<int> tensor_dims,
                     const nvinfer1::Dims& trt_dims) {
     DeclVar(name, tensor_dims);
     engine_->DeclareInput(name, nvinfer1::DataType::kFLOAT, trt_dims);
@@ -119,15 +127,16 @@ class TRTConvertValidation {
   }
 
   void DeclVar(const std::string& name, const std::vector<int> dim_vec) {
-    platform::CUDADeviceContext ctx(place_);
+    phi::GPUContext ctx(place_);
 
     auto* x = scope_.Var(name);
-    auto* x_tensor = x->GetMutable<framework::LoDTensor>();
-    x_tensor->Resize(framework::make_ddim(dim_vec));
+    auto* x_tensor = x->GetMutable<phi::DenseTensor>();
+    x_tensor->Resize(common::make_ddim(dim_vec));
     RandomizeTensor(x_tensor, place_, ctx);
   }
   // Declare a variable in a fluid Scope.
-  void DeclVar(const std::string& name, const nvinfer1::Dims& dims,
+  void DeclVar(const std::string& name,
+               const nvinfer1::Dims& dims,
                bool is_param = false) {
     // Init Fluid tensor.
     std::vector<int> dim_vec(dims.d, dims.d + dims.nbDims);
@@ -149,7 +158,7 @@ class TRTConvertValidation {
     engine_->FreezeNetwork();
 
     // Declare outputs.
-    op_desc_.reset(new framework::OpDesc(desc, nullptr));
+    op_desc_ = std::make_unique<framework::OpDesc>(desc, nullptr);
   }
 
   // We use the set 'neglected_output' here, because some Ops like batch norm,
@@ -158,13 +167,15 @@ class TRTConvertValidation {
   void Execute(int batch_size,
                std::unordered_set<std::string> neglected_output = {}) {
     // Execute Fluid Op
-    PADDLE_ENFORCE_LE(batch_size, max_batch_size_,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_LE(batch_size,
+                      max_batch_size_,
+                      phi::errors::InvalidArgument(
                           "Runtime batch_size should be less than or equal to "
                           "max_batch_size_. "
                           "But received batch_size:%d, max_batch_size_:%d",
-                          batch_size, max_batch_size_));
-    platform::CUDADeviceContext ctx(place_);
+                          batch_size,
+                          max_batch_size_));
+    phi::GPUContext ctx(place_);
     op_->Run(scope_, place_);
     cudaStreamSynchronize(stream_);
     std::vector<std::string> input_output_names;
@@ -182,7 +193,7 @@ class TRTConvertValidation {
       input_output_names.push_back(output);
       std::vector<float> fluid_out;
       auto* var = scope_.FindVar(output);
-      auto* tensor = var->GetMutable<framework::LoDTensor>();
+      auto* tensor = var->GetMutable<phi::DenseTensor>();
       framework::TensorToVector(*tensor, ctx, &fluid_out);
       fluid_outs.push_back(fluid_out);
     }
@@ -190,11 +201,21 @@ class TRTConvertValidation {
     // Bind input and output for TRT.
     const int num_bindings = input_output_names.size();
     std::vector<void*> buffers(num_bindings);
-
+#if IS_TRT_VERSION_GE(8600)
+    std::unordered_map<std::string, int> tensor_index;
+    for (int i = 0; i < engine_->engine()->getNbIOTensors(); ++i) {
+      auto tensor_name = engine_->engine()->getIOTensorName(i);
+      tensor_index[std::string(tensor_name)] = i;
+    }
+#endif
     for (const std::string& name : input_output_names) {
       auto* var = scope_.FindVar(name);
-      auto* tensor = var->GetMutable<framework::LoDTensor>();
+      auto* tensor = var->GetMutable<phi::DenseTensor>();
+#if IS_TRT_VERSION_GE(10000)
+      const int bind_index = tensor_index[std::string(name.c_str())];
+#else
       const int bind_index = engine_->engine()->getBindingIndex(name.c_str());
+#endif
       buffers[bind_index] =
           static_cast<void*>(tensor->mutable_data<float>(place_));
     }
@@ -209,13 +230,13 @@ class TRTConvertValidation {
       if (neglected_output.count(output)) continue;
       std::vector<float> trt_out;
       auto* var = scope_.FindVar(output);
-      auto* tensor = var->GetMutable<framework::LoDTensor>();
+      auto* tensor = var->GetMutable<phi::DenseTensor>();
       framework::TensorToVector(*tensor, ctx, &trt_out);
 
       size_t fluid_out_size = fluid_outs[index].size();
       if (if_add_batch_ == true) {
         fluid_out_size =
-            batch_size * (framework::product(tensor->dims()) / max_batch_size_);
+            batch_size * (common::product(tensor->dims()) / max_batch_size_);
       }
 
       for (size_t i = 0; i < fluid_out_size; i++) {
@@ -229,14 +250,14 @@ class TRTConvertValidation {
   framework::Scope& scope() { return scope_; }
 
  private:
-  platform::CUDAPlace place_;
+  phi::GPUPlace place_;
   std::unique_ptr<TensorRTEngine> engine_;
   cudaStream_t stream_;
   std::unique_ptr<framework::OperatorBase> op_;
   std::unique_ptr<framework::OpDesc> op_desc_;
   const std::unordered_set<std::string>& parameters_;
   framework::Scope& scope_;
-  // The ITensor of trt does not cotain the batch size,
+  // The ITensor of trt does not contain the batch size,
   // bug, in most cases, we need to set batch size for
   // fluid's tensor shape. This variable indicates
   // whether to add batch size to tensor shape of fluid.

@@ -17,6 +17,7 @@
 #define _LINUX
 #endif
 #include "paddle/fluid/framework/op_def_api.h"
+
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -28,6 +29,7 @@
 #endif
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/text_format.h>
+
 #include "glog/logging.h"
 #include "paddle/fluid/framework/op_def.pb.h"
 
@@ -39,8 +41,7 @@ namespace {
 */
 #include "paddle/fluid/framework/op_def.pbtxt"  //NOLINT
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 const proto::OpDef& GetOpDef(const std::string& op_name) {
   static std::unordered_map<std::string, proto::OpDef> ops_definition;
@@ -59,9 +60,9 @@ const proto::OpDef& GetOpDef(const std::string& op_name) {
       }
       if (op_def.type() != op_name) {
         LOG(WARNING) << op_name << ".pbtxt has error type :" << op_def.type();
-        ops_definition.emplace(std::make_pair(op_name, proto::OpDef()));
+        ops_definition.emplace(op_name, proto::OpDef());
       } else {
-        ops_definition.emplace(std::make_pair(op_name, std::move(op_def)));
+        ops_definition.emplace(op_name, std::move(op_def));
       }
     }
   }
@@ -71,5 +72,4 @@ const proto::OpDef& GetOpDef(const std::string& op_name) {
 bool HasOpDef(const std::string& op_name) {
   return op_def_map.find(op_name) != op_def_map.end();
 }
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

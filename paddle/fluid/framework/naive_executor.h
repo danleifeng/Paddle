@@ -14,15 +14,22 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+
+#include "paddle/fluid/framework/new_executor/interpreter/execution_config.h"
+#include "paddle/fluid/framework/new_executor/interpretercore.h"
+
+#include "paddle/pir/include/core/program.h"
 
 namespace paddle {
 namespace framework {
@@ -31,47 +38,89 @@ namespace framework {
  * Simple, intuitive and effective. Only single thread is supported, and
  * currently designed for inference.
  */
-class LoDTensor;
 class ProgramDesc;
 class Scope;
 
 class NaiveExecutor {
  public:
-  explicit NaiveExecutor(const platform::Place& place) : place_(place) {}
+  using HookFunc = std::function<void(OperatorBase*, Scope*)>;
+
+  using PirHookFunc =
+      std::function<void(InstructionBase*, ValueExecutionInfo*, Scope*)>;
+
+  explicit NaiveExecutor(const phi::Place& place) : place_(place) {}
 
   ~NaiveExecutor();
 
   // Create child scope.
   // Create variables.
-  // @with_feed_fetch_ops: whether to work with the feed and fetch operators.
-  void Prepare(Scope* scope, const ProgramDesc& program_desc, int block_id,
-               bool with_feed_fetch_ops);
+  void Prepare(Scope* scope, const ProgramDesc& program_desc, int block_id);
+
+  void Prepare(Scope* scope);
+
+  void PrepareInterpreterCore(
+      Scope* scope,
+      const ProgramDesc& program_desc,
+      const framework::interpreter::ExecutionConfig& execution_config =
+          framework::interpreter::ExecutionConfig{});
+
+  void PrepareInterpreterCore(
+      Scope* scope,
+      const ::pir::Program& pir_program,
+      const framework::interpreter::ExecutionConfig& execution_config =
+          framework::interpreter::ExecutionConfig{});
 
   // Create variables before head.
-  // Create parameters if persistable is ture, or create the temporary variables
+  // Create parameters if persistable is true, or create the temporary variables
   // instead.
-  void CreateVariables(const ProgramDesc& desc, int block_id, bool persistable,
+  void CreateVariables(const ProgramDesc& desc,
+                       int block_id,
+                       bool persistable,
                        Scope* scope);
 
   // Run all the operators.
   void Run();
 
+  void RunInterpreterCore(const std::vector<std::string>& feed_names = {},
+                          bool need_fetch = false,
+                          bool switch_stream = false);
+
   // Get an tensor to operating directly, without the need for feed_ops.
-  LoDTensor* FindTensor(const std::string& name);
+  phi::DenseTensor* FindTensor(const std::string& name);
 
-  Scope* scope() { return scope_; }
+  Scope* GetScope() { return scope_; }
 
-  void CleanFeedFetchOps();
+  void MakeReusePlan(
+      const std::unordered_map<std::string, std::string>& reuse_table);
 
- protected:
-  void CreateOps(const ProgramDesc& desc, int block_id,
-                 bool with_feed_fetch_ops);
+  void ResetTrtOps(int num);
+
+  void RegisterOutputHook(const HookFunc& hookfunc);
+  void RegisterInputHook(const HookFunc& hookfunc);
+  void RegisterOutputHook(const PirHookFunc& hookfunc);
+  void RegisterInputHook(const PirHookFunc& hookfunc);
 
  private:
-  const platform::Place place_;
+  void CreateOps(const ProgramDesc& desc, int block_id);
+
+ private:
+  const phi::Place place_;
   // Catch the required resource to avoid recreate.
   std::vector<std::unique_ptr<OperatorBase>> ops_;
-  Scope* scope_;
+  Scope* scope_{nullptr};
+
+  std::vector<HookFunc> output_hookfuncs_;
+  std::vector<HookFunc> input_hookfuncs_;
+
+  std::vector<PirHookFunc> pir_output_hookfuncs_;
+  std::vector<PirHookFunc> pir_input_hookfuncs_;
+
+  // Record information that tensor_a should ShareBufferWith tensor_b.
+  std::unordered_map<OperatorBase*, std::unordered_map<phi::DenseTensor*, int>>
+      reuse_cache_;
+  std::vector<phi::DenseTensor*> cluster_buffer_;
+
+  std::unique_ptr<framework::InterpreterCore> interpreter_core_;
 };
 
 }  // namespace framework

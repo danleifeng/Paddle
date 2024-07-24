@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+
 #include "paddle/fluid/inference/capi/c_api_internal.h"
 #include "paddle/fluid/inference/capi/paddle_c_api.h"
 #include "paddle/fluid/platform/enforce.h"
@@ -38,12 +39,13 @@ void PD_DeleteAnalysisConfig(PD_AnalysisConfig* config) {
   }
 }
 
-void PD_SetModel(PD_AnalysisConfig* config, const char* model_dir,
+void PD_SetModel(PD_AnalysisConfig* config,
+                 const char* model_dir,
                  const char* params_path) {
   LOG(INFO) << model_dir;
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   LOG(INFO) << std::string(model_dir);
   if (!params_path) {
@@ -56,7 +58,7 @@ void PD_SetModel(PD_AnalysisConfig* config, const char* model_dir,
 void PD_SetProgFile(PD_AnalysisConfig* config, const char* x) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SetProgFile(std::string(x));
 }
@@ -64,7 +66,7 @@ void PD_SetProgFile(PD_AnalysisConfig* config, const char* x) {
 void PD_SetParamsFile(PD_AnalysisConfig* config, const char* x) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SetParamsFile(std::string(x));
 }
@@ -72,7 +74,7 @@ void PD_SetParamsFile(PD_AnalysisConfig* config, const char* x) {
 void PD_SetOptimCacheDir(PD_AnalysisConfig* config, const char* opt_cache_dir) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SetOptimCacheDir(std::string(opt_cache_dir));
 }
@@ -80,7 +82,7 @@ void PD_SetOptimCacheDir(PD_AnalysisConfig* config, const char* opt_cache_dir) {
 const char* PD_ModelDir(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.model_dir().c_str();
 }
@@ -88,7 +90,7 @@ const char* PD_ModelDir(const PD_AnalysisConfig* config) {
 const char* PD_ProgFile(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.prog_file().c_str();
 }
@@ -96,16 +98,17 @@ const char* PD_ProgFile(const PD_AnalysisConfig* config) {
 const char* PD_ParamsFile(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.params_file().c_str();
 }
 
-void PD_EnableUseGpu(PD_AnalysisConfig* config, int memory_pool_init_size_mb,
+void PD_EnableUseGpu(PD_AnalysisConfig* config,
+                     int memory_pool_init_size_mb,
                      int device_id) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableUseGpu(static_cast<uint64_t>(memory_pool_init_size_mb),
                               device_id);
@@ -114,7 +117,7 @@ void PD_EnableUseGpu(PD_AnalysisConfig* config, int memory_pool_init_size_mb,
 void PD_EnableXpu(PD_AnalysisConfig* config, int l3_workspace_size) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableXpu(l3_workspace_size);
 }
@@ -122,7 +125,7 @@ void PD_EnableXpu(PD_AnalysisConfig* config, int l3_workspace_size) {
 void PD_DisableGpu(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.DisableGpu();
 }
@@ -130,7 +133,7 @@ void PD_DisableGpu(PD_AnalysisConfig* config) {
 bool PD_UseGpu(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.use_gpu();
 }
@@ -138,7 +141,7 @@ bool PD_UseGpu(const PD_AnalysisConfig* config) {
 bool PD_UseXpu(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.use_xpu();
 }
@@ -146,7 +149,7 @@ bool PD_UseXpu(const PD_AnalysisConfig* config) {
 int PD_GpuDeviceId(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.gpu_device_id();
 }
@@ -154,7 +157,7 @@ int PD_GpuDeviceId(const PD_AnalysisConfig* config) {
 int PD_XpuDeviceId(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.xpu_device_id();
 }
@@ -162,7 +165,7 @@ int PD_XpuDeviceId(const PD_AnalysisConfig* config) {
 int PD_MemoryPoolInitSizeMb(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.memory_pool_init_size_mb();
 }
@@ -170,7 +173,7 @@ int PD_MemoryPoolInitSizeMb(const PD_AnalysisConfig* config) {
 float PD_FractionOfGpuMemoryForPool(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.fraction_of_gpu_memory_for_pool();
 }
@@ -178,7 +181,7 @@ float PD_FractionOfGpuMemoryForPool(const PD_AnalysisConfig* config) {
 void PD_EnableCUDNN(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableCUDNN();
 }
@@ -186,7 +189,7 @@ void PD_EnableCUDNN(PD_AnalysisConfig* config) {
 bool PD_CudnnEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.cudnn_enabled();
 }
@@ -194,7 +197,7 @@ bool PD_CudnnEnabled(const PD_AnalysisConfig* config) {
 void PD_SwitchIrOptim(PD_AnalysisConfig* config, bool x) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SwitchIrOptim(x);
 }
@@ -202,7 +205,7 @@ void PD_SwitchIrOptim(PD_AnalysisConfig* config, bool x) {
 bool PD_IrOptim(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.ir_optim();
 }
@@ -210,7 +213,7 @@ bool PD_IrOptim(const PD_AnalysisConfig* config) {
 void PD_SwitchUseFeedFetchOps(PD_AnalysisConfig* config, bool x) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SwitchUseFeedFetchOps(x);
 }
@@ -218,7 +221,7 @@ void PD_SwitchUseFeedFetchOps(PD_AnalysisConfig* config, bool x) {
 bool PD_UseFeedFetchOpsEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.use_feed_fetch_ops_enabled();
 }
@@ -226,7 +229,7 @@ bool PD_UseFeedFetchOpsEnabled(const PD_AnalysisConfig* config) {
 void PD_SwitchSpecifyInputNames(PD_AnalysisConfig* config, bool x) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SwitchSpecifyInputNames(x);
 }
@@ -234,52 +237,42 @@ void PD_SwitchSpecifyInputNames(PD_AnalysisConfig* config, bool x) {
 bool PD_SpecifyInputName(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.specify_input_name();
 }
 
-void PD_EnableTensorRtEngine(PD_AnalysisConfig* config, int workspace_size,
-                             int max_batch_size, int min_subgraph_size,
-                             Precision precision, bool use_static,
+void PD_EnableTensorRtEngine(PD_AnalysisConfig* config,
+                             int64_t workspace_size,
+                             int max_batch_size,
+                             int min_subgraph_size,
+                             Precision precision,
+                             bool use_static,
                              bool use_calib_mode) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
-  config->config.EnableTensorRtEngine(
-      workspace_size, max_batch_size, min_subgraph_size,
-      paddle::ConvertToACPrecision(precision), use_static, use_calib_mode);
+  config->config.EnableTensorRtEngine(workspace_size,
+                                      max_batch_size,
+                                      min_subgraph_size,
+                                      paddle::ConvertToACPrecision(precision),
+                                      use_static,
+                                      use_calib_mode);
 }
 
 bool PD_TensorrtEngineEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.tensorrt_engine_enabled();
-}
-
-void PD_EnableDlnne(PD_AnalysisConfig* config, int min_subgraph_size) {
-  PADDLE_ENFORCE_NOT_NULL(
-      config,
-      paddle::platform::errors::InvalidArgument(
-          "The pointer of analysis configuration shouldn't be nullptr"));
-  config->config.EnableDlnne(min_subgraph_size);
-}
-
-bool PD_DlnneEnabled(const PD_AnalysisConfig* config) {
-  PADDLE_ENFORCE_NOT_NULL(
-      config,
-      paddle::platform::errors::InvalidArgument(
-          "The pointer of analysis configuration shouldn't be nullptr"));
-  return config->config.dlnne_enabled();
 }
 
 void PD_SwitchIrDebug(PD_AnalysisConfig* config, bool x) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SwitchIrDebug(x);
 }
@@ -287,7 +280,7 @@ void PD_SwitchIrDebug(PD_AnalysisConfig* config, bool x) {
 void PD_EnableMKLDNN(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableMKLDNN();
 }
@@ -295,7 +288,7 @@ void PD_EnableMKLDNN(PD_AnalysisConfig* config) {
 void PD_SetMkldnnCacheCapacity(PD_AnalysisConfig* config, int capacity) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SetMkldnnCacheCapacity(capacity);
 }
@@ -303,7 +296,7 @@ void PD_SetMkldnnCacheCapacity(PD_AnalysisConfig* config, int capacity) {
 bool PD_MkldnnEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.mkldnn_enabled();
 }
@@ -312,7 +305,7 @@ void PD_SetCpuMathLibraryNumThreads(PD_AnalysisConfig* config,
                                     int cpu_math_library_num_threads) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SetCpuMathLibraryNumThreads(cpu_math_library_num_threads);
 }
@@ -320,7 +313,7 @@ void PD_SetCpuMathLibraryNumThreads(PD_AnalysisConfig* config,
 int PD_CpuMathLibraryNumThreads(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.cpu_math_library_num_threads();
 }
@@ -328,7 +321,7 @@ int PD_CpuMathLibraryNumThreads(const PD_AnalysisConfig* config) {
 void PD_EnableMkldnnQuantizer(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableMkldnnQuantizer();
 }
@@ -336,7 +329,7 @@ void PD_EnableMkldnnQuantizer(PD_AnalysisConfig* config) {
 bool PD_MkldnnQuantizerEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.mkldnn_quantizer_enabled();
 }
@@ -344,7 +337,7 @@ bool PD_MkldnnQuantizerEnabled(const PD_AnalysisConfig* config) {
 void PD_EnableMkldnnBfloat16(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableMkldnnBfloat16();
 }
@@ -352,26 +345,28 @@ void PD_EnableMkldnnBfloat16(PD_AnalysisConfig* config) {
 bool PD_MkldnnBfloat16Enabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.mkldnn_bfloat16_enabled();
 }
 
-void PD_SetModelBuffer(PD_AnalysisConfig* config, const char* prog_buffer,
-                       size_t prog_buffer_size, const char* params_buffer,
+void PD_SetModelBuffer(PD_AnalysisConfig* config,
+                       const char* prog_buffer,
+                       size_t prog_buffer_size,
+                       const char* params_buffer,
                        size_t params_buffer_size) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
-  config->config.SetModelBuffer(prog_buffer, prog_buffer_size, params_buffer,
-                                params_buffer_size);
+  config->config.SetModelBuffer(
+      prog_buffer, prog_buffer_size, params_buffer, params_buffer_size);
 }
 
 bool PD_ModelFromMemory(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.model_from_memory();
 }
@@ -379,7 +374,7 @@ bool PD_ModelFromMemory(const PD_AnalysisConfig* config) {
 void PD_EnableMemoryOptim(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableMemoryOptim();
 }
@@ -387,7 +382,7 @@ void PD_EnableMemoryOptim(PD_AnalysisConfig* config) {
 bool PD_MemoryOptimEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.enable_memory_optim();
 }
@@ -395,7 +390,7 @@ bool PD_MemoryOptimEnabled(const PD_AnalysisConfig* config) {
 void PD_EnableProfile(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.EnableProfile();
 }
@@ -403,7 +398,7 @@ void PD_EnableProfile(PD_AnalysisConfig* config) {
 bool PD_ProfileEnabled(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.profile_enabled();
 }
@@ -411,7 +406,7 @@ bool PD_ProfileEnabled(const PD_AnalysisConfig* config) {
 void PD_SetInValid(PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   config->config.SetInValid();
 }
@@ -419,7 +414,7 @@ void PD_SetInValid(PD_AnalysisConfig* config) {
 bool PD_IsValid(const PD_AnalysisConfig* config) {
   PADDLE_ENFORCE_NOT_NULL(
       config,
-      paddle::platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The pointer of analysis configuration shouldn't be nullptr"));
   return config->config.is_valid();
 }

@@ -13,26 +13,26 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/ir/fuse_relu_depthwise_conv_pass.h"
+
 #include <algorithm>
 #include <string>
 #include <unordered_set>
 #include <vector>
+
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void FuseReluDepthwiseConvPass::ApplyImpl(ir::Graph *graph) const {
   graph = FuseReluDepthwiseConv(graph, true);
-  graph = FuseReluDepthwiseConv(graph, false);
+  graph = FuseReluDepthwiseConv(graph, false);  // NOLINT
 }
 
 ir::Graph *FuseReluDepthwiseConvPass::FuseReluDepthwiseConv(
     ir::Graph *graph, bool only_forward) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, platform::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
   if (only_forward)
     FusePassBase::Init("relu_depthwise_conv_only_forward", graph);
   else
@@ -111,15 +111,19 @@ ir::Graph *FuseReluDepthwiseConvPass::FuseReluDepthwiseConv(
       xg_var = subgraph.at(xg)->Var();
     }
 
-    PADDLE_ENFORCE_EQ(layer_op->Input("Input").size(), 1UL,
-                      platform::errors::InvalidArgument(
-                          "Op(%s)'s input size(%d) must be 1.",
-                          layer_op->Type(), layer_op->Input("Input").size()));
     PADDLE_ENFORCE_EQ(
-        layer_op->Input("Input")[0], y_var->Name(),
-        platform::errors::InvalidArgument(
-            "Op(%s)'s input name(%s) must be %s.", layer_op->Type(),
-            layer_op->Input("Input")[0], y_var->Name()));
+        layer_op->Input("Input").size(),
+        1UL,
+        phi::errors::InvalidArgument("Op(%s)'s input size(%d) must be 1.",
+                                     layer_op->Type(),
+                                     layer_op->Input("Input").size()));
+    PADDLE_ENFORCE_EQ(
+        layer_op->Input("Input")[0],
+        y_var->Name(),
+        phi::errors::InvalidArgument("Op(%s)'s input name(%s) must be %s.",
+                                     layer_op->Type(),
+                                     layer_op->Input("Input")[0],
+                                     y_var->Name()));
     layer_op->SetInput("Input", {x_var->Name()});
     subgraph.at(layer)->inputs.push_back(subgraph.at(x));
     subgraph.at(x)->outputs.push_back(subgraph.at(layer));
@@ -127,29 +131,35 @@ ir::Graph *FuseReluDepthwiseConvPass::FuseReluDepthwiseConv(
 
     if (!only_forward) {
       PADDLE_ENFORCE_EQ(
-          layer_g_op->Input("Input").size(), 1UL,
-          platform::errors::InvalidArgument(
-              "Op(%s)'s input size(%d) must be 1.", layer_g_op->Type(),
-              layer_g_op->Input("Input").size()));
+          layer_g_op->Input("Input").size(),
+          1UL,
+          phi::errors::InvalidArgument("Op(%s)'s input size(%d) must be 1.",
+                                       layer_g_op->Type(),
+                                       layer_g_op->Input("Input").size()));
       PADDLE_ENFORCE_EQ(
-          layer_g_op->Input("Input")[0], y_var->Name(),
-          platform::errors::InvalidArgument(
-              "Op(%s)'s input name(%s) must be %s.", layer_g_op->Type(),
-              layer_g_op->Input("Input")[0], y_var->Name()));
+          layer_g_op->Input("Input")[0],
+          y_var->Name(),
+          phi::errors::InvalidArgument("Op(%s)'s input name(%s) must be %s.",
+                                       layer_g_op->Type(),
+                                       layer_g_op->Input("Input")[0],
+                                       y_var->Name()));
       layer_g_op->SetInput("Input", {x_var->Name()});
       subgraph.at(layer_g)->inputs.push_back(subgraph.at(x));
       subgraph.at(x)->outputs.push_back(subgraph.at(layer_g));
 
-      PADDLE_ENFORCE_EQ(
-          layer_g_op->Output(GradVarName("Input")).size(), 1UL,
-          platform::errors::InvalidArgument(
-              "Op(%s)'s input size(%d) must be 1.", layer_g_op->Type(),
-              layer_g_op->Output(GradVarName("Input")).size()));
-      PADDLE_ENFORCE_EQ(
-          layer_g_op->Output(GradVarName("Input"))[0], yg_var->Name(),
-          platform::errors::InvalidArgument(
-              "Op(%s)'s input name(%s) must be %s.", layer_g_op->Type(),
-              layer_g_op->Output(GradVarName("Input"))[0], yg_var->Name()));
+      PADDLE_ENFORCE_EQ(layer_g_op->Output(GradVarName("Input")).size(),
+                        1UL,
+                        phi::errors::InvalidArgument(
+                            "Op(%s)'s input size(%d) must be 1.",
+                            layer_g_op->Type(),
+                            layer_g_op->Output(GradVarName("Input")).size()));
+      PADDLE_ENFORCE_EQ(layer_g_op->Output(GradVarName("Input"))[0],
+                        yg_var->Name(),
+                        phi::errors::InvalidArgument(
+                            "Op(%s)'s input name(%s) must be %s.",
+                            layer_g_op->Type(),
+                            layer_g_op->Output(GradVarName("Input"))[0],
+                            yg_var->Name()));
       layer_g_op->SetOutput(GradVarName("Input"), {xg_var->Name()});
       subgraph.at(layer_g)->outputs.push_back(subgraph.at(xg));
       subgraph.at(xg)->inputs.push_back(subgraph.at(layer_g));
@@ -161,8 +171,10 @@ ir::Graph *FuseReluDepthwiseConvPass::FuseReluDepthwiseConv(
     if (only_forward) {
       need_removed_nodes.insert({subgraph.at(y), subgraph.at(act)});
     } else {
-      need_removed_nodes.insert({subgraph.at(y), subgraph.at(yg),
-                                 subgraph.at(act), subgraph.at(act_g)});
+      need_removed_nodes.insert({subgraph.at(y),
+                                 subgraph.at(yg),
+                                 subgraph.at(act),
+                                 subgraph.at(act_g)});
     }
     count++;
   };
@@ -172,9 +184,7 @@ ir::Graph *FuseReluDepthwiseConvPass::FuseReluDepthwiseConv(
   return graph;
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fuse_relu_depthwise_conv_pass,
               paddle::framework::ir::FuseReluDepthwiseConvPass);

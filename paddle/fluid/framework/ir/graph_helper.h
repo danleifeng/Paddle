@@ -76,7 +76,7 @@ enum class SortKind {
 };
 
 // Several kinds of topological sort.
-std::vector<Node *> TopologyVarientSort(const Graph &graph, SortKind sort_kind);
+std::vector<Node *> TopologyVariantSort(const Graph &graph, SortKind sort_kind);
 
 // Clean the nodes that doesn't connect to others.
 void CleanIndividualNodes(Graph *graph);
@@ -95,11 +95,12 @@ BuildOperationAdjList(const Graph &graph) {
     }
     for (auto &var : n->inputs) {
       for (auto &adj_n : var->inputs) {
-        PADDLE_ENFORCE_EQ(
-            adj_n->NodeType(), ir::Node::Type::kOperation,
-            platform::errors::InvalidArgument(
-                "Node(%s)'s type(%d) must be kOperation type.", adj_n->Name(),
-                static_cast<int>(adj_n->NodeType())));
+        PADDLE_ENFORCE_EQ(adj_n->NodeType(),
+                          ir::Node::Type::kOperation,
+                          phi::errors::InvalidArgument(
+                              "Node(%s)'s type(%d) must be kOperation type.",
+                              adj_n->Name(),
+                              static_cast<int>(adj_n->NodeType())));
         VLOG(4) << "adj " << adj_n->Name() << reinterpret_cast<void *>(adj_n)
                 << " -> " << n->Name() << reinterpret_cast<void *>(n)
                 << "  via " << var->Name() << reinterpret_cast<void *>(var);
@@ -121,8 +122,12 @@ std::vector<T *> FilterByNodeWrapper(const Graph &graph) {
 
 std::vector<ir::Node *> TopologySortGraphByDescOrder(const Graph &graph);
 
-void GraphToProgram(const Graph &graph, ProgramDesc *p_program,
+void GraphToProgram(const Graph &graph,
+                    ProgramDesc *p_program,
                     const SortKind *sort_kind = nullptr);
+
+std::vector<std::vector<std::vector<ir::Node::Dep>>> GetOpDependencies(
+    const ProgramDesc &program);
 
 }  // namespace ir
 }  // namespace framework

@@ -14,12 +14,13 @@
 #include "paddle/fluid/framework/ir/conv_elementwise_add2_act_fuse_pass.h"
 
 #include <string>
-
+#include "paddle/fluid/framework/ir/cutlass_teller.h"
 #include "paddle/fluid/framework/op_version_registry.h"
+#ifdef PADDLE_WITH_CUDA
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#endif
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 #define GET_IR_NODE(node__) GET_IR_NODE_FROM_SUBGRAPH(node__, node__, pattern);
 #define GET_NODES                      \
@@ -35,20 +36,22 @@ namespace ir {
   GET_IR_NODE(act_op);                 \
   GET_IR_NODE(act_out);
 
-// Inherient the basic information from `base_desc`, and modify some fields.
+// Inherit the basic information from `base_desc`, and modify some fields.
 framework::proto::OpDesc PrepareOpDesc(
-    const framework::proto::OpDesc& base_desc, const std::string& bias,
-    const std::string& bias1, const std::string& activation,
+    const framework::proto::OpDesc& base_desc,
+    const std::string& bias,
+    const std::string& bias1,
+    const std::string& activation,
     const std::string& output) {
   auto proto = base_desc;
   framework::OpDesc desc(proto, nullptr);
-  desc.SetType("conv2d_fusion");
+  desc.SetType("fused_conv2d_add_act");
   desc.SetInput("Bias", {bias});
   desc.SetInput("ResidualData", {bias1});
   desc.SetAttr("activation", activation);
   desc.SetOutput("Output", {output});
   desc.SetAttr("is_test", true);
-  desc.SetAttr("use_cudnn", false);
+  desc.SetAttr("use_cudnn", true);
   desc.Flush();
   return *desc.Proto();
 }
@@ -77,7 +80,7 @@ ConvElementwiseAdd2ActFusePass::ConvElementwiseAdd2ActFusePass() {
       .AddAttr("dilations")
       .End()
       .AddAttr("data_format")
-      .IsStringIn({"NHWC", "NCHW"})
+      .IsStringIn({"NHWC", "NCHW", "AnyLayout"})
       .End();
 
   AddOpCompat(OpCompat("elementwise_add"))
@@ -103,6 +106,22 @@ ConvElementwiseAdd2ActFusePass::ConvElementwiseAdd2ActFusePass() {
       .AddOutput("Out")
       .IsTensor()
       .End();
+
+  AddOpCompat(OpCompat("sigmoid"))
+      .AddInput("X")
+      .IsTensor()
+      .End()
+      .AddOutput("Out")
+      .IsTensor()
+      .End();
+
+  AddOpCompat(OpCompat("tanh"))
+      .AddInput("X")
+      .IsTensor()
+      .End()
+      .AddOutput("Out")
+      .IsTensor()
+      .End();
 }
 
 void ConvElementwiseAdd2ActFusePass::ApplyImpl(ir::Graph* graph) const {
@@ -113,9 +132,32 @@ void ConvElementwiseAdd2ActFusePass::ApplyImpl(ir::Graph* graph) const {
   auto* x = gpd.mutable_pattern()->NewNode("x")->AsInput()->assert_is_op_input(
       "conv2d", "Input");
 
-  patterns::ConvElementwiseadd2Act pattern(gpd.mutable_pattern(), pattern_name);
-  pattern(x);
+// NOTE(liuyuanle): cudnn [8.7, 8.9 now) version has bug when act is
+// sigmoid/tanh. Ref to issue
+// https://github.com/PaddlePaddle/Paddle/issues/50853
+#if CUDNN_VERSION >= 8000 && CUDNN_VERSION < 8700
+  std::unordered_set<std::string> cudnn_act_set(
+      {"identity", "relu", "sigmoid", "tanh"});
+#else
+  std::unordered_set<std::string> cudnn_act_set({"identity", "relu"});
+#endif
 
+  std::unordered_set<std::string> cutlass_act_set =
+      CutlassTeller::Instance()->CbaaAct(Get<int>("gpu_device_id"));
+  std::unordered_set<std::string> all_act_set = cudnn_act_set;
+
+  bool is_fp16_precision =
+      static_cast<phi::DataType>(Get<int>("model_precision")) ==
+          phi::DataType::FLOAT16 ||
+      Get<bool>("enable_gpu_mixed");
+  bool cutlass_enable = Get<bool>("use_cutlass");
+  if (is_fp16_precision && cutlass_enable) {
+    all_act_set.insert(cutlass_act_set.begin(), cutlass_act_set.end());
+  }
+
+  patterns::ConvElementwiseAdd2Act pattern(gpd.mutable_pattern(), pattern_name);
+  pattern(x, all_act_set);
+  int found_count = 0;
   auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
                      Graph* g) {
     if (!IsCompat(subgraph, g)) {
@@ -141,17 +183,34 @@ void ConvElementwiseAdd2ActFusePass::ApplyImpl(ir::Graph* graph) const {
       return;
     }
 
-    auto new_op_proto = PrepareOpDesc(base_op_desc, bias_name, bias1_name,
-                                      act_op_type, act_op_out);
+    auto* scope = param_scope();
+    bool cutlass_can_fuse = CutlassTeller::Instance()->CbaaCanSupport(
+        conv_op->Op(), scope, act_op_type, Get<int>("gpu_device_id"));
+    bool cudnn_can_fuse = cudnn_act_set.count(act_op_type);
+
+    if (!cutlass_can_fuse && !cudnn_can_fuse) {
+      return;
+    }
+
+    auto new_op_proto = PrepareOpDesc(
+        base_op_desc, bias_name, bias1_name, act_op_type, act_op_out);
     framework::OpDesc new_op_desc(new_op_proto, nullptr);
+    int sm = 0;
+#ifdef PADDLE_WITH_CUDA
+    sm = platform::GetGPUComputeCapability(platform::GetCurrentDeviceId());
+#endif
+    if (cutlass_can_fuse && cutlass_enable && (is_fp16_precision || sm >= 80)) {
+      new_op_desc.SetAttr("use_cudnn", false);
+    }
 
     // Create a new node for the fused op.
     auto* new_conv_op = graph->CreateOpNode(&new_op_desc);
 
     // Link inputs and outputs.
     PADDLE_ENFORCE_NE(
-        subgraph.count(x), 0,
-        platform::errors::NotFound("Detector did not find input x of conv2d."));
+        subgraph.count(x),
+        0,
+        phi::errors::NotFound("Detector did not find input x of conv2d."));
     auto* conv_in_node = subgraph.at(x);
 
     IR_NODE_LINK_TO(conv_in_node, new_conv_op);            // Input
@@ -161,16 +220,21 @@ void ConvElementwiseAdd2ActFusePass::ApplyImpl(ir::Graph* graph) const {
     IR_NODE_LINK_TO(new_conv_op, act_out);                 // Output
 
     // Delete the unneeded nodes.
-    GraphSafeRemoveNodes(
-        graph, {conv_op, conv_out, elementwise_add_op, elementwise_add_op_1,
-                elementwise_add_out, elementwise_add_out_1, act_op});
+    GraphSafeRemoveNodes(graph,
+                         {conv_op,
+                          conv_out,
+                          elementwise_add_op,
+                          elementwise_add_op_1,
+                          elementwise_add_out,
+                          elementwise_add_out_1,
+                          act_op});
+    found_count++;
   };
   gpd(graph, handler);
+  AddStatis(found_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(conv_elementwise_add2_act_fuse_pass,
               paddle::framework::ir::ConvElementwiseAdd2ActFusePass);
@@ -180,4 +244,6 @@ REGISTER_PASS_CAPABILITY(conv_elementwise_add2_act_fuse_pass)
             .LE("conv2d", 1)
             .LE("elementwise_add", 1)
             .EQ("relu", 0)
+            .EQ("sigmoid", 0)
+            .EQ("tanh", 0)
             .EQ("identity", 0));

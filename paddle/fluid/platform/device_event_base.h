@@ -13,10 +13,12 @@
 // limitations under the License.
 #pragma once
 #include <memory>
+
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/utils/test_macros.h"
 
 namespace paddle {
 namespace platform {
@@ -27,7 +29,8 @@ class DeviceEvent;
 constexpr int MaxDeviceTypes =
     static_cast<int>(platform::DeviceType::MAX_DEVICE_TYPES);
 
-typedef void (*EventCreateFunction)(DeviceEvent*, const platform::Place&,
+typedef void (*EventCreateFunction)(DeviceEvent*,
+                                    const phi::Place&,
                                     unsigned int flag);
 typedef void (*EventRecordFunction)(DeviceEvent*, const DeviceContext*);
 typedef bool (*EventQueryFunction)(const DeviceEvent*);
@@ -53,21 +56,26 @@ enum EventStatus {
 
 class DeviceEvent {
  public:
-  explicit DeviceEvent(const platform::Place& place, unsigned int flag = 0)
+  explicit DeviceEvent(const phi::Place& place, unsigned int flag)
       : event_(), place_(place), flag_(flag) {
     type_id_ = DeviceTypeToId(platform::Place2DeviceType(place));
-    PADDLE_ENFORCE_LT(type_id_, MaxDeviceTypes,
-                      platform::errors::PreconditionNotMet(
+    PADDLE_ENFORCE_LT(type_id_,
+                      MaxDeviceTypes,
+                      phi::errors::PreconditionNotMet(
                           "Required type < %d, but received type = %d",
-                          MaxDeviceTypes, type_id_));
-    // TODO(Aurelius84): only support CPU/CUDA, need consider XPU/NPU later
-    PADDLE_ENFORCE_LT(type_id_, 3,
-                      platform::errors::Unavailable(
+                          MaxDeviceTypes,
+                          type_id_));
+#ifndef PADDLE_WITH_CUSTOM_DEVICE
+    // TODO(Aurelius84): only support CPU/CUDA.
+    PADDLE_ENFORCE_LT(type_id_,
+                      3,
+                      phi::errors::Unavailable(
                           "Currently DeviceEvent do not support %s", place));
+#endif
     PADDLE_ENFORCE_NOT_NULL(
         event_creator_[type_id_],
-        platform::errors::Unavailable(
-            "event_creator_[%d] shall not be nullptr.", type_id_));
+        phi::errors::Unavailable("event_creator_[%d] shall not be nullptr.",
+                                 type_id_));
     event_creator_[type_id_](this, place, flag);
   }
 
@@ -76,31 +84,38 @@ class DeviceEvent {
   void Record(const DeviceContext* dev_ctx) {
     PADDLE_ENFORCE_NOT_NULL(
         event_recorder_[type_id_],
-        platform::errors::Unavailable(
-            "event_recorder_[%d] shall not be nullptr.", type_id_));
+        phi::errors::Unavailable("event_recorder_[%d] shall not be nullptr.",
+                                 type_id_));
+    if (!recorded_) {
+      recorded_ = true;
+    }
     event_recorder_[type_id_](this, dev_ctx);
   }
 
   bool Query() {
     PADDLE_ENFORCE_NOT_NULL(
         event_querier_[type_id_],
-        platform::errors::Unavailable(
-            "event_querier_[%d] shall not be nullptr.", type_id_));
+        phi::errors::Unavailable("event_querier_[%d] shall not be nullptr.",
+                                 type_id_));
+    if (!recorded_) {
+      VLOG(4) << "Event " << this << " is not recorded yet, and skip query!";
+      return true;
+    }
     return event_querier_[type_id_](this);
   }
 
   void Finish() const {
     PADDLE_ENFORCE_NOT_NULL(
         event_finisher_[type_id_],
-        platform::errors::Unavailable(
-            "event_finisher_[%d] shall not be nullptr.", type_id_));
+        phi::errors::Unavailable("event_finisher_[%d] shall not be nullptr.",
+                                 type_id_));
     event_finisher_[type_id_](this);
   }
 
-  void SetFininshed() {
+  void SetFinished() {
     PADDLE_ENFORCE_NOT_NULL(
         event_finished_setter_[type_id_],
-        platform::errors::Unavailable(
+        phi::errors::Unavailable(
             "event_finished_setter_[%d] shall not be nullptr.", type_id_));
     event_finished_setter_[type_id_](this);
   }
@@ -108,17 +123,22 @@ class DeviceEvent {
   void Reset() {
     PADDLE_ENFORCE_NOT_NULL(
         event_resetter_[type_id_],
-        platform::errors::Unavailable(
-            "event_resetter_[%d] shall not be nullptr.", type_id_));
+        phi::errors::Unavailable("event_resetter_[%d] shall not be nullptr.",
+                                 type_id_));
     event_resetter_[type_id_](this);
   }
 
   void Wait(const DeviceType& waiter_type, const DeviceContext* context) const {
     auto waiter_idx = DeviceTypeToId(waiter_type);
-    PADDLE_ENFORCE_NOT_NULL(event_waiter_[waiter_idx][type_id_],
-                            platform::errors::Unavailable(
-                                "event_waiter_[%d][%d] shall not be nullptr.",
-                                waiter_idx, type_id_));
+    PADDLE_ENFORCE_NOT_NULL(
+        event_waiter_[waiter_idx][type_id_],
+        phi::errors::Unavailable("event_waiter_[%d][%d] shall not be nullptr.",
+                                 waiter_idx,
+                                 type_id_));
+    if (!recorded_) {
+      VLOG(4) << "Event " << this << " is not recorded yet, and skip wait!";
+      return;
+    }
     event_waiter_[waiter_idx][type_id_](this, context);
   }
 
@@ -128,9 +148,17 @@ class DeviceEvent {
 
  private:
   std::shared_ptr<void> event_;
-  platform::Place place_;
+  phi::Place place_;
   int type_id_;
   unsigned int flag_;
+
+  // NOTE(chenruibiao): In cross-step stream synchronization, an event may be
+  // recorded in the first step and waited in the second step. So, in the first
+  // step, the WaitEvent may be called without RecordEvent.
+  // On cuda device, it is ok to wait event that is not recorded yet;
+  // while on npu device, it results in error.
+  // So, we add flag recorded_ to handle this case uniformly.
+  bool recorded_{false};
 
   static EventCreateFunction event_creator_[MaxDeviceTypes];
   static EventRecordFunction event_recorder_[MaxDeviceTypes];
@@ -186,7 +214,7 @@ struct EventCreateFunctionRegisterer : public framework::Registrar {
       "REGISTER_EVENT_CREATE_FUNCTION must be called in global namespace"); \
   static ::paddle::platform::EventCreateFunctionRegisterer<device_type>     \
       __reg_event_create_##device_type##__(func);                           \
-  int TouchDeviceEventCreate##device_type() {                               \
+  TEST_API int TouchDeviceEventCreate##device_type() {                      \
     __reg_event_create_##device_type##__.Touch();                           \
     return 0;                                                               \
   }
@@ -206,7 +234,7 @@ struct EventRecordFunctionRegisterer : public framework::Registrar {
       "REGISTER_EVENT_RECORD_FUNCTION must be called in global namespace"); \
   static ::paddle::platform::EventRecordFunctionRegisterer<device_type>     \
       __reg_event_record_##device_type##__(func);                           \
-  int TouchDeviceEventRecord##device_type() {                               \
+  TEST_API int TouchDeviceEventRecord##device_type() {                      \
     __reg_event_record_##device_type##__.Touch();                           \
     return 0;                                                               \
   }
@@ -226,7 +254,7 @@ struct EventQueryFunctionRegisterer : public framework::Registrar {
       "REGISTER_EVENT_QUERY_FUNCTION must be called in global namespace"); \
   static ::paddle::platform::EventQueryFunctionRegisterer<device_type>     \
       __reg_event_query_##device_type##__(func);                           \
-  int TouchDeviceEventQuery##device_type() {                               \
+  TEST_API int TouchDeviceEventQuery##device_type() {                      \
     __reg_event_query_##device_type##__.Touch();                           \
     return 0;                                                              \
   }
@@ -246,7 +274,7 @@ struct EventFinishFunctionRegisterer : public framework::Registrar {
       "REGISTER_EVENT_FINISH_FUNCTION must be called in global namespace"); \
   static ::paddle::platform::EventFinishFunctionRegisterer<device_type>     \
       __reg_event_finish_##device_type##__(func);                           \
-  int TouchDeviceEventFinish##device_type() {                               \
+  TEST_API int TouchDeviceEventFinish##device_type() {                      \
     __reg_event_finish_##device_type##__.Touch();                           \
     return 0;                                                               \
   }
@@ -266,7 +294,7 @@ struct EventSetFinishedFunctionRegisterer : public framework::Registrar {
       "REGISTER_EVENT_FINISH_FUNCTION must be called in global namespace");  \
   static ::paddle::platform::EventSetFinishedFunctionRegisterer<device_type> \
       __reg_event_finished_setter_##device_type##__(func);                   \
-  int TouchDeviceEventSetFinished##device_type() {                           \
+  TEST_API int TouchDeviceEventSetFinished##device_type() {                  \
     __reg_event_finished_setter_##device_type##__.Touch();                   \
     return 0;                                                                \
   }
@@ -288,7 +316,7 @@ struct EventWaitFunctionRegisterer : public framework::Registrar {
   static ::paddle::platform::EventWaitFunctionRegisterer<waiter_type,     \
                                                          event_type>      \
       __reg_event_wait_##waiter_type##event_type##__(func);               \
-  int TouchDeviceEventWait##waiter_type##event_type() {                   \
+  TEST_API int TouchDeviceEventWait##waiter_type##event_type() {          \
     __reg_event_wait_##waiter_type##event_type##__.Touch();               \
     return 0;                                                             \
   }
@@ -308,7 +336,7 @@ struct EventResetFunctionRegisterer : public framework::Registrar {
       "REGISTER_EVENT_RESET_FUNCTION must be called in global namespace"); \
   static ::paddle::platform::EventResetFunctionRegisterer<device_type>     \
       __reg_event_resetter_##device_type##__(func);                        \
-  int TouchDeviceEventReset##device_type() {                               \
+  TEST_API int TouchDeviceEventReset##device_type() {                      \
     __reg_event_resetter_##device_type##__.Touch();                        \
     return 0;                                                              \
   }

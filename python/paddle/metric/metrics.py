@@ -11,20 +11,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-import six
 import abc
+from typing import TYPE_CHECKING, Any, Literal, Sequence
+
 import numpy as np
 
-from ..fluid.data_feeder import check_variable_and_dtype
-from ..fluid.layer_helper import LayerHelper
-from ..fluid.framework import core, _varbase_creator, in_dygraph_mode
 import paddle
-from paddle import _C_ops
+from paddle import _C_ops, _legacy_C_ops
+
+from ..base.data_feeder import check_variable_and_dtype
+from ..base.framework import _create_tensor, in_pir_mode
+from ..base.layer_helper import LayerHelper
+from ..framework import in_dynamic_mode
+
+if TYPE_CHECKING:
+    import numpy.typing as npt
+
+    from paddle import Tensor
+
 
 __all__ = []
 
@@ -33,8 +39,7 @@ def _is_numpy_(var):
     return isinstance(var, (np.ndarray, np.generic))
 
 
-@six.add_metaclass(abc.ABCMeta)
-class Metric(object):
+class Metric(metaclass=abc.ABCMeta):
     r"""
     Base class for metric, encapsulates metric logic and APIs
     Usage:
@@ -45,7 +50,7 @@ class Metric(object):
             for prediction, label in ...:
                 m.update(prediction, label)
             m.accumulate()
-        
+
     Advanced usage for :code:`compute`:
 
     Metric calculation can be accelerated by calculating metric states
@@ -80,51 +85,57 @@ class Metric(object):
         :code:`pred` and :code:`label` in :code:`compute`.
         For examples, prediction results contains 10 classes, while :code:`pred`
         shape is [N, 10], :code:`label` shape is [N, 1], N is mini-batch size,
-        and we only need to calculate accurary of top-1 and top-5, we could
+        and we only need to calculate accuracy of top-1 and top-5, we could
         calculate the correct prediction matrix of the top-5 scores of the
         prediction of each sample like follows, while the correct prediction
         matrix shape is [N, 5].
 
-          .. code-block:: text
+        .. code-block:: python
+            :name: code-compute-example
 
-              def compute(pred, label):
-                  # sort prediction and slice the top-5 scores
-                  pred = paddle.argsort(pred, descending=True)[:, :5]
-                  # calculate whether the predictions are correct
-                  correct = pred == label
-                  return paddle.cast(correct, dtype='float32')
+            >>> import paddle
+
+            >>> def compute(pred, label):
+            ...     # sort prediction and slice the top-5 scores
+            ...     pred = paddle.argsort(pred, descending=True)[:, :5]
+            ...     # calculate whether the predictions are correct
+            ...     correct = pred == label
+            ...     return paddle.cast(correct, dtype='float32')
+            ...
 
         With the :code:`compute`, we split some calculations to OPs (which
         may run on GPU devices, will be faster), and only fetch 1 tensor with
         shape as [N, 5] instead of 2 tensors with shapes as [N, 10] and [N, 1].
         :code:`update` can be define as follows:
 
-          .. code-block:: text
+        .. code-block:: python
+            :name: code-update-example
 
-              def update(self, correct):
-                  accs = []
-                  for i, k in enumerate(self.topk):
-                      num_corrects = correct[:, :k].sum()
-                      num_samples = len(correct)
-                      accs.append(float(num_corrects) / num_samples)
-                      self.total[i] += num_corrects
-                      self.count[i] += num_samples
-                  return accs
+            >>> def update(self, correct):
+            ...     accs = []
+            ...     for i, k in enumerate(self.topk):
+            ...         num_corrects = correct[:, :k].sum()
+            ...         num_samples = len(correct)
+            ...         accs.append(float(num_corrects) / num_samples)
+            ...         self.total[i] += num_corrects
+            ...         self.count[i] += num_samples
+            ...     return accs
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @abc.abstractmethod
-    def reset(self):
+    def reset(self) -> None:
         """
         Reset states and result
         """
-        raise NotImplementedError("function 'reset' not implemented in {}.".
-                                  format(self.__class__.__name__))
+        raise NotImplementedError(
+            f"function 'reset' not implemented in {self.__class__.__name__}."
+        )
 
     @abc.abstractmethod
-    def update(self, *args):
+    def update(self, *args: Any) -> None:
         """
         Update states for metric
 
@@ -135,29 +146,31 @@ class Metric(object):
 
         see :code:`Metric.compute`
         """
-        raise NotImplementedError("function 'update' not implemented in {}.".
-                                  format(self.__class__.__name__))
+        raise NotImplementedError(
+            f"function 'update' not implemented in {self.__class__.__name__}."
+        )
 
     @abc.abstractmethod
-    def accumulate(self):
+    def accumulate(self) -> Any:
         """
         Accumulates statistics, computes and returns the metric value
         """
         raise NotImplementedError(
-            "function 'accumulate' not implemented in {}.".format(
-                self.__class__.__name__))
+            f"function 'accumulate' not implemented in {self.__class__.__name__}."
+        )
 
     @abc.abstractmethod
-    def name(self):
+    def name(self) -> str:
         """
         Returns metric name
         """
-        raise NotImplementedError("function 'name' not implemented in {}.".
-                                  format(self.__class__.__name__))
+        raise NotImplementedError(
+            f"function 'name' not implemented in {self.__class__.__name__}."
+        )
 
-    def compute(self, *args):
+    def compute(self, *args: Any) -> Any:
         """
-        This API is advanced usage to accelerate metric calculating, calulations
+        This API is advanced usage to accelerate metric calculating, calculations
         from outputs of model to the states which should be updated by Metric can
         be defined here, where Paddle OPs is also supported. Outputs of this API
         will be the inputs of "Metric.update".
@@ -182,66 +195,75 @@ class Accuracy(Metric):
     Encapsulates accuracy metric logic.
 
     Args:
-        topk (int|list[int]|tuple[int]): Number of top elements to look at
+        topk (list[int]|tuple[int]): Number of top elements to look at
             for computing accuracy. Default is (1,).
-        name (str, optional): String name of the metric instance. Default
+        name (str|None, optional): String name of the metric instance. Default
             is `acc`.
 
-    Example by standalone:
-        
+    Examples:
         .. code-block:: python
+            :name: code-standalone-example
 
-          import numpy as np
-          import paddle
+            >>> import numpy as np
+            >>> import paddle
 
-          x = paddle.to_tensor(np.array([
-              [0.1, 0.2, 0.3, 0.4],
-              [0.1, 0.4, 0.3, 0.2],
-              [0.1, 0.2, 0.4, 0.3],
-              [0.1, 0.2, 0.3, 0.4]]))
-          y = paddle.to_tensor(np.array([[0], [1], [2], [3]]))
+            >>> x = paddle.to_tensor(np.array([
+            ...     [0.1, 0.2, 0.3, 0.4],
+            ...     [0.1, 0.4, 0.3, 0.2],
+            ...     [0.1, 0.2, 0.4, 0.3],
+            ...     [0.1, 0.2, 0.3, 0.4]]))
+            >>> y = paddle.to_tensor(np.array([[0], [1], [2], [3]]))
 
-          m = paddle.metric.Accuracy()
-          correct = m.compute(x, y)
-          m.update(correct)
-          res = m.accumulate()
-          print(res) # 0.75
+            >>> m = paddle.metric.Accuracy()
+            >>> correct = m.compute(x, y)
+            >>> m.update(correct)
+            >>> res = m.accumulate()
+            >>> print(res)
+            0.75
 
-
-    Example with Model API:
-        
         .. code-block:: python
+            :name: code-model-api-example
 
-          import paddle
-          from paddle.static import InputSpec
-          import paddle.vision.transforms as T
-          from paddle.vision.datasets import MNIST
-             
-          input = InputSpec([None, 1, 28, 28], 'float32', 'image')
-          label = InputSpec([None, 1], 'int64', 'label')
-          transform = T.Compose([T.Transpose(), T.Normalize([127.5], [127.5])])
-          train_dataset = MNIST(mode='train', transform=transform)
+            >>> # doctest: +TIMEOUT(80)
+            >>> import paddle
+            >>> from paddle.static import InputSpec
+            >>> import paddle.vision.transforms as T
+            >>> from paddle.vision.datasets import MNIST
 
-          model = paddle.Model(paddle.vision.models.LeNet(), input, label)
-          optim = paddle.optimizer.Adam(
-              learning_rate=0.001, parameters=model.parameters())
-          model.prepare(
-              optim,
-              loss=paddle.nn.CrossEntropyLoss(),
-              metrics=paddle.metric.Accuracy())
+            >>> input = InputSpec([None, 1, 28, 28], 'float32', 'image')
+            >>> label = InputSpec([None, 1], 'int64', 'label')
+            >>> transform = T.Compose([T.Transpose(), T.Normalize([127.5], [127.5])])
+            >>> train_dataset = MNIST(mode='train', transform=transform)
 
-          model.fit(train_dataset, batch_size=64)
+            >>> model = paddle.Model(paddle.vision.models.LeNet(), input, label)
+            >>> optim = paddle.optimizer.Adam(
+            ...     learning_rate=0.001, parameters=model.parameters())
+            >>> model.prepare(
+            ...     optim,
+            ...     loss=paddle.nn.CrossEntropyLoss(),
+            ...     metrics=paddle.metric.Accuracy())
+            ...
+            >>> model.fit(train_dataset, batch_size=64)
 
     """
 
-    def __init__(self, topk=(1, ), name=None, *args, **kwargs):
-        super(Accuracy, self).__init__(*args, **kwargs)
+    topk: Sequence[int]
+    maxk: int
+
+    def __init__(
+        self,
+        topk: Sequence[int] = (1,),
+        name: str | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
         self.topk = topk
         self.maxk = max(topk)
         self._init_name(name)
         self.reset()
 
-    def compute(self, pred, label, *args):
+    def compute(self, pred: Tensor, label: Tensor, *args: Any) -> Tensor:
         """
         Compute the top-k (maximum value in `topk`) indices.
 
@@ -251,31 +273,33 @@ class Accuracy(Metric):
             label (Tensor): The ground truth value is Tensor with dtype
                 int64. Shape is [batch_size, d0, ..., 1], or
                 [batch_size, d0, ..., num_classes] in one hot representation.
-                
+
         Return:
             Tensor: Correct mask, a tensor with shape [batch_size, d0, ..., topk].
         """
         pred = paddle.argsort(pred, descending=True)
         pred = paddle.slice(
-            pred, axes=[len(pred.shape) - 1], starts=[0], ends=[self.maxk])
-        if (len(label.shape) == 1) or \
-           (len(label.shape) == 2 and label.shape[-1] == 1):
-            # In static mode, the real label data shape may be different
+            pred, axes=[len(pred.shape) - 1], starts=[0], ends=[self.maxk]
+        )
+        if (len(label.shape) == 1) or (
+            len(label.shape) == 2 and label.shape[-1] == 1
+        ):
+            # In static graph mode, the real label data shape may be different
             # from shape defined by paddle.static.InputSpec in model
             # building, reshape to the right shape.
             label = paddle.reshape(label, (-1, 1))
         elif label.shape[-1] != 1:
             # one-hot label
             label = paddle.argmax(label, axis=-1, keepdim=True)
-        correct = pred == label
+        correct = pred == label.astype(pred.dtype)
         return paddle.cast(correct, dtype='float32')
 
-    def update(self, correct, *args):
+    def update(self, correct: Tensor, *args: Any) -> Tensor:
         """
         Update the metrics states (correct count and total count), in order to
         calculate cumulative accuracy of all instances. This function also
         returns the accuracy of current step.
-        
+
         Args:
             correct: Correct mask, a tensor with shape [batch_size, d0, ..., topk].
 
@@ -283,7 +307,7 @@ class Accuracy(Metric):
             Tensor: the accuracy of current step.
         """
         if isinstance(correct, paddle.Tensor):
-            correct = correct.numpy()
+            correct = np.array(correct)
         num_samples = np.prod(np.array(correct.shape[:-1]))
         accs = []
         for i, k in enumerate(self.topk):
@@ -294,32 +318,32 @@ class Accuracy(Metric):
         accs = accs[0] if len(self.topk) == 1 else accs
         return accs
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Resets all of the metric state.
         """
-        self.total = [0.] * len(self.topk)
+        self.total = [0.0] * len(self.topk)
         self.count = [0] * len(self.topk)
 
-    def accumulate(self):
+    def accumulate(self) -> list[float]:
         """
         Computes and returns the accumulated metric.
         """
         res = []
         for t, c in zip(self.total, self.count):
-            r = float(t) / c if c > 0 else 0.
+            r = float(t) / c if c > 0 else 0.0
             res.append(r)
         res = res[0] if len(self.topk) == 1 else res
         return res
 
-    def _init_name(self, name):
+    def _init_name(self, name: str | None) -> None:
         name = name or 'acc'
         if self.maxk != 1:
-            self._name = ['{}_top{}'.format(name, k) for k in self.topk]
+            self._name = [f'{name}_top{k}' for k in self.topk]
         else:
             self._name = [name]
 
-    def name(self):
+    def name(self) -> list[str]:
         """
         Return name of metric instance.
         """
@@ -339,66 +363,74 @@ class Precision(Metric):
         name (str, optional): String name of the metric instance.
             Default is `precision`.
 
-    Example by standalone:
-        
+    Examples:
         .. code-block:: python
+            :name: code-standalone-example
 
-          import numpy as np
-          import paddle
+            >>> import numpy as np
+            >>> import paddle
 
-          x = np.array([0.1, 0.5, 0.6, 0.7])
-          y = np.array([0, 1, 1, 1])
+            >>> x = np.array([0.1, 0.5, 0.6, 0.7])
+            >>> y = np.array([0, 1, 1, 1])
 
-          m = paddle.metric.Precision()
-          m.update(x, y)
-          res = m.accumulate()
-          print(res) # 1.0
+            >>> m = paddle.metric.Precision()
+            >>> m.update(x, y)
+            >>> res = m.accumulate()
+            >>> print(res)
+            1.0
 
-
-    Example with Model API:
-        
         .. code-block:: python
+            :name: code-model-api-example
 
-          import numpy as np
-          
-          import paddle
-          import paddle.nn as nn
-          
-          class Data(paddle.io.Dataset):
-              def __init__(self):
-                  super(Data, self).__init__()
-                  self.n = 1024
-                  self.x = np.random.randn(self.n, 10).astype('float32')
-                  self.y = np.random.randint(2, size=(self.n, 1)).astype('float32')
-          
-              def __getitem__(self, idx):
-                  return self.x[idx], self.y[idx]
-          
-              def __len__(self):
-                  return self.n
-  
-          model = paddle.Model(nn.Sequential(
-              nn.Linear(10, 1),
-              nn.Sigmoid()
-          ))
-          optim = paddle.optimizer.Adam(
-              learning_rate=0.001, parameters=model.parameters())
-          model.prepare(
-              optim,
-              loss=nn.BCELoss(),
-              metrics=paddle.metric.Precision())
-          
-          data = Data()
-          model.fit(data, batch_size=16)
+            >>> import numpy as np
+
+            >>> import paddle
+            >>> import paddle.nn as nn
+
+            >>> class Data(paddle.io.Dataset): # type: ignore[type-arg]
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.n = 1024
+            ...         self.x = np.random.randn(self.n, 10).astype('float32')
+            ...         self.y = np.random.randint(2, size=(self.n, 1)).astype('float32')
+            ...
+            ...     def __getitem__(self, idx):
+            ...         return self.x[idx], self.y[idx]
+            ...
+            ...     def __len__(self):
+            ...         return self.n
+            ...
+            >>> model = paddle.Model(nn.Sequential(
+            ...     nn.Linear(10, 1),
+            ...     nn.Sigmoid()
+            ... ))
+            >>> optim = paddle.optimizer.Adam(
+            ...     learning_rate=0.001, parameters=model.parameters())
+            >>> model.prepare(
+            ...     optim,
+            ...     loss=nn.BCELoss(),
+            ...     metrics=paddle.metric.Precision())
+            ...
+            >>> data = Data()
+            >>> model.fit(data, batch_size=16)
     """
 
-    def __init__(self, name='precision', *args, **kwargs):
-        super(Precision, self).__init__(*args, **kwargs)
+    tp: int
+    fp: int
+
+    def __init__(
+        self, name: str = 'precision', *args: Any, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, **kwargs)
         self.tp = 0  # true positive
         self.fp = 0  # false positive
         self._name = name
 
-    def update(self, preds, labels):
+    def update(
+        self,
+        preds: npt.NDArray[np.float32 | np.float64] | Tensor,
+        labels: npt.NDArray[np.int32 | np.int64] | Tensor,
+    ) -> None:
         """
         Update the states based on the current mini-batch prediction results.
 
@@ -411,12 +443,12 @@ class Precision(Metric):
                 The data type is 'int32' or 'int64'.
         """
         if isinstance(preds, paddle.Tensor):
-            preds = preds.numpy()
+            preds = np.array(preds)
         elif not _is_numpy_(preds):
             raise ValueError("The 'preds' must be a numpy ndarray or Tensor.")
 
         if isinstance(labels, paddle.Tensor):
-            labels = labels.numpy()
+            labels = np.array(labels)
         elif not _is_numpy_(labels):
             raise ValueError("The 'labels' must be a numpy ndarray or Tensor.")
 
@@ -432,14 +464,14 @@ class Precision(Metric):
                 else:
                     self.fp += 1
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Resets all of the metric state.
         """
         self.tp = 0
         self.fp = 0
 
-    def accumulate(self):
+    def accumulate(self) -> float:
         """
         Calculate the final precision.
 
@@ -447,9 +479,9 @@ class Precision(Metric):
             A scaler float: results of the calculated precision.
         """
         ap = self.tp + self.fp
-        return float(self.tp) / ap if ap != 0 else .0
+        return float(self.tp) / ap if ap != 0 else 0.0
 
-    def name(self):
+    def name(self) -> str:
         """
         Returns metric name
         """
@@ -472,66 +504,72 @@ class Recall(Metric):
         name (str, optional): String name of the metric instance.
             Default is `recall`.
 
-    Example by standalone:
-        
+    Examples:
         .. code-block:: python
+            :name: code-standalone-example
 
-          import numpy as np
-          import paddle
+            >>> import numpy as np
+            >>> import paddle
 
-          x = np.array([0.1, 0.5, 0.6, 0.7])
-          y = np.array([1, 0, 1, 1])
+            >>> x = np.array([0.1, 0.5, 0.6, 0.7])
+            >>> y = np.array([1, 0, 1, 1])
 
-          m = paddle.metric.Recall()
-          m.update(x, y)
-          res = m.accumulate()
-          print(res) # 2.0 / 3.0
+            >>> m = paddle.metric.Recall()
+            >>> m.update(x, y)
+            >>> res = m.accumulate()
+            >>> print(res)
+            0.6666666666666666
 
-
-    Example with Model API:
-        
         .. code-block:: python
+            :name: code-model-api-example
 
-          import numpy as np
-          
-          import paddle
-          import paddle.nn as nn
-          
-          class Data(paddle.io.Dataset):
-              def __init__(self):
-                  super(Data, self).__init__()
-                  self.n = 1024
-                  self.x = np.random.randn(self.n, 10).astype('float32')
-                  self.y = np.random.randint(2, size=(self.n, 1)).astype('float32')
-          
-              def __getitem__(self, idx):
-                  return self.x[idx], self.y[idx]
-          
-              def __len__(self):
-                  return self.n
-          
-          model = paddle.Model(nn.Sequential(
-              nn.Linear(10, 1),
-              nn.Sigmoid()
-          ))
-          optim = paddle.optimizer.Adam(
-              learning_rate=0.001, parameters=model.parameters())
-          model.prepare(
-              optim,
-              loss=nn.BCELoss(),
-              metrics=[paddle.metric.Precision(), paddle.metric.Recall()])
-          
-          data = Data()
-          model.fit(data, batch_size=16)
+            >>> import numpy as np
+
+            >>> import paddle
+            >>> import paddle.nn as nn
+
+            >>> class Data(paddle.io.Dataset): # type: ignore[type-arg]
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.n = 1024
+            ...         self.x = np.random.randn(self.n, 10).astype('float32')
+            ...         self.y = np.random.randint(2, size=(self.n, 1)).astype('float32')
+            ...
+            ...     def __getitem__(self, idx):
+            ...         return self.x[idx], self.y[idx]
+            ...
+            ...     def __len__(self):
+            ...         return self.n
+            ...
+            >>> model = paddle.Model(nn.Sequential(
+            ...     nn.Linear(10, 1),
+            ...     nn.Sigmoid()
+            ... ))
+            >>> optim = paddle.optimizer.Adam(
+            ...     learning_rate=0.001, parameters=model.parameters())
+            >>> model.prepare(
+            ...     optim,
+            ...     loss=nn.BCELoss(),
+            ...     metrics=[paddle.metric.Precision(), paddle.metric.Recall()])
+            ...
+            >>> data = Data()
+            >>> model.fit(data, batch_size=16)
     """
 
-    def __init__(self, name='recall', *args, **kwargs):
-        super(Recall, self).__init__(*args, **kwargs)
+    tp: int
+    fn: int
+
+    def __init__(self, name: str = 'recall', *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.tp = 0  # true positive
         self.fn = 0  # false negative
         self._name = name
 
-    def update(self, preds, labels):
+    def update(
+        self,
+        preds: npt.NDArray[np.float32 | np.float64] | Tensor,
+        labels: npt.NDArray[np.int32 | np.int64] | Tensor,
+    ) -> None:
         """
         Update the states based on the current mini-batch prediction results.
 
@@ -544,12 +582,12 @@ class Recall(Metric):
                 Shape: [batch_size, 1], Dtype: 'int32' or 'int64'.
         """
         if isinstance(preds, paddle.Tensor):
-            preds = preds.numpy()
+            preds = np.array(preds)
         elif not _is_numpy_(preds):
             raise ValueError("The 'preds' must be a numpy ndarray or Tensor.")
 
         if isinstance(labels, paddle.Tensor):
-            labels = labels.numpy()
+            labels = np.array(labels)
         elif not _is_numpy_(labels):
             raise ValueError("The 'labels' must be a numpy ndarray or Tensor.")
 
@@ -565,7 +603,7 @@ class Recall(Metric):
                 else:
                     self.fn += 1
 
-    def accumulate(self):
+    def accumulate(self) -> float:
         """
         Calculate the final recall.
 
@@ -573,16 +611,16 @@ class Recall(Metric):
             A scaler float: results of the calculated Recall.
         """
         recall = self.tp + self.fn
-        return float(self.tp) / recall if recall != 0 else .0
+        return float(self.tp) / recall if recall != 0 else 0.0
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Resets all of the metric state.
         """
         self.tp = 0
         self.fn = 0
 
-    def name(self):
+    def name(self) -> str:
         """
         Returns metric name
         """
@@ -608,76 +646,76 @@ class Auc(Metric):
             'ROC' or 'PR' for the Precision-Recall-curve. Default is 'ROC'.
         num_thresholds (int): The number of thresholds to use when
             discretizing the roc curve. Default is 4095.
-            'ROC' or 'PR' for the Precision-Recall-curve. Default is 'ROC'.
         name (str, optional): String name of the metric instance. Default
             is `auc`.
 
     "NOTE: only implement the ROC curve type via Python now."
 
-    Example by standalone:
+    Examples:
         .. code-block:: python
+            :name: code-standalone-example
 
-          import numpy as np
-          import paddle
+            >>> import numpy as np
+            >>> import paddle
 
-          m = paddle.metric.Auc()
-          
-          n = 8
-          class0_preds = np.random.random(size = (n, 1))
-          class1_preds = 1 - class0_preds
-          
-          preds = np.concatenate((class0_preds, class1_preds), axis=1)
-          labels = np.random.randint(2, size = (n, 1))
-          
-          m.update(preds=preds, labels=labels)
-          res = m.accumulate()
+            >>> m = paddle.metric.Auc()
 
+            >>> n = 8
+            >>> class0_preds = np.random.random(size = (n, 1))
+            >>> class1_preds = 1 - class0_preds
 
-    Example with Model API:
-        
+            >>> preds = np.concatenate((class0_preds, class1_preds), axis=1)
+            >>> labels = np.random.randint(2, size = (n, 1))
+
+            >>> m.update(preds=preds, labels=labels)
+            >>> res = m.accumulate()
+
         .. code-block:: python
+            :name: code-model-api-example
 
-          import numpy as np
-          import paddle
-          import paddle.nn as nn
-          
-          class Data(paddle.io.Dataset):
-              def __init__(self):
-                  super(Data, self).__init__()
-                  self.n = 1024
-                  self.x = np.random.randn(self.n, 10).astype('float32')
-                  self.y = np.random.randint(2, size=(self.n, 1)).astype('int64')
-          
-              def __getitem__(self, idx):
-                  return self.x[idx], self.y[idx]
-          
-              def __len__(self):
-                  return self.n
-          
-          model = paddle.Model(nn.Sequential(
-              nn.Linear(10, 2), nn.Softmax())
-          )
-          optim = paddle.optimizer.Adam(
-              learning_rate=0.001, parameters=model.parameters())
-          
-          def loss(x, y):
-              return nn.functional.nll_loss(paddle.log(x), y)
-          
-          model.prepare(
-              optim,
-              loss=loss,
-              metrics=paddle.metric.Auc())
-          data = Data()
-          model.fit(data, batch_size=16)
+            >>> import numpy as np
+            >>> import paddle
+            >>> import paddle.nn as nn
+
+            >>> class Data(paddle.io.Dataset): # type: ignore[type-arg]
+            ...     def __init__(self):
+            ...         super().__init__()
+            ...         self.n = 1024
+            ...         self.x = np.random.randn(self.n, 10).astype('float32')
+            ...         self.y = np.random.randint(2, size=(self.n, 1)).astype('int64')
+            ...
+            ...     def __getitem__(self, idx):
+            ...         return self.x[idx], self.y[idx]
+            ...
+            ...     def __len__(self):
+            ...         return self.n
+            ...
+            >>> model = paddle.Model(nn.Sequential(
+            ...     nn.Linear(10, 2), nn.Softmax())
+            ... )
+            >>> optim = paddle.optimizer.Adam(
+            ...     learning_rate=0.001, parameters=model.parameters())
+            ...
+            >>> def loss(x, y):
+            ...     return nn.functional.nll_loss(paddle.log(x), y)
+            ...
+            >>> model.prepare(
+            ...     optim,
+            ...     loss=loss,
+            ...     metrics=paddle.metric.Auc())
+            >>> data = Data()
+            >>> model.fit(data, batch_size=16)
     """
 
-    def __init__(self,
-                 curve='ROC',
-                 num_thresholds=4095,
-                 name='auc',
-                 *args,
-                 **kwargs):
-        super(Auc, self).__init__(*args, **kwargs)
+    def __init__(
+        self,
+        curve: Literal['ROC', 'PR'] = 'ROC',
+        num_thresholds: int = 4095,
+        name: str = 'auc',
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
         self._curve = curve
         self._num_thresholds = num_thresholds
 
@@ -686,7 +724,11 @@ class Auc(Metric):
         self._stat_neg = np.zeros(_num_pred_buckets)
         self._name = name
 
-    def update(self, preds, labels):
+    def update(
+        self,
+        preds: npt.NDArray[np.float32 | np.float64] | Tensor,
+        labels: npt.NDArray[np.int32 | np.int64] | Tensor,
+    ) -> None:
         """
         Update the auc curve with the given predictions and labels.
 
@@ -699,12 +741,12 @@ class Auc(Metric):
                 representing the label of the instance i.
         """
         if isinstance(labels, paddle.Tensor):
-            labels = labels.numpy()
+            labels = np.array(labels)
         elif not _is_numpy_(labels):
             raise ValueError("The 'labels' must be a numpy ndarray or Tensor.")
 
         if isinstance(preds, paddle.Tensor):
-            preds = preds.numpy()
+            preds = np.array(preds)
         elif not _is_numpy_(preds):
             raise ValueError("The 'preds' must be a numpy ndarray or Tensor.")
 
@@ -718,10 +760,10 @@ class Auc(Metric):
                 self._stat_neg[bin_idx] += 1.0
 
     @staticmethod
-    def trapezoid_area(x1, x2, y1, y2):
+    def trapezoid_area(x1: float, x2: float, y1: float, y2: float) -> float:
         return abs(x1 - x2) * (y1 + y2) / 2.0
 
-    def accumulate(self):
+    def accumulate(self) -> float:
         """
         Return the area (a float score) under auc curve
 
@@ -738,13 +780,16 @@ class Auc(Metric):
             tot_neg_prev = tot_neg
             tot_pos += self._stat_pos[idx]
             tot_neg += self._stat_neg[idx]
-            auc += self.trapezoid_area(tot_neg, tot_neg_prev, tot_pos,
-                                       tot_pos_prev)
+            auc += self.trapezoid_area(
+                tot_neg, tot_neg_prev, tot_pos, tot_pos_prev
+            )
             idx -= 1
 
-        return auc / tot_pos / tot_neg if tot_pos > 0.0 and tot_neg > 0.0 else 0.0
+        return (
+            auc / tot_pos / tot_neg if tot_pos > 0.0 and tot_neg > 0.0 else 0.0
+        )
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Reset states and result
         """
@@ -752,59 +797,77 @@ class Auc(Metric):
         self._stat_pos = np.zeros(_num_pred_buckets)
         self._stat_neg = np.zeros(_num_pred_buckets)
 
-    def name(self):
+    def name(self) -> str:
         """
         Returns metric name
         """
         return self._name
 
 
-def accuracy(input, label, k=1, correct=None, total=None, name=None):
+def accuracy(
+    input: Tensor,
+    label: Tensor,
+    k: int = 1,
+    correct: Tensor | None = None,
+    total: Tensor | None = None,
+    name: str | None = None,
+) -> Tensor:
     """
     accuracy layer.
-    Refer to the https://en.wikipedia.org/wiki/Precision_and_recall                                                                                           
- 
+    Refer to the https://en.wikipedia.org/wiki/Precision_and_recall
+
     This function computes the accuracy using the input and label.
     If the correct label occurs in top k predictions, then correct will increment by one.
     Note: the dtype of accuracy is determined by input. the input and label dtype can be different.
- 
+
     Args:
         input(Tensor): The input of accuracy layer, which is the predictions of network. A Tensor with type float32,float64.
             The shape is ``[sample_number, class_dim]`` .
-        label(Tensor): The label of dataset. Tensor with type int32,int64. The shape is ``[sample_number, 1]`` .
+        label(Tensor): The label of dataset. Tensor with type int64 or int32. The shape is ``[sample_number, 1]`` .
         k(int, optional): The top k predictions for each class will be checked. Data type is int64 or int32.
         correct(Tensor, optional): The correct predictions count. A Tensor with type int64 or int32.
         total(Tensor, optional): The total entries count. A tensor with type int64 or int32.
-        name(str, optional): The default value is None. Normally there is no need for
+        name(str|None, optional): The default value is None. Normally there is no need for
             user to set this property. For more information, please refer to :ref:`api_guide_Name`
- 
+
     Returns:
         Tensor, the correct rate. A Tensor with type float32.
- 
+
     Examples:
         .. code-block:: python
- 
-            import paddle
- 
-            predictions = paddle.to_tensor([[0.2, 0.1, 0.4, 0.1, 0.1], [0.2, 0.3, 0.1, 0.15, 0.25]], dtype='float32')
-            label = paddle.to_tensor([[2], [0]], dtype="int64")
-            result = paddle.metric.accuracy(input=predictions, label=label, k=1)
-            # [0.5]
+
+            >>> import paddle
+
+            >>> predictions = paddle.to_tensor([[0.2, 0.1, 0.4, 0.1, 0.1], [0.2, 0.3, 0.1, 0.15, 0.25]], dtype='float32')
+            >>> label = paddle.to_tensor([[2], [0]], dtype="int64")
+            >>> result = paddle.metric.accuracy(input=predictions, label=label, k=1)
+            >>> print(result)
+            Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
+            0.50000000)
     """
-    if in_dygraph_mode():
+    if label.dtype == paddle.int32:
+        label = paddle.cast(label, paddle.int64)
+    if in_dynamic_mode():
         if correct is None:
-            correct = _varbase_creator(dtype="int32")
+            correct = _create_tensor(dtype="int32")
         if total is None:
-            total = _varbase_creator(dtype="int32")
+            total = _create_tensor(dtype="int32")
 
         topk_out, topk_indices = paddle.topk(input, k=k)
-        _acc, _, _ = _C_ops.accuracy(topk_out, topk_indices, label, correct,
-                                     total)
+        _acc, _, _ = _legacy_C_ops.accuracy(
+            topk_out, topk_indices, label, correct, total
+        )
+
+        return _acc
+    elif in_pir_mode():
+        topk_out, topk_indices = paddle.topk(input, k=k)
+        _acc, _, _ = _C_ops.accuracy(topk_out, topk_indices, label)
         return _acc
 
     helper = LayerHelper("accuracy", **locals())
-    check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64'],
-                             'accuracy')
+    check_variable_and_dtype(
+        input, 'input', ['float16', 'uint16', 'float32', 'float64'], 'accuracy'
+    )
     topk_out, topk_indices = paddle.topk(input, k=k)
     acc_out = helper.create_variable_for_type_inference(dtype="float32")
     if correct is None:
@@ -813,14 +876,11 @@ def accuracy(input, label, k=1, correct=None, total=None, name=None):
         total = helper.create_variable_for_type_inference(dtype="int32")
     helper.append_op(
         type="accuracy",
-        inputs={
-            "Out": [topk_out],
-            "Indices": [topk_indices],
-            "Label": [label]
-        },
+        inputs={"Out": [topk_out], "Indices": [topk_indices], "Label": [label]},
         outputs={
             "Accuracy": [acc_out],
             "Correct": [correct],
             "Total": [total],
-        })
+        },
+    )
     return acc_out

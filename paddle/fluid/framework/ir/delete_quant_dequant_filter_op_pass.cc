@@ -45,6 +45,10 @@ DeleteQuantDequantFilterOpPass::DeleteQuantDequantFilterOpPass() {
       .End()
       .AddAttr("bit_length")
       .IsIntIn({8, 16})
+      .End()
+      .AddAttr("round_type")
+      .IsOptional()
+      .IsIntIn({0, 1})
       .End();
   AddOpCompat(OpCompat("fake_channel_wise_quantize_dequantize_abs_max"))
       .AddInput("X")
@@ -61,11 +65,15 @@ DeleteQuantDequantFilterOpPass::DeleteQuantDequantFilterOpPass() {
       .End()
       .AddAttr("quant_axis")
       .IsIntIn({0, 1})
+      .End()
+      .AddAttr("round_type")
+      .IsOptional()
+      .IsIntIn({0, 1})
       .End();
 }
 // Delete quant_dequant_op, then quantize and dequantize weight
 void DeleteQuantDequantFilterOpPass::ApplyImpl(ir::Graph* graph) const {
-  const std::string pattern_name = "delete_quantdequant_filter_op_pattern";
+  const std::string pattern_name = "delete_quant_dequant_filter_op_pattern";
   FusePassBase::Init(pattern_name, graph);
 
   GraphPatternDetector gpd;
@@ -88,7 +96,7 @@ void DeleteQuantDequantFilterOpPass::ApplyImpl(ir::Graph* graph) const {
     }
     std::unordered_set<const Node*> nodes2rm = {};
     int bit_length =
-        BOOST_GET_CONST(int, quant_dequant_op->Op()->GetAttr("bit_length"));
+        PADDLE_GET_CONST(int, quant_dequant_op->Op()->GetAttr("bit_length"));
     int range = ((1 << (bit_length - 1)) - 1);
     std::vector<float> weight_scale;
     std::string quant_dequant_op_out_name = quant_dequant_op_out->Var()->Name();
@@ -96,15 +104,17 @@ void DeleteQuantDequantFilterOpPass::ApplyImpl(ir::Graph* graph) const {
     auto var_map = any_op2_desc->Inputs();
     std::string arg_name = "";
     for (auto& name_m : var_map) {
-      if (std::find(name_m.second.begin(), name_m.second.end(),
+      if (std::find(name_m.second.begin(),
+                    name_m.second.end(),
                     quant_dequant_op_out_name) != name_m.second.end()) {
         arg_name = name_m.first;
         break;
       }
     }
-    PADDLE_ENFORCE_GT(arg_name.size(), 0, platform::errors::InvalidArgument(
-                                              "can not find the input %s.",
-                                              quant_dequant_op_out_name));
+    PADDLE_ENFORCE_GT(arg_name.size(),
+                      0,
+                      phi::errors::InvalidArgument("can not find the input %s.",
+                                                   quant_dequant_op_out_name));
     // any_op2_desc->SetAttr("enable_int8", true);
     any_op2_desc->SetAttr("bit_length", bit_length);
 
@@ -112,35 +122,36 @@ void DeleteQuantDequantFilterOpPass::ApplyImpl(ir::Graph* graph) const {
     auto dequant_type = quant_dequant_op->Op()->Type();
 
     // get weight tensor
-    auto* weight_tensor =
-        scope->GetVar(quant_dequant_op_x->Name())->GetMutable<LoDTensor>();
+    auto* weight_tensor = scope->GetVar(quant_dequant_op_x->Name())
+                              ->GetMutable<phi::DenseTensor>();
     auto w_dims = weight_tensor->dims();
 
     float* quantized_weight_data =
-        weight_tensor->mutable_data<float>(platform::CPUPlace());
+        weight_tensor->mutable_data<float>(phi::CPUPlace());
 
     // Get weight scale
     if (dequant_type == "fake_channel_wise_quantize_dequantize_abs_max") {
       int quant_axis =
-          BOOST_GET_CONST(int, quant_dequant_op->Op()->GetAttr("quant_axis"));
-      PADDLE_ENFORCE_EQ(quant_axis == 0 || quant_axis == 1, true,
-                        platform::errors::InvalidArgument(
-                            "'quant_axis' should be 0 or 1, but "
-                            "the received is %d",
-                            quant_axis));
+          PADDLE_GET_CONST(int, quant_dequant_op->Op()->GetAttr("quant_axis"));
+      PADDLE_ENFORCE_EQ(
+          quant_axis == 0 || quant_axis == 1,
+          true,
+          phi::errors::InvalidArgument("'quant_axis' should be 0 or 1, but "
+                                       "the received is %d",
+                                       quant_axis));
 
-      // To Do @Wangzheee: use "OutScale" to quantdequant
+      // To Do @Wangzheee: use "OutScale" to quant_dequant
       /*auto scales_name = quant_dequant_op->Op()->Output("OutScale");
       PADDLE_ENFORCE_EQ(scales_name.size(), 1,
-                        platform::errors::InvalidArgument(
+                        phi::errors::InvalidArgument(
                             "Scales size in channel-wise quant dequantize op "
                             "should be 1, got %d.",
                             scales_name.size()));
-      const LoDTensor& channel_scale_tensor =
-          scope->FindVar(scales_name[0])->Get<LoDTensor>();
+      const phi::DenseTensor& channel_scale_tensor =
+          scope->FindVar(scales_name[0])->Get<phi::DenseTensor>();
       PADDLE_ENFORCE(
-          paddle::platform::is_cpu_place(channel_scale_tensor.place()),
-          platform::errors::InvalidArgument(
+          phi::is_cpu_place(channel_scale_tensor.place()),
+          phi::errors::InvalidArgument(
               "Channel scale tensor's place should be CPU."));
       // compute the channel wise abs max of the weight tensor
 
@@ -176,22 +187,27 @@ void DeleteQuantDequantFilterOpPass::ApplyImpl(ir::Graph* graph) const {
         }
       }
       for (int i = 0; i < channel; i++) {
-        PADDLE_ENFORCE_NE(weight_scale[i], 0,
-                          platform::errors::InvalidArgument(
+        PADDLE_ENFORCE_NE(weight_scale[i],
+                          0,
+                          phi::errors::InvalidArgument(
                               "Weight scale should be nonzero, but get zero."));
-        weight_scale[i] = weight_scale[i] / range;
+        weight_scale[i] = weight_scale[i] / static_cast<float>(range);
       }
-    } else {
+    } else if (dequant_type == "fake_quantize_dequantize_abs_max") {
       // Implement quantize_dequantize_abs_max quantization algorithm
       float abs_max_weight = 0.;
       for (int j = 0; j < weight_tensor->numel(); j++) {
         abs_max_weight =
             std::max(abs_max_weight, std::abs(quantized_weight_data[j]));
       }
-      PADDLE_ENFORCE_NE(abs_max_weight, 0,
-                        platform::errors::InvalidArgument(
+      PADDLE_ENFORCE_NE(abs_max_weight,
+                        0,
+                        phi::errors::InvalidArgument(
                             "Weight scale should be nonzero, but get zero"));
-      weight_scale.push_back(abs_max_weight / range);
+      weight_scale.push_back(abs_max_weight / static_cast<float>(range));
+    } else {
+      PADDLE_THROW(phi::errors::InvalidArgument(
+          "Unsupported quantize_dequantize op type: %s", dequant_type));
     }
 
     nodes2rm.insert(quant_dequant_op_outscale);

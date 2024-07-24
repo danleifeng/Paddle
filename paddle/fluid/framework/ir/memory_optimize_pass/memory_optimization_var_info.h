@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 #include "paddle/fluid/platform/enforce.h"
 
 namespace paddle {
@@ -43,8 +44,9 @@ class MemOptVarInfo {
 
   void SetRefCnt(size_t ref_cnt) {
     PADDLE_ENFORCE_GE(
-        ref_cnt, 1,
-        platform::errors::InvalidArgument(
+        ref_cnt,
+        1,
+        phi::errors::InvalidArgument(
             "Reference count(%d) must be larger than or equal to 1.", ref_cnt));
     ref_cnt_ = ref_cnt;
     runtime_ref_cnt_ = ref_cnt;
@@ -66,6 +68,12 @@ class MemOptVarInfo {
     return skip_memory_reuse_ || skip_all_memory_optimization_;
   }
 
+  void SetParentHolder(std::shared_ptr<MemOptVarInfo> parent) {
+    parent_holder_ = parent;
+  }
+
+  std::shared_ptr<MemOptVarInfo> ParentHolder() const { return parent_holder_; }
+
   const std::string &Name() const { return name_; }
 
  private:
@@ -81,13 +89,16 @@ class MemOptVarInfo {
    * scheduled in many threads inside ParallelExecutor, runtime_ref_cnt_
    * must be an atomic integer to guarantee the thread safety and visibility.
    *
-   * Speciallly, if ref_cnt_ is 1, we do not need to reset runtime_ref_cnt_
+   * Specially, if ref_cnt_ is 1, we do not need to reset runtime_ref_cnt_
    * after iteration ends.
    */
   size_t ref_cnt_;
   std::atomic<size_t> runtime_ref_cnt_;
   bool skip_memory_reuse_{false};
   bool skip_all_memory_optimization_{false};
+  // point to var info of the same variable in the main graph,
+  // used in external(input/output) variables of a subgraph
+  std::shared_ptr<MemOptVarInfo> parent_holder_{nullptr};
 };
 
 using MemOptVarInfoMapList = std::vector<

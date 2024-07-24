@@ -30,40 +30,45 @@ namespace inference {
 
 constexpr uint32_t kCurPDTensorVersion = 0;
 
-void SerializePDTensorToStream(std::ostream* os, const PaddleTensor& tensor);
-void DeserializePDTensorToStream(std::istream& is, PaddleTensor* tensor);
+TEST_API void SerializePDTensorToStream(std::ostream* os,
+                                        const PaddleTensor& tensor);
+TEST_API void DeserializePDTensorToStream(std::istream& is,
+                                          PaddleTensor* tensor);
 
-void SerializePDTensorsToStream(std::ostream* os,
-                                const std::vector<PaddleTensor>& tensors);
-void DeserializePDTensorsToStream(std::istream& is,
-                                  std::vector<PaddleTensor>* tensors);
+TEST_API void SerializePDTensorsToStream(
+    std::ostream* os, const std::vector<PaddleTensor>& tensors);
+TEST_API void DeserializePDTensorsToStream(std::istream& is,
+                                           std::vector<PaddleTensor>* tensors);
 
-void SerializePDTensorsToFile(const std::string& path,
-                              const std::vector<PaddleTensor>& tensors);
-void DeserializePDTensorsToFile(const std::string& path,
-                                std::vector<PaddleTensor>* tensors);
-
-void SerializeShapeRangeInfo(
-    const std::string& path,
-    const paddle::inference::proto::ShapeRangeInfos& info);
-void SerializeShapeRangeInfo(
-    const std::string& path,
-    const std::map<std::string, std::vector<int32_t>>& min_shape,
-    const std::map<std::string, std::vector<int32_t>>& max_shape,
-    const std::map<std::string, std::vector<int32_t>>& opt_shape);
-void DeserializeShapeRangeInfo(const std::string& path,
-                               paddle::inference::proto::ShapeRangeInfos* info);
-void DeserializeShapeRangeInfo(
-    const std::string& path,
-    std::map<std::string, std::vector<int32_t>>* min_shape,
-    std::map<std::string, std::vector<int32_t>>* max_shape,
-    std::map<std::string, std::vector<int32_t>>* opt_shape);
-
-void UpdateShapeRangeInfo(
+TEST_API void SerializePDTensorsToFile(
+    const std::string& path, const std::vector<PaddleTensor>& tensors);
+TEST_API void DeserializePDTensorsToFile(const std::string& path,
+                                         std::vector<PaddleTensor>* tensors);
+TEST_API void SerializeShapeRangeInfo(
     const std::string& path,
     const std::map<std::string, std::vector<int32_t>>& min_shape,
     const std::map<std::string, std::vector<int32_t>>& max_shape,
     const std::map<std::string, std::vector<int32_t>>& opt_shape,
-    const std::vector<std::string>& names);
+    const std::map<std::string, std::vector<int32_t>>& min_value,
+    const std::map<std::string, std::vector<int32_t>>& max_value,
+    const std::map<std::string, std::vector<int32_t>>& opt_value);
+TEST_API void DeserializeShapeRangeInfo(
+    const std::string& path,
+    std::map<std::string, std::vector<int32_t>>* min_shape,
+    std::map<std::string, std::vector<int32_t>>* max_shape,
+    std::map<std::string, std::vector<int32_t>>* opt_shape,
+    std::map<std::string, std::vector<int32_t>>* min_value,
+    std::map<std::string, std::vector<int32_t>>* max_value,
+    std::map<std::string, std::vector<int32_t>>* opt_value);
+TEST_API void UpdateShapeRangeInfo(
+    const std::string& path,
+    const std::map<std::string, std::vector<int32_t>>& min_shape,
+    const std::map<std::string, std::vector<int32_t>>& max_shape,
+    const std::map<std::string, std::vector<int32_t>>& opt_shape,
+    const std::map<std::string, std::vector<int32_t>>& min_value,
+    const std::map<std::string, std::vector<int32_t>>& max_value,
+    const std::map<std::string, std::vector<int32_t>>& opt_value,
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& tensor_names);
 }  // namespace inference
 }  // namespace paddle

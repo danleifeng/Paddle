@@ -15,14 +15,13 @@
 #include "paddle/fluid/framework/ir/multi_batch_merge_pass.h"
 
 #include <string>
+
 #include "paddle/fluid/framework/ir/graph_helper.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
-static const char kNumRepeats[] = "num_repeats";
+static const char kNumRepeats[] = "num_repeats";  // NOLINT
 typedef std::unordered_map<std::string, std::vector<ir::Node*>> SSAVarList;
 
 ir::Node* SameNameVar(std::unordered_set<ir::Node*> all, ir::Node* target) {
@@ -50,7 +49,8 @@ VarDesc CopyVarDesc(VarDesc* var_desc) {
 }
 
 VarDesc UpdateGradVarDesc(
-    VarDesc* var_desc, int repeat,
+    VarDesc* var_desc,
+    int repeat,
     const std::unordered_set<std::string>& grad_names,
     const std::unordered_set<std::string>& bn_vars_need_rename) {
   if (grad_names.find(var_desc->Name()) != grad_names.end() ||
@@ -82,11 +82,13 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
   for (auto node : nodes) {
     if (!node->IsOp()) continue;
     PADDLE_ENFORCE_NOT_NULL(
-        node->Op(), platform::errors::InvalidArgument(
-                        "Node(%s) must hold op description.", node->Name()));
-    int op_role = BOOST_GET_CONST(
-        int, node->Op()->GetAttr(
-                 framework::OpProtoAndCheckerMaker::OpRoleAttrName()));
+        node->Op(),
+        phi::errors::InvalidArgument("Node(%s) must hold op description.",
+                                     node->Name()));
+    int op_role = PADDLE_GET_CONST(
+        int,
+        node->Op()->GetAttr(
+            framework::OpProtoAndCheckerMaker::OpRoleAttrName()));
     if ((op_role == static_cast<int>(framework::OpRole::kForward)) ||
         (op_role & static_cast<int>(framework::OpRole::kBackward)) ||
         (op_role & static_cast<int>(framework::OpRole::kLoss))) {
@@ -98,7 +100,7 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
       auto op_role_var = node->Op()->GetNullableAttr(
           OpProtoAndCheckerMaker::OpRoleVarAttrName());
       auto op_role_vars =
-          BOOST_GET_CONST(std::vector<std::string>, op_role_var);
+          PADDLE_GET_CONST(std::vector<std::string>, op_role_var);
       for (size_t i = 0; i < op_role_vars.size(); i += 2) {
         grad_names.insert(op_role_vars[i + 1]);
         gradname2paramname[op_role_vars[i + 1]] = op_role_vars[i];
@@ -106,9 +108,10 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
     } else if (op_role & static_cast<int>(framework::OpRole::kLRSched)) {
       lr_ops.push_back(node);
     } else {  // NOLINT
-      PADDLE_THROW(platform::errors::InvalidArgument(
-          "Invalid op role(%d), in node(%s).", static_cast<int>(op_role),
-          node->Name()));
+      PADDLE_THROW(
+          phi::errors::InvalidArgument("Invalid op role(%d), in node(%s).",
+                                       static_cast<int>(op_role),
+                                       node->Name()));
     }
   }
 
@@ -125,7 +128,7 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
       auto node = forward_backward_ops[node_idx];
       OpDesc repeated_op(*(node->Op()), node->Op()->Block());
       // 3. rename grad outputs to current repeat.
-      for (auto outname : repeated_op.OutputArgumentNames()) {
+      for (auto const& outname : repeated_op.OutputArgumentNames()) {
         if (grad_names.find(outname) != grad_names.end()) {
           std::string new_gname = string::Sprintf("%s.repeat.%d", outname, i);
           repeated_op.RenameOutput(outname, new_gname);
@@ -179,8 +182,8 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
           continue;
         }
         ir::Node* var = nullptr;
-        auto updated_var = UpdateGradVarDesc(in_node->Var(), i, grad_names,
-                                             bn_vars_need_rename);
+        auto updated_var = UpdateGradVarDesc(
+            in_node->Var(), i, grad_names, bn_vars_need_rename);
         // should be initialized by startup, how to initialize tensor in the
         // scope?
         if (node->Name() == "batch_norm" &&
@@ -219,8 +222,8 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
           continue;
         }
         ir::Node* var = nullptr;
-        auto updated_var = UpdateGradVarDesc(out_node->Var(), i, grad_names,
-                                             bn_vars_need_rename);
+        auto updated_var = UpdateGradVarDesc(
+            out_node->Var(), i, grad_names, bn_vars_need_rename);
         if (copied.find(out_node) == copied.end()) {
           var = result.CreateVarNode(&updated_var);
           if (grad_names.find(out_node->Var()->Name()) != grad_names.end()) {
@@ -239,11 +242,12 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
 
   // 5. create GRAD merge op node: sum(repeat.0...repeat.n) ->
   // scale(1/num_repeats)
-  for (auto kv : grad_repeated_map) {
+  for (auto const& kv : grad_repeated_map) {
     OpDesc sum_op;
     sum_op.SetType("sum");
     std::vector<std::string> repeated_grad_names;
     std::vector<std::string> param_grad_op_role_var;
+    repeated_grad_names.reserve(kv.second.size());
     for (auto r : kv.second) {
       repeated_grad_names.push_back(r->Var()->Name());
     }
@@ -273,7 +277,8 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
     scale_op.SetInput("X", {sum_out_var_node->Var()->Name()});
     // NOTE: inplace scale.
     scale_op.SetOutput("Out", {sum_out_var_node->Var()->Name()});
-    scale_op.SetAttr("scale", static_cast<float>(1.0f / num_repeats));
+    scale_op.SetAttr(
+        "scale", static_cast<float>(1.0f / static_cast<float>(num_repeats)));
     scale_op.SetAttr(OpProtoAndCheckerMaker::OpRoleAttrName(),
                      static_cast<int>(OpRole::kBackward));
 
@@ -326,13 +331,9 @@ void BatchMergePass::ApplyImpl(ir::Graph* graph) const {
       copy_node(node);
     }
   }
-
-  result.ResolveHazard(created);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(multi_batch_merge_pass, paddle::framework::ir::BatchMergePass)
     .RequirePassAttr(paddle::framework::ir::kNumRepeats);

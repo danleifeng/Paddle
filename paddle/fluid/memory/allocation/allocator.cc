@@ -14,17 +14,12 @@
 
 #include "paddle/fluid/memory/allocation/allocator.h"
 
-namespace paddle {
-namespace memory {
-namespace allocation {
+namespace paddle::memory::allocation {
 
-bool Allocator::IsAllocThreadSafe() const { return false; }
-
-void Allocator::FreeImpl(Allocation* allocation) {
-  Allocator* allocator = allocation->TopDecoratedAllocator();
-  allocator->Free(allocation);
+void Allocator::FreeImpl(phi::Allocation* allocation) {
+  static_cast<Allocation*>(allocation)
+      ->TopDecoratedAllocator()
+      ->Free(allocation);
 }
 
-}  // namespace allocation
-}  // namespace memory
-}  // namespace paddle
+}  // namespace paddle::memory::allocation

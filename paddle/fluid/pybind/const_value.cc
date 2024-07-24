@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/pybind/const_value.h"
+
 #include "paddle/fluid/framework/ir/node.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 #include "paddle/fluid/framework/operator.h"
@@ -20,7 +21,6 @@ limitations under the License. */
 
 #if defined(PADDLE_WITH_DGC)
 #include "paddle/fluid/framework/details/dgc_const_values.h"
-#include "paddle/fluid/framework/details/sparse_all_reduce_op_handle.h"
 #endif
 
 namespace paddle {

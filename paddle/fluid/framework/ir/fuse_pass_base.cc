@@ -34,8 +34,9 @@ void FusePassBase::Init(const std::string& repr, Graph* graph) const {
 }
 
 Scope* FusePassBase::param_scope() const {
-  PADDLE_ENFORCE_EQ(graph_->Has(kParamScopeAttr), true,
-                    platform::errors::InvalidArgument(
+  PADDLE_ENFORCE_EQ(graph_->Has(kParamScopeAttr),
+                    true,
+                    phi::errors::InvalidArgument(
                         "Graph must have kParamScopeAttr attribute."));
   auto& scope = graph_->Get<framework::Scope>(kParamScopeAttr);
   return &scope;
@@ -43,9 +44,10 @@ Scope* FusePassBase::param_scope() const {
 
 void FusePassBase::AddStatis(int count_of_fused) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph_, platform::errors::InvalidArgument("Graph cannot be nullptr."));
-  PADDLE_ENFORCE_EQ(repr_.empty(), false,
-                    platform::errors::InvalidArgument(
+      graph_, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+  PADDLE_ENFORCE_EQ(repr_.empty(),
+                    false,
+                    phi::errors::InvalidArgument(
                         "Fuse pass must be initialized with a name."));
   if (!graph_->Has(kFuseStatisAttr)) {
     graph_->Set(kFuseStatisAttr, new std::unordered_map<std::string, int>);
@@ -59,11 +61,11 @@ void FusePassBase::AddStatis(int count_of_fused) const {
 
 FuseOptions FusePassBase::FindFuseOption(const Node& node1,
                                          const Node& node2) const {
-#ifdef PADDLE_WITH_MKLDNN
+#ifdef PADDLE_WITH_DNNL
   bool node1_mkldnn = node1.Op()->HasAttr("use_mkldnn") &&
-                      BOOST_GET_CONST(bool, node1.Op()->GetAttr("use_mkldnn"));
+                      PADDLE_GET_CONST(bool, node1.Op()->GetAttr("use_mkldnn"));
   bool node2_mkldnn = node2.Op()->HasAttr("use_mkldnn") &&
-                      BOOST_GET_CONST(bool, node2.Op()->GetAttr("use_mkldnn"));
+                      PADDLE_GET_CONST(bool, node2.Op()->GetAttr("use_mkldnn"));
   if (node1_mkldnn && node2_mkldnn)
     return FUSE_MKLDNN;
   else if (!node1_mkldnn && !node2_mkldnn)

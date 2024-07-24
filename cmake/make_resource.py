@@ -20,6 +20,15 @@ res = sys.argv[1]
 out = sys.argv[2]
 var = re.sub(r'[ .-]', '_', os.path.basename(res))
 
-open(out, "w").write("const unsigned char " + var + "[] = {" + ",".join([
-    "0x%02x" % ord(c) for c in open(res).read()
-]) + ",0};\n" + "const unsigned " + var + "_size = sizeof(" + var + ");\n")
+open(out, "w").write(
+    "const unsigned char "
+    + var
+    + "[] = {"
+    + ",".join([f"0x{ord(c):02x}" for c in open(res).read()])
+    + ",0};\n"
+    + "const unsigned "
+    + var
+    + "_size = sizeof("
+    + var
+    + ");\n"
+)

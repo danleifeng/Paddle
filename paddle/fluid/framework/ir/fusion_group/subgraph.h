@@ -18,6 +18,7 @@ limitations under the License. */
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
 #include "paddle/fluid/framework/ir/fusion_group/operation.h"
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/ir/graph_traits.h"
@@ -33,7 +34,9 @@ class SubGraph {
  public:
   SubGraph() = default;
   explicit SubGraph(int type) : type_(type) {}
-  SubGraph(int type, std::string func_name, bool save_intermediate_out,
+  SubGraph(int type,
+           std::string func_name,
+           bool save_intermediate_out,
            const std::unordered_set<Node*>& nodes_set)
       : type_(type),
         func_name_(func_name),
@@ -147,7 +150,7 @@ class SubGraph {
           !IsInputOfExternalOp(n)) {
         // When the outputs size is 0, it is also considered a intermidiate
         // output. It maybe an unused output or the fetching vars, so that we
-        // cannot eleiminate it directly here.
+        // cannot eliminate it directly here.
         intermediate_out_vars.push_back(n);
       }
     }

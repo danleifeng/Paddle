@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "paddle/fluid/operators/reader/ctr_reader.h"
-
 #include "paddle/fluid/operators/reader/lod_tensor_blocking_queue.h"
 #include "paddle/fluid/operators/reader/reader_op_registry.h"
 
@@ -27,7 +26,7 @@ class CreateCTRReaderOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
+               const phi::Place& dev_place) const override {
     auto* out = scope.FindVar(Output("Out"))
                     ->template GetMutable<framework::ReaderHolder>();
     if (out->Get() != nullptr) return;
@@ -36,7 +35,7 @@ class CreateCTRReaderOp : public framework::OperatorBase {
     auto* queue_holder_var = scope.FindVar(queue_name);
     PADDLE_ENFORCE_NOT_NULL(
         queue_holder_var,
-        platform::errors::PreconditionNotMet(
+        phi::errors::PreconditionNotMet(
             "No LoDTensorBlockingQueueHolder variable with name %s found",
             queue_name));
     auto* queue_holder =
@@ -50,11 +49,16 @@ class CreateCTRReaderOp : public framework::OperatorBase {
     auto file_type = Attr<std::string>("file_type");
     auto file_format = Attr<std::string>("file_format");
     auto file_list = Attr<std::vector<std::string>>("file_list");
-    DataDesc data_desc(batch_size, file_list, file_type, file_format,
-                       dense_slot_index, sparse_slot_index, sparse_slots);
+    DataDesc data_desc(batch_size,
+                       file_list,
+                       file_type,
+                       file_format,
+                       dense_slot_index,
+                       sparse_slot_index,
+                       sparse_slots);
     VLOG(1) << data_desc;
-    out->Reset(std::make_shared<CTRReader>(queue_holder->GetQueue(), thread_num,
-                                           data_desc));
+    out->Reset(std::make_shared<CTRReader>(
+        queue_holder->GetQueue(), thread_num, data_desc));
   }
 };
 
@@ -83,7 +87,7 @@ class CreateCTRReaderOpMaker : public FileReaderMakerBase {
                                       "format is svm");
 
     AddComment(R"DOC(
-			Create CTRReader to support read ctr data with cpp.
+      Create CTRReader to support read ctr data with cpp.
       )DOC");
   }
 };
@@ -94,5 +98,6 @@ class CreateCTRReaderOpMaker : public FileReaderMakerBase {
 
 namespace reader = ::paddle::operators::reader;
 
-REGISTER_FILE_READER_OPERATOR(create_ctr_reader, reader::CreateCTRReaderOp,
+REGISTER_FILE_READER_OPERATOR(create_ctr_reader,
+                              reader::CreateCTRReaderOp,
                               reader::CreateCTRReaderOpMaker);

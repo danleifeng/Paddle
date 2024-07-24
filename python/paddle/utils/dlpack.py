@@ -12,10 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import paddle
-from ..fluid.core import LoDTensor
-from ..fluid.framework import in_dygraph_mode
-from ..fluid.data_feeder import check_type, check_dtype, convert_dtype
+
+from ..base.core import LoDTensor
+from ..base.data_feeder import check_type
+from ..base.framework import in_dygraph_mode
+
+if TYPE_CHECKING:
+    from typing_extensions import CapsuleType
+
+    from paddle import Tensor
 
 __all__ = [
     'to_dlpack',
@@ -23,7 +33,7 @@ __all__ = [
 ]
 
 
-def to_dlpack(x):
+def to_dlpack(x: Tensor) -> CapsuleType:
     """
     Encodes a tensor to DLPack.
 
@@ -34,24 +44,26 @@ def to_dlpack(x):
 
     Returns:
         dltensor, and the data type is PyCapsule.
-    
+
     Examples:
         .. code-block:: python
 
-            import paddle
-            # x is a tensor with shape [2, 4]
-            x = paddle.to_tensor([[0.2, 0.3, 0.5, 0.9],
-                                  [0.1, 0.2, 0.6, 0.7]])
-            dlpack = paddle.utils.dlpack.to_dlpack(x)
-            print(dlpack)
-            # <capsule object "dltensor" at 0x7f6103c681b0>
+            >>> import paddle
+            >>> # x is a tensor with shape [2, 4]
+            >>> x = paddle.to_tensor([[0.2, 0.3, 0.5, 0.9],
+            ...                       [0.1, 0.2, 0.6, 0.7]])
+            >>> dlpack = paddle.utils.dlpack.to_dlpack(x)
+            >>> print(dlpack)
+            >>> # doctest: +SKIP('the address will change in every run')
+            <capsule object "dltensor" at 0x7f6103c681b0>
     """
 
     if in_dygraph_mode():
         if not isinstance(x, paddle.Tensor):
             raise TypeError(
                 "The type of 'x' in to_dlpack must be paddle.Tensor,"
-                " but received {}.".format(type(x)))
+                f" but received {type(x)}."
+            )
 
         return x.value().get_tensor()._to_dlpack()
 
@@ -59,44 +71,45 @@ def to_dlpack(x):
     return x._to_dlpack()
 
 
-def from_dlpack(dlpack):
+def from_dlpack(dlpack: CapsuleType) -> Tensor:
     """
     Decodes a DLPack to a tensor.
-    
+
     Args:
         dlpack (PyCapsule): a PyCapsule object with the dltensor.
 
     Returns:
-        out (Tensor): a tensor decoded from DLPack. One thing to be noted, if we get 
+        out (Tensor), a tensor decoded from DLPack. One thing to be noted, if we get
                       an input dltensor with data type as `bool`, we return the decoded
                       tensor as `uint8`.
 
     Examples:
         .. code-block:: python
 
-            import paddle
-            # x is a tensor with shape [2, 4]
-            x = paddle.to_tensor([[0.2, 0.3, 0.5, 0.9],
-                                  [0.1, 0.2, 0.6, 0.7]])
-            dlpack = paddle.utils.dlpack.to_dlpack(x)
-            x = paddle.utils.dlpack.from_dlpack(dlpack)
-            print(x)
-            # Tensor(shape=[2, 4], dtype=float32, place=CUDAPlace(0), stop_gradient=True,
-            #  [[0.20000000, 0.30000001, 0.50000000, 0.89999998],
-            #  [0.10000000, 0.20000000, 0.60000002, 0.69999999]]) 
+            >>> import paddle
+            >>> # x is a tensor with shape [2, 4]
+            >>> x = paddle.to_tensor([[0.2, 0.3, 0.5, 0.9],
+            ...                       [0.1, 0.2, 0.6, 0.7]])
+            >>> dlpack = paddle.utils.dlpack.to_dlpack(x)
+            >>> x = paddle.utils.dlpack.from_dlpack(dlpack)
+            >>> print(x)
+            Tensor(shape=[2, 4], dtype=float32, place=Place(cpu), stop_gradient=True,
+                   [[0.20000000, 0.30000001, 0.50000000, 0.89999998],
+                    [0.10000000, 0.20000000, 0.60000002, 0.69999999]])
     """
 
     t = type(dlpack)
-    dlpack_flag = (t.__module__ == 'builtins' and t.__name__ == 'PyCapsule')
+    dlpack_flag = t.__module__ == 'builtins' and t.__name__ == 'PyCapsule'
     if not dlpack_flag:
         raise TypeError(
             "The type of 'dlpack' in from_dlpack must be PyCapsule object,"
-            " but received {}.".format(type(dlpack)))
+            f" but received {type(dlpack)}."
+        )
 
     if in_dygraph_mode():
-        out = paddle.fluid.core.from_dlpack(dlpack)
+        out = paddle.base.core.from_dlpack(dlpack)
         out = paddle.to_tensor(out)
         return out
 
-    out = paddle.fluid.core.from_dlpack(dlpack)
+    out = paddle.base.core.from_dlpack(dlpack)
     return out

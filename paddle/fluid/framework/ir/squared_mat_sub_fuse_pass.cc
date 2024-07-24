@@ -18,13 +18,12 @@
 
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
                                   const std::string& name_scope) {
-  auto var_is_op_input = [=](Node* x, const std::string& op_type,
+  auto var_is_op_input = [=](Node* x,
+                             const std::string& op_type,
                              const std::string& arg_name = "") -> bool {
     if (!(x && x->IsVar())) {
       return false;
@@ -67,7 +66,7 @@ PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
       return nullptr;
     }
     for (auto* var : x->inputs) {
-      for (auto name : x->Op()->Input(arg_name)) {
+      for (auto const& name : x->Op()->Input(arg_name)) {
         if (var->Name() == name) {
           return var;
         }
@@ -170,8 +169,9 @@ PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
 
   auto* matmul_xy_op = pattern->NewNode(
       [=](Node* x) {
-        return x && x->IsOp() && (x->Op()->Type() == "matmul_v2" ||
-                                  x->Op()->Type() == "matmul") &&
+        return x && x->IsOp() &&
+               (x->Op()->Type() == "matmul_v2" ||
+                x->Op()->Type() == "matmul") &&
                is_fusion_first_mul_out(x->outputs[0]);
       },
       name_scope + "/matmul_xy_op");
@@ -212,8 +212,9 @@ PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
 
   auto* matmul_squared_x_y_op = pattern->NewNode(
       [=](Node* x) {
-        return x && x->IsOp() && (x->Op()->Type() == "matmul_v2" ||
-                                  x->Op()->Type() == "matmul") &&
+        return x && x->IsOp() &&
+               (x->Op()->Type() == "matmul_v2" ||
+                x->Op()->Type() == "matmul") &&
                is_fusion_mat_squared_x_y_op_out(x->outputs[0]);
       },
       name_scope + "/matmul_squared_x_y_op");
@@ -247,7 +248,7 @@ PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
       return false;
     }
     for (auto* in : x->inputs) {
-      if (in && in->inputs.size() > 0 && in->inputs[0] &&
+      if (in && !in->inputs.empty() && in->inputs[0] &&
           is_fusion_sub_op(in->inputs[0])) {
         return true;
       }
@@ -270,7 +271,7 @@ PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
   auto* constant_op_out = pattern->NewNode(
       [=](Node* x) {
         return x && x->IsVar() && var_is_op_input(x, "elementwise_mul") &&
-               x->inputs.size() > 0 && x->inputs[0] && x->inputs[0]->IsOp() &&
+               !x->inputs.empty() && x->inputs[0] && x->inputs[0]->IsOp() &&
                x->inputs[0]->Op()->Type() == "fill_constant" && x->outputs[0] &&
                is_fusion_element_op(x->outputs[0]);
       },
@@ -298,7 +299,8 @@ PDNode* BuildSquaredMatSubPattern(PDPattern* pattern,
   return last_out_var;
 }
 
-static int BuildFusion(Graph* graph, const std::string& name_scope,
+static int BuildFusion(Graph* graph,
+                       const std::string& name_scope,
                        const SquaredMatSubFusePass* pass) {
   GraphPatternDetector gpd;
   auto* pattern = gpd.mutable_pattern();
@@ -308,12 +310,13 @@ static int BuildFusion(Graph* graph, const std::string& name_scope,
   auto retrieve_node = [](const std::string& name,
                           const GraphPatternDetector::subgraph_t& subgraph,
                           const PDPattern& pat) -> Node* {
-    PADDLE_ENFORCE_GT(subgraph.count(pat.RetrieveNode(name)), 0,
-                      platform::errors::NotFound(
-                          "Pattern has no node called %s.", name.c_str()));
+    PADDLE_ENFORCE_GT(
+        subgraph.count(pat.RetrieveNode(name)),
+        0,
+        phi::errors::NotFound("Pattern has no node called %s.", name.c_str()));
     Node* p = subgraph.at(pat.RetrieveNode(name));
-    PADDLE_ENFORCE_NOT_NULL(p, platform::errors::NotFound(
-                                   "Subgraph has no node %s.", name.c_str()));
+    PADDLE_ENFORCE_NOT_NULL(
+        p, phi::errors::NotFound("Subgraph has no node %s.", name.c_str()));
     return p;
   };
 
@@ -338,8 +341,8 @@ static int BuildFusion(Graph* graph, const std::string& name_scope,
         retrieve_node(name_scope + "/squared_xmuly", subgraph, fused_pattern);
     auto* last_out_var =
         retrieve_node(name_scope + "/out", subgraph, fused_pattern);
-    auto* fill_constant_op = retrieve_node(name_scope + "/fill_constant_op",
-                                           subgraph, fused_pattern);
+    auto* fill_constant_op = retrieve_node(
+        name_scope + "/fill_constant_op", subgraph, fused_pattern);
 
     // Create New OpDesc
     OpDesc op_desc;
@@ -398,8 +401,7 @@ SquaredMatSubFusePass::SquaredMatSubFusePass() {
       .IsTensor()
       .End()
       .AddAttr("alpha")
-      .IsNumGE(0.99f)
-      .IsNumLE(1.01f)
+      .IsNumEQ(1.0f)
       .End()
       .AddAttr("transpose_X")
       .IsBoolEQ(false)
@@ -463,8 +465,12 @@ SquaredMatSubFusePass::SquaredMatSubFusePass() {
       .End()
       .AddAttr("shape")
       .End()
-      // type:float，there is no restriction
+      // type:float, there is no restriction
       .AddAttr("value")
+      .End()
+      .AddAttr("str_value")
+      .IsStringEQ("")
+      .IsOptional()
       .End();
 }
 
@@ -480,9 +486,7 @@ void SquaredMatSubFusePass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(squared_mat_sub_fuse_pass,
               paddle::framework::ir::SquaredMatSubFusePass);

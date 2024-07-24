@@ -18,8 +18,8 @@ limitations under the License. */
 #include <utility>
 #include <vector>
 
+#include "paddle/common/ddim.h"
 #include "paddle/fluid/framework/data_type.h"
-#include "paddle/fluid/framework/ddim.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/operators/collective/c_allreduce_op.h"
@@ -27,11 +27,11 @@ limitations under the License. */
 namespace paddle {
 namespace operators {
 
-template <typename T>
+template <typename T, typename DeviceContext>
 class CReduceScatterOpCPUKernel : public framework::OpKernel<T> {
  public:
-  void Compute(const framework::ExecutionContext& ctx) const override {
-    PADDLE_THROW(platform::errors::Unimplemented(
+  void Compute(const framework::ExecutionContext& ctx UNUSED) const override {
+    PADDLE_THROW(phi::errors::Unimplemented(
         "Unimplemented cpu kernel for CReduceScatterOp."));
   }
 };

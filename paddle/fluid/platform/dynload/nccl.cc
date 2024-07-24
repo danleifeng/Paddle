@@ -14,12 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/platform/dynload/nccl.h"
 
-namespace paddle {
-namespace platform {
-namespace dynload {
-
-std::once_flag nccl_dso_flag;
-void *nccl_dso_handle;
+namespace paddle::platform::dynload {
 
 #define DEFINE_WRAP(__name) DynLoad__##__name __name
 
@@ -37,6 +32,8 @@ NCCL_RAND_ROUTINE_EACH_AFTER_2304(DEFINE_WRAP)
 NCCL_RAND_ROUTINE_EACH_AFTER_2703(DEFINE_WRAP)
 #endif
 
-}  // namespace dynload
-}  // namespace platform
-}  // namespace paddle
+#if NCCL_VERSION_CODE >= 21100
+NCCL_RAND_ROUTINE_EACH_AFTER_21100(DEFINE_WRAP)
+#endif
+
+}  // namespace paddle::platform::dynload

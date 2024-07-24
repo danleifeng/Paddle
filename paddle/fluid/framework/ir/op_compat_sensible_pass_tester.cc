@@ -12,14 +12,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/framework/ir/op_compat_sensible_pass.h"
 #include "gtest/gtest.h"
+#include "paddle/fluid/framework/ir/op_compat_sensible_pass.h"
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/program_desc.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 TEST(OpCompatSensiblePass, compatOp) {
   auto lambda = [](const std::string& str) { return str == "tanh"; };
@@ -292,6 +290,4 @@ TEST(OpCompatSensiblePass, IsCompatFail) {
   OpInfoMap::Instance().mutable_map()->erase("op2");
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

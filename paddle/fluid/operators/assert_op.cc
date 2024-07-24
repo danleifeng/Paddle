@@ -12,14 +12,18 @@
    See the License for the specific language governing permissions and
    limitations under the License. */
 
+#include <array>
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/operators/controlflow/while_op_helper.h"
-#include "paddle/fluid/operators/tensor_formatter.h"
+#include "paddle/phi/kernels/funcs/tensor_formatter.h"
+
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace framework {
 class InferShapeContext;
-class LoDTensor;
 class OpDesc;
 class Scope;
 class Variable;
@@ -31,33 +35,35 @@ class OpBase;
 }  // namespace imperative
 }  // namespace paddle
 
-const char kCond[] = "Cond";
-const char kData[] = "Data";
-const char kSummarize[] = "summarize";
+// const char kCond[] = "Cond";
+std::array<const char, 5> kCond = {"Cond"};
+std::array<const char, 5> kData = {"Data"};
+std::array<const char, 10> kSummarize = {"summarize"};
 
 namespace paddle {
 namespace operators {
 
-using framework::LoDTensor;
-
 class AssertOp : public framework::OperatorBase {
  public:
-  AssertOp(const std::string &type, const framework::VariableNameMap &inputs,
+  AssertOp(const std::string &type,
+           const framework::VariableNameMap &inputs,
            const framework::VariableNameMap &outputs,
            const framework::AttributeMap &attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
-    const framework::Variable *cond_var_ptr = scope.FindVar(Input(kCond));
-    PADDLE_ENFORCE_NOT_NULL(cond_var_ptr,
-                            platform::errors::NotFound(
-                                "Input(Condition) of AssertOp is not found."));
-    const LoDTensor &cond = cond_var_ptr->Get<LoDTensor>();
+               const phi::Place &dev_place) const override {
+    const framework::Variable *cond_var_ptr =
+        scope.FindVar(Input(kCond.data()));
+    PADDLE_ENFORCE_NOT_NULL(
+        cond_var_ptr,
+        phi::errors::NotFound("Input(Condition) of AssertOp is not found."));
+    const phi::DenseTensor &cond = cond_var_ptr->Get<phi::DenseTensor>();
     PADDLE_ENFORCE_EQ(
-        cond.dims(), paddle::framework::make_ddim({1}),
-        platform::errors::InvalidArgument(
+        cond.numel(),
+        1,
+        phi::errors::InvalidArgument(
             "The numel of Input(Condition) of AssertOp must be 1. But now "
             "the Condition's shape is %s.",
             cond.dims().to_str()));
@@ -67,20 +73,20 @@ class AssertOp : public framework::OperatorBase {
       return;
     }
 
-    TensorFormatter formatter;
-    formatter.SetSummarize(Attr<int64_t>(kSummarize));
+    funcs::TensorFormatter formatter;
+    formatter.SetSummarize(Attr<int64_t>(kSummarize.data()));
 
-    const std::vector<std::string> &x_names = Inputs(kData);
+    const std::vector<std::string> &x_names = Inputs(kData.data());
     for (const std::string &name : x_names) {
       const framework::Variable *x_var_ptr = scope.FindVar(name);
-      const framework::LoDTensor &x_tensor = x_var_ptr->Get<LoDTensor>();
+      const phi::DenseTensor &x_tensor = x_var_ptr->Get<phi::DenseTensor>();
       formatter.Print(x_tensor, name);
     }
 
-    PADDLE_THROW(platform::errors::InvalidArgument(
+    PADDLE_THROW(phi::errors::InvalidArgument(
         "The condition variable '%s' of AssertOp must be "
         "true, but received false",
-        Input(kCond)));
+        Input(kCond.data())));
   }
 };
 
@@ -88,13 +94,13 @@ class AssertOpProtoMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
     AddInput(
-        kCond,
+        kCond.data(),
         "The boolean scalar condition tensor which is asserted to be true.");
-    AddInput(kData,
+    AddInput(kData.data(),
              "The tensors to print when the assert condition is not true.")
         .AsDuplicable();
     AddAttr<int64_t>(
-        kSummarize,
+        kSummarize.data(),
         "The number of entries of each tensor to print when the "
         "assert condition is not true. -1 means print all entries. If "
         "the number of entries of a tensor is less then "
@@ -108,7 +114,8 @@ class AssertOpProtoMaker : public framework::OpProtoAndCheckerMaker {
 class AssertOpInferShape : public framework::InferShapeBase {
  public:
   void operator()(framework::InferShapeContext *context) const override {
-    OP_INOUT_CHECK(context->HasInputs(kCond), "Input", "Condition", "AssertOp");
+    OP_INOUT_CHECK(
+        context->HasInputs(kCond.data()), "Input", "Condition", "AssertOp");
   }
 };
 
@@ -117,6 +124,9 @@ class AssertOpInferShape : public framework::InferShapeBase {
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
-    assert, ops::AssertOp, ops::AssertOpProtoMaker, ops::AssertOpInferShape,
+    assert,
+    ops::AssertOp,
+    ops::AssertOpProtoMaker,
+    ops::AssertOpInferShape,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>);

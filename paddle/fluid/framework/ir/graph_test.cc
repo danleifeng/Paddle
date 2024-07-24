@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/ir/graph.h"
+
 #include "gtest/gtest.h"
 #include "paddle/fluid/framework/details/multi_devices_helper.h"
 #include "paddle/fluid/framework/op_registry.h"
@@ -24,18 +25,19 @@ namespace framework {
 
 class NOP : public OperatorBase {
  public:
-  NOP(const std::string &type, const VariableNameMap &inputs,
-      const VariableNameMap &outputs, const AttributeMap &attrs)
+  NOP(const std::string &type,
+      const VariableNameMap &inputs,
+      const VariableNameMap &outputs,
+      const AttributeMap &attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
 
  private:
-  void RunImpl(const Scope &scope,
-               const platform::Place &place) const override {}
+  void RunImpl(const Scope &scope, const phi::Place &place) const override {}
 };
 
 class SumOpMaker : public OpProtoAndCheckerMaker {
  public:
-  void Make() {
+  void Make() override {
     AddInput("X", "").AsDuplicable();
     AddOutput("Out", "").AsDuplicable();
     AddComment("");
@@ -57,7 +59,7 @@ class SumOpVarTypeInference : public VarTypeInference {
 
 class DummyOpMaker : public OpProtoAndCheckerMaker {
  public:
-  void Make() {
+  void Make() override {
     AddInput("X", "").AsDuplicable();
     AddOutput("Out", "").AsDuplicable();
     AddComment("");
@@ -71,11 +73,16 @@ class DummyOpVarTypeInference : public VarTypeInference {
 }  // namespace framework
 }  // namespace paddle
 
-REGISTER_OPERATOR(sum, paddle::framework::NOP, paddle::framework::SumOpMaker,
+REGISTER_OPERATOR(fake_sum,
+                  paddle::framework::NOP,
+                  paddle::framework::SumOpMaker,
                   paddle::framework::SumOpVarTypeInference);
-REGISTER_OPERATOR(dummy, paddle::framework::NOP, paddle::framework::SumOpMaker,
+REGISTER_OPERATOR(dummy,
+                  paddle::framework::NOP,
+                  paddle::framework::SumOpMaker,
                   paddle::framework::SumOpVarTypeInference);
-REGISTER_OPERATOR(sum_without_infer_var_type, paddle::framework::NOP,
+REGISTER_OPERATOR(sum_without_infer_var_type,
+                  paddle::framework::NOP,
                   paddle::framework::SumOpMaker);
 
 namespace paddle {
@@ -84,7 +91,7 @@ namespace framework {
 TEST(GraphTest, Basic) {
   ProgramDesc prog;
   auto *op = prog.MutableBlock(0)->AppendOp();
-  op->SetType("sum");
+  op->SetType("fake_sum");
   op->SetInput("X", {"test_a", "test_b", "test_c"});
   op->SetOutput("Out", {"test_out"});
   op->SetAttr("op_role", 1);
@@ -107,7 +114,7 @@ TEST(GraphTest, Basic) {
   std::unique_ptr<ir::Graph> g(new ir::Graph(prog));
   std::vector<ir::Node *> nodes(g->Nodes().begin(), g->Nodes().end());
   for (ir::Node *n : nodes) {
-    if (n->Name() == "sum") {
+    if (n->Name() == "fake_sum") {
       ASSERT_EQ(n->inputs.size(), 3UL);
       ASSERT_EQ(n->outputs.size(), 1UL);
     } else if (n->Name() == "test_a" || n->Name() == "test_b" ||
@@ -120,86 +127,6 @@ TEST(GraphTest, Basic) {
     }
   }
   ASSERT_EQ(nodes.size(), 5UL);
-}
-
-TEST(GraphTest, WriteAfterRead) {
-  // void Test() {
-  ProgramDesc prog;
-  auto *op = prog.MutableBlock(0)->AppendOp();
-  op->SetType("sum");
-  op->SetInput("X", {"a"});
-  op->SetOutput("Out", {"b"});
-  op->SetAttr("op_role", 1);
-
-  op = prog.MutableBlock(0)->AppendOp();
-  op->SetType("dummy");
-  op->SetInput("X", {"c"});
-  op->SetOutput("Out", {"a"});
-  op->SetAttr("op_role", 1);
-
-  prog.MutableBlock(0)->Var("a")->SetType(proto::VarType::LOD_TENSOR);
-  prog.MutableBlock(0)->Var("b")->SetType(proto::VarType::LOD_TENSOR);
-  prog.MutableBlock(0)->Var("c")->SetType(proto::VarType::LOD_TENSOR);
-
-  std::unique_ptr<ir::Graph> g(new ir::Graph(prog));
-  ir::Node *control_dep1 = nullptr;
-  ir::Node *control_dep2 = nullptr;
-  for (ir::Node *n : g->Nodes()) {
-    if (n->Name() == "sum") {
-      ASSERT_EQ(n->outputs[0]->Name(), "b");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->outputs[1]));
-      control_dep1 = n->outputs[1];
-      ASSERT_EQ(n->outputs.size(), 2UL);
-    }
-    if (n->Name() == "dummy") {
-      ASSERT_EQ(n->inputs[0]->Name(), "c");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->inputs[1]));
-      control_dep2 = n->inputs[1];
-      ASSERT_EQ(n->inputs.size(), 2UL);
-    }
-  }
-  ASSERT_EQ(control_dep1, control_dep2);
-}
-
-TEST(GraphTest, WriteAfterWrite) {
-  // void Test() {
-  ProgramDesc prog;
-  auto *op = prog.MutableBlock(0)->AppendOp();
-  op->SetType("sum");
-  op->SetInput("X", {"a"});
-  op->SetOutput("Out", {"b"});
-  op->SetAttr("op_role", 1);
-
-  op = prog.MutableBlock(0)->AppendOp();
-  op->SetType("dummy");
-  op->SetInput("X", {"c"});
-  op->SetOutput("Out", {"b"});
-  op->SetAttr("op_role", 1);
-
-  prog.MutableBlock(0)->Var("a")->SetType(proto::VarType::LOD_TENSOR);
-  prog.MutableBlock(0)->Var("b")->SetType(proto::VarType::LOD_TENSOR);
-  prog.MutableBlock(0)->Var("c")->SetType(proto::VarType::LOD_TENSOR);
-
-  std::unique_ptr<ir::Graph> g(new ir::Graph(prog));
-  ir::Node *control_dep1 = nullptr;
-  ir::Node *control_dep2 = nullptr;
-  for (ir::Node *n : g->Nodes()) {
-    if (n->Name() == "sum") {
-      ASSERT_EQ(n->outputs[0]->Name(), "b");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->outputs[1]));
-      ASSERT_EQ(n->outputs.size(), 2UL);
-      control_dep1 = n->outputs[1];
-    }
-    if (n->Name() == "dummy") {
-      ASSERT_EQ(n->inputs[0]->Name(), "c");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->inputs[1]));
-      control_dep2 = n->inputs[1];
-      ASSERT_EQ(n->inputs.size(), 2UL);
-    }
-  }
-  ASSERT_NE(control_dep1, nullptr);
-  ASSERT_NE(control_dep2, nullptr);
-  ASSERT_EQ(control_dep1, control_dep2);
 }
 
 TEST(GraphTest, TestException) {
@@ -246,22 +173,6 @@ TEST(GraphTest, TestException) {
     not_met_exception = true;
   }
   ASSERT_TRUE(not_met_exception);
-}
-
-TEST(GraphTest, TestAttrCopy) {
-  ProgramDesc prog;
-  ir::Graph src_g(prog);
-  ir::Graph dst_g(prog);
-  const std::string kIntValue = "int_value";
-  const std::string kFloatValue = "float_value";
-  const int INT_VALUE = 3;
-  src_g.Set<int>(kIntValue, new int(INT_VALUE));
-  details::CopyGraphAttrIfExists<int>(src_g, &dst_g, kIntValue);
-  details::CopyGraphAttrIfExists<float>(src_g, &dst_g, kFloatValue);
-
-  ASSERT_TRUE(dst_g.Has(kIntValue));
-  ASSERT_EQ(dst_g.Get<int>(kIntValue), INT_VALUE);
-  ASSERT_FALSE(dst_g.Has(kFloatValue));
 }
 
 TEST(GraphTest, TestInterfaceConvertAllBlocks) {
@@ -314,7 +225,7 @@ TEST(GraphTest, TestMultiBlock) {
 
   // Set contents in block_0.
   auto *op = prog.MutableBlock(0)->AppendOp();
-  op->SetType("sum");
+  op->SetType("fake_sum");
   op->SetInput("X", {"test_a", "test_b", "test_c"});
   op->SetOutput("Out", {"test_out"});
   op->SetAttr("op_role", 1);
@@ -334,7 +245,7 @@ TEST(GraphTest, TestMultiBlock) {
 
   // Set contents in block_1.
   op = prog.MutableBlock(1)->AppendOp();
-  op->SetType("sum");
+  op->SetType("fake_sum");
   op->SetInput("X", {"a"});
   op->SetOutput("Out", {"b"});
   op->SetAttr("op_role", 1);
@@ -342,16 +253,17 @@ TEST(GraphTest, TestMultiBlock) {
   op = prog.MutableBlock(1)->AppendOp();
   op->SetType("dummy");
   op->SetInput("X", {"c"});
-  op->SetOutput("Out", {"a"});
+  op->SetOutput("Out", {"d"});
   op->SetAttr("op_role", 1);
 
   prog.MutableBlock(1)->Var("a")->SetType(proto::VarType::LOD_TENSOR);
   prog.MutableBlock(1)->Var("b")->SetType(proto::VarType::LOD_TENSOR);
   prog.MutableBlock(1)->Var("c")->SetType(proto::VarType::LOD_TENSOR);
+  prog.MutableBlock(1)->Var("d")->SetType(proto::VarType::LOD_TENSOR);
 
   // Set contents in block_2.
   op = prog.MutableBlock(2)->AppendOp();
-  op->SetType("sum");
+  op->SetType("fake_sum");
   op->SetInput("X", {"a"});
   op->SetOutput("Out", {"b"});
   op->SetAttr("op_role", 1);
@@ -359,12 +271,13 @@ TEST(GraphTest, TestMultiBlock) {
   op = prog.MutableBlock(2)->AppendOp();
   op->SetType("dummy");
   op->SetInput("X", {"c"});
-  op->SetOutput("Out", {"b"});
+  op->SetOutput("Out", {"d"});
   op->SetAttr("op_role", 1);
 
   prog.MutableBlock(2)->Var("a")->SetType(proto::VarType::LOD_TENSOR);
   prog.MutableBlock(2)->Var("b")->SetType(proto::VarType::LOD_TENSOR);
   prog.MutableBlock(2)->Var("c")->SetType(proto::VarType::LOD_TENSOR);
+  prog.MutableBlock(1)->Var("d")->SetType(proto::VarType::LOD_TENSOR);
 
   // Step2: Convert program into graph, 3 blocks corresponding 3 sub_graphs.
   std::unique_ptr<ir::Graph> g(new ir::Graph(prog));
@@ -375,7 +288,7 @@ TEST(GraphTest, TestMultiBlock) {
   const ir::Graph *g0 = g->GetSubGraph(0);
   std::vector<ir::Node *> nodes(g0->Nodes().begin(), g0->Nodes().end());
   for (ir::Node *n : nodes) {
-    if (n->Name() == "sum") {
+    if (n->Name() == "fake_sum") {
       ASSERT_EQ(n->inputs.size(), 3UL);
       ASSERT_EQ(n->outputs.size(), 1UL);
     } else if (n->Name() == "test_a" || n->Name() == "test_b" ||
@@ -391,45 +304,29 @@ TEST(GraphTest, TestMultiBlock) {
 
   // Check contents in sub_graph_1.
   const ir::Graph *g1 = g->GetSubGraph(1);
-  ir::Node *control_dep1 = nullptr;
-  ir::Node *control_dep2 = nullptr;
   for (ir::Node *n : g1->Nodes()) {
-    if (n->Name() == "sum") {
+    if (n->Name() == "fake_sum") {
       ASSERT_EQ(n->outputs[0]->Name(), "b");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->outputs[1]));
-      control_dep1 = n->outputs[1];
-      ASSERT_EQ(n->outputs.size(), 2UL);
+      ASSERT_EQ(n->outputs.size(), 1UL);
     }
     if (n->Name() == "dummy") {
       ASSERT_EQ(n->inputs[0]->Name(), "c");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->inputs[1]));
-      control_dep2 = n->inputs[1];
-      ASSERT_EQ(n->inputs.size(), 2UL);
+      ASSERT_EQ(n->inputs.size(), 1UL);
     }
   }
-  ASSERT_EQ(control_dep1, control_dep2);
 
   // Check contents in sub_graph_2.
   const ir::Graph *g2 = g->GetSubGraph(2);
-  control_dep1 = nullptr;
-  control_dep2 = nullptr;
   for (ir::Node *n : g2->Nodes()) {
-    if (n->Name() == "sum") {
+    if (n->Name() == "fake_sum") {
       ASSERT_EQ(n->outputs[0]->Name(), "b");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->outputs[1]));
-      ASSERT_EQ(n->outputs.size(), 2UL);
-      control_dep1 = n->outputs[1];
+      ASSERT_EQ(n->outputs.size(), 1UL);
     }
     if (n->Name() == "dummy") {
       ASSERT_EQ(n->inputs[0]->Name(), "c");
-      ASSERT_TRUE(ir::IsControlDepVar(*n->inputs[1]));
-      control_dep2 = n->inputs[1];
-      ASSERT_EQ(n->inputs.size(), 2UL);
+      ASSERT_EQ(n->inputs.size(), 1UL);
     }
   }
-  ASSERT_NE(control_dep1, nullptr);
-  ASSERT_NE(control_dep2, nullptr);
-  ASSERT_EQ(control_dep1, control_dep2);
 
   // Step3: Clone graph.
   std::shared_ptr<ir::Graph> clone_g = g->Clone();

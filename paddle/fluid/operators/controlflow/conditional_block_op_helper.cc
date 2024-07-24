@@ -16,14 +16,11 @@
 
 #include <string>
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class ProgramDesc;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 static bool IsMatchedConditionalBlockOpAndConditionalBlockGradOp(
     const OpVariant &fwd_op, const OpVariant &bwd_op) {
@@ -32,19 +29,22 @@ static bool IsMatchedConditionalBlockOpAndConditionalBlockGradOp(
 }
 
 static void FindAllConditionalBlockAndConditionalBlockGradOp(
-    const framework::ProgramDesc &program, std::vector<OpVariant> *fwd_ops,
+    const framework::ProgramDesc &program,
+    std::vector<OpVariant> *fwd_ops,
     std::vector<OpVariant> *bwd_ops) {
   PADDLE_ENFORCE_GE(
-      fwd_ops->size(), bwd_ops->size(),
-      platform::errors::InvalidArgument(
+      fwd_ops->size(),
+      bwd_ops->size(),
+      phi::errors::InvalidArgument(
           "Size of forward ops must be greater or equal to backward ops. The "
           "number of forward ops is %d and the number of backward ops is %d",
-          fwd_ops->size(), bwd_ops->size()));
+          fwd_ops->size(),
+          bwd_ops->size()));
 
   for (size_t i = 1; i < program.Size(); ++i) {
     auto &block = program.Block(i);
     for (size_t j = 0; j < block.OpSize(); ++j) {
-      auto *op = block.Op(j);
+      auto *op = block.Op(static_cast<int>(j));
       if (op->Type() == "conditional_block") {
         fwd_ops->emplace_back(op);
       } else if (op->Type() == "conditional_block_grad") {
@@ -54,12 +54,14 @@ static void FindAllConditionalBlockAndConditionalBlockGradOp(
   }
 
   PADDLE_ENFORCE_GE(
-      fwd_ops->size(), bwd_ops->size(),
-      platform::errors::InvalidArgument(
+      fwd_ops->size(),
+      bwd_ops->size(),
+      phi::errors::InvalidArgument(
           "There are more conditional_block_grad ops than "
           "conditional_block ops in the graph or program. The number of "
           "forward ops is %d and the number of backward ops is %d",
-          fwd_ops->size(), bwd_ops->size()));
+          fwd_ops->size(),
+          bwd_ops->size()));
 }
 
 static void SetSkipVarsForConditionalBlockOp(OpVariant *fwd_op,
@@ -94,10 +96,11 @@ static void SetSkipVarsForConditionalBlockOp(OpVariant *fwd_op,
 }
 
 static void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOpImpl(
-    const framework::ProgramDesc &program, std::vector<OpVariant> *ifelse_ops,
+    const framework::ProgramDesc &program,
+    std::vector<OpVariant> *ifelse_ops,
     std::vector<OpVariant> *ifelse_grad_ops) {
-  FindAllConditionalBlockAndConditionalBlockGradOp(program, ifelse_ops,
-                                                   ifelse_grad_ops);
+  FindAllConditionalBlockAndConditionalBlockGradOp(
+      program, ifelse_ops, ifelse_grad_ops);
 
   VLOG(2) << "Found conditional_block op num: " << ifelse_ops->size()
           << ", conditional_block_grad op num: " << ifelse_grad_ops->size();
@@ -114,8 +117,9 @@ static void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOpImpl(
     for (auto &fwd_op : ifelse_op_set) {
       if (IsMatchedConditionalBlockOpAndConditionalBlockGradOp(fwd_op,
                                                                bwd_op)) {
-        PADDLE_ENFORCE_EQ(matched_fwd_op, nullptr,
-                          platform::errors::PreconditionNotMet(
+        PADDLE_ENFORCE_EQ(matched_fwd_op,
+                          nullptr,
+                          phi::errors::PreconditionNotMet(
                               "Found multiple matched conditional_block ops."));
         matched_fwd_op = &fwd_op;
       }
@@ -123,7 +127,7 @@ static void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOpImpl(
 
     PADDLE_ENFORCE_NOT_NULL(
         matched_fwd_op,
-        platform::errors::PreconditionNotMet(
+        phi::errors::PreconditionNotMet(
             "Cannot find matched forward conditional_block op."));
 
     SetSkipVarsForConditionalBlockOp(const_cast<OpVariant *>(matched_fwd_op),
@@ -133,7 +137,8 @@ static void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOpImpl(
 }
 
 void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
-    const framework::ProgramDesc &program, int block_id,
+    const framework::ProgramDesc &program,
+    int block_id,
     const std::vector<std::unique_ptr<framework::OperatorBase>> &all_ops) {
   // If block_id is not 0, returns
   // This is because all conditional_block_ops and conditional_block_grad_ops
@@ -159,7 +164,8 @@ void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
       program, &fwd_ops, &bwd_ops);
 }
 void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
-    const framework::ProgramDesc &program, int block_id,
+    const framework::ProgramDesc &program,
+    int block_id,
     const std::vector<framework::OperatorBase *> &all_ops) {
   // If block_id is not 0, returns
   // This is because all conditional_block_ops and conditional_block_grad_ops
@@ -196,5 +202,4 @@ void PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
       program, &fwd_ops, &bwd_ops);
 }
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators

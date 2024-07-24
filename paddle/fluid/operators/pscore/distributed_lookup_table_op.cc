@@ -9,15 +9,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include "paddle/fluid/operators/pscore/distributed_lookup_table_op.h"
+
 #include <algorithm>
 
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/operators/pscore/distributed_lookup_table_op.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 constexpr int64_t kNoPadding = -1;
 
@@ -26,27 +26,32 @@ class DistributedLookupTableOp : public framework::OperatorWithKernel {
   using framework::OperatorWithKernel::OperatorWithKernel;
 
   void InferShape(framework::InferShapeContext *ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasInputs("Ids"), true,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_EQ(ctx->HasInputs("Ids"),
+                      true,
+                      phi::errors::InvalidArgument(
                           "Input(Ids) of LookupTableOp should not be null."));
-    PADDLE_ENFORCE_EQ(ctx->HasInput("W"), true,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_EQ(ctx->HasInput("W"),
+                      true,
+                      phi::errors::InvalidArgument(
                           "Input(W) of LookupTableOp should not be null."));
-    PADDLE_ENFORCE_EQ(ctx->HasOutputs("Outputs"), true,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_EQ(ctx->HasOutputs("Outputs"),
+                      true,
+                      phi::errors::InvalidArgument(
                           "Output(Outs) of LookupTableOp should not be null."));
 
     auto ids_dims = ctx->GetInputsDim("Ids");
     auto table_dims = ctx->GetInputDim("W");
 
     PADDLE_ENFORCE_EQ(
-        table_dims.size(), 2,
-        platform::errors::InvalidArgument(
+        table_dims.size(),
+        2,
+        phi::errors::InvalidArgument(
             "Only 2 dimensions of the 'Embedding' is supported."));
 
     for (auto &ids_dim : ids_dims) {
-      PADDLE_ENFORCE_EQ(ids_dim.size(), 2,
-                        platform::errors::InvalidArgument(
+      PADDLE_ENFORCE_EQ(ids_dim.size(),
+                        2,
+                        phi::errors::InvalidArgument(
                             "The dimension of the 'Ids' tensor must be 2."));
     }
 
@@ -54,16 +59,16 @@ class DistributedLookupTableOp : public framework::OperatorWithKernel {
     auto lookup_table_version =
         ctx->Attrs().Get<std::string>("lookup_table_version");
 
-    auto outputs_dims = std::vector<framework::DDim>();
+    auto outputs_dims = std::vector<phi::DDim>();
 
     for (auto &ids_dim : ids_dims) {
       if (lookup_table_version == "lookup_table") {
-        outputs_dims.push_back(
-            framework::make_ddim({ids_dim[0], table_dims[1]}));
+        outputs_dims.push_back(common::make_ddim({ids_dim[0], table_dims[1]}));
       } else if (lookup_table_version == "lookup_table_v2") {
-        outputs_dims.push_back(framework::make_ddim(
-            {static_cast<int64_t>(ids_dim[0]), static_cast<int64_t>(ids_dim[1]),
-             static_cast<int64_t>(table_dims[1])}));
+        outputs_dims.push_back(
+            common::make_ddim({static_cast<int64_t>(ids_dim[0]),
+                               static_cast<int64_t>(ids_dim[1]),
+                               static_cast<int64_t>(table_dims[1])}));
       }
     }
 
@@ -72,9 +77,9 @@ class DistributedLookupTableOp : public framework::OperatorWithKernel {
   }
 
  protected:
-  framework::OpKernelType GetExpectedKernelType(
+  phi::KernelKey GetExpectedKernelType(
       const framework::ExecutionContext &ctx) const override {
-    return framework::OpKernelType(
+    return phi::KernelKey(
         framework::proto::VarType::Type(ctx.Attr<int>("dtype")),
         ctx.GetPlace());
   }
@@ -84,7 +89,7 @@ class DistributedLookupTableOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
     AddInput("Ids",
-             "(LoDTensor) Ids's type should be LoDTensor"
+             "(phi::DenseTensor) Ids's type should be phi::DenseTensor"
              "THe ids to be looked up in W.")
         .AsDuplicable();
 
@@ -92,8 +97,9 @@ class DistributedLookupTableOpMaker : public framework::OpProtoAndCheckerMaker {
              "(Tensor) The input represents embedding tensors, "
              "which is a learnable parameter.");
 
-    AddOutput("Outputs",
-              "(LoDTensor) The lookup results, which have the same type as W.")
+    AddOutput(
+        "Outputs",
+        "(phi::DenseTensor) The lookup results, which have the same type as W.")
         .AsDuplicable();
 
     AddAttr<int>("table_id", "sparse table id").SetDefault(0);
@@ -125,7 +131,7 @@ class DistributedLookupTableOpMaker : public framework::OpProtoAndCheckerMaker {
         .SetDefault(false);
 
     AddComment(R"DOC(
-Lookup Tablel Prefetch Operator.
+Lookup Table Prefetch Operator.
 This operator is used to perform lookup on parameter W,
 then concatenated into a sparse tensor.
 The type of Ids(Input) is SelectedRows, the rows of Ids contains
@@ -135,14 +141,16 @@ random value and set the value into the table for the next looking up.
 )DOC");
   }
 };
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 
-REGISTER_OPERATOR(distributed_lookup_table, ops::DistributedLookupTableOp,
+REGISTER_OPERATOR(distributed_lookup_table,
+                  ops::DistributedLookupTableOp,
                   ops::DistributedLookupTableOpMaker);
 
-REGISTER_OP_CPU_KERNEL(distributed_lookup_table,
-                       ops::DistributedLookupTableKernel<
-                           paddle::platform::CPUDeviceContext, float>);
+PD_REGISTER_STRUCT_KERNEL(distributed_lookup_table,
+                          CPU,
+                          ALL_LAYOUT,
+                          ops::DistributedLookupTableKernel,
+                          float) {}

@@ -23,17 +23,19 @@ void LoDRankTable::Reset(const LoD& lod, size_t level) {
   this->coarse_lod_.clear();
   this->items_.clear();
   PADDLE_ENFORCE_LT(
-      level, lod.size(),
-      platform::errors::InvalidArgument(
+      level,
+      lod.size(),
+      phi::errors::InvalidArgument(
           "Cannot reset LoD since the level %d is less than lod size %d.",
-          level, lod.size()));
+          level,
+          lod.size()));
   coarse_lod_.reserve(level);
   for (size_t i = 0; i < level; ++i) {
     coarse_lod_.push_back(lod[i]);
   }
   auto& vec = lod[level];
   for (size_t i = 0; i < vec.size() - 1; ++i) {
-    TableItem item;
+    TableItem item = {0, 0};
     item.index = i;
     item.length = vec[i + 1] - vec[i];
     VLOG(10) << "Add item to rank table " << item.index << " " << item.length;
@@ -44,10 +46,10 @@ void LoDRankTable::Reset(const LoD& lod, size_t level) {
   // The time complexity of stable_sort is O(N*log(N)) if additional memory is
   // available. It is easy to debug and unit test when using `stable_sort`
   // instead of `sort`. Also, the items of a rank table will not be too large.
-  std::stable_sort(items_.begin(), items_.end(),
-                   [](const TableItem& a, const TableItem& b) {
-                     return a.length > b.length;
-                   });
+  std::stable_sort(
+      items_.begin(), items_.end(), [](const TableItem& a, const TableItem& b) {
+        return a.length > b.length;
+      });
 }
 
 }  // namespace framework

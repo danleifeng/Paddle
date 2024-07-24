@@ -14,18 +14,11 @@ limitations under the License. */
 #ifndef _WIN32
 #include "paddle/fluid/platform/dynload/nvtx.h"
 
-namespace paddle {
-namespace platform {
-namespace dynload {
-
-std::once_flag nvtx_dso_flag;
-void *nvtx_dso_handle;
+namespace paddle::platform::dynload {
 
 #define DEFINE_WRAP(__name) DynLoad__##__name __name
 
 NVTX_ROUTINE_EACH(DEFINE_WRAP);
 
-}  // namespace dynload
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform::dynload
 #endif

@@ -13,13 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/ir/fusion_group/code_generator.h"
+
 #include "paddle/fluid/framework/ir/fusion_group/code_generator_helper.h"
 #include "paddle/fluid/framework/ir/fusion_group/cuda_resources.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
-namespace fusion_group {
+namespace paddle::framework::ir::fusion_group {
 
 std::string ExtractDataType(const std::vector<Node*>& nodes) {
   std::string dtype_str = "";
@@ -56,8 +54,9 @@ std::string CodeGenerator::Generate(SubGraph* subgraph) {
 }
 
 static bool HasInput(Node* n, std::string name) {
-  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(), true,
-                    platform::errors::InvalidArgument(
+  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(),
+                    true,
+                    phi::errors::InvalidArgument(
                         "Expected node %p to be an operator node.", n));
   std::vector<std::string> input_names = n->Op()->InputNames();
   std::unordered_set<std::string> input_names_set(input_names.begin(),
@@ -66,8 +65,9 @@ static bool HasInput(Node* n, std::string name) {
 }
 
 static Node* GetInputVar(Node* n, const std::string& name) {
-  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(), true,
-                    platform::errors::InvalidArgument(
+  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(),
+                    true,
+                    phi::errors::InvalidArgument(
                         "Expected node %p to be an operator node.", n));
   for (auto* in : n->inputs) {
     if (in->Name() == name) {
@@ -78,8 +78,9 @@ static Node* GetInputVar(Node* n, const std::string& name) {
 }
 
 static Node* GetOutputVar(Node* n, const std::string& name) {
-  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(), true,
-                    platform::errors::InvalidArgument(
+  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(),
+                    true,
+                    phi::errors::InvalidArgument(
                         "Expected node %p to be an operator node.", n));
   for (auto* out : n->outputs) {
     if (out->Name() == name) {
@@ -111,12 +112,13 @@ std::vector<OperationExpression> CodeGenerator::ConvertToExpressions(
       for (auto& name : input_names) {
         // Some input vars are not used in grad ops, such as
         // "elementwise_add_grad", where "X", "Y" and "Out" are not used.
-        if ((HasInput(node, name) && op->Input(name).size() >= 1U)) {
+        if ((HasInput(node, name) && !op->Input(name).empty())) {
           for (size_t i = 0; i < op->Input(name).size(); i++) {
             Node* input_var = GetInputVar(node, op->Input(name)[i]);
             PADDLE_ENFORCE_NE(
-                var_ids.find(input_var), var_ids.end(),
-                platform::errors::InvalidArgument(
+                var_ids.find(input_var),
+                var_ids.end(),
+                phi::errors::InvalidArgument(
                     "Input(%s) of operation %s is not set.", name, op->Type()));
             input_ids.push_back(var_ids[input_var]);
           }
@@ -135,8 +137,9 @@ std::vector<OperationExpression> CodeGenerator::ConvertToExpressions(
       for (auto& name : output_names) {
         Node* output_var = GetOutputVar(node, op->Output(name)[0]);
         PADDLE_ENFORCE_NE(
-            var_ids.find(output_var), var_ids.end(),
-            platform::errors::InvalidArgument(
+            var_ids.find(output_var),
+            var_ids.end(),
+            phi::errors::InvalidArgument(
                 "Output(%s) of operation %s is not set.", name, op->Type()));
         output_ids.push_back(var_ids[output_var]);
         if (!subgraph->SaveIntermediateOut() &&
@@ -148,9 +151,12 @@ std::vector<OperationExpression> CodeGenerator::ConvertToExpressions(
 
       std::string lhs_type = ExtractDataType(node->outputs);
       std::string rhs_type = ExtractDataType(node->inputs);
-      auto expression =
-          OperationExpression(node->Name(), input_ids, output_ids, rhs_type,
-                              lhs_type, intermediate_output_ids);
+      auto expression = OperationExpression(node->Name(),
+                                            input_ids,
+                                            output_ids,
+                                            rhs_type,
+                                            lhs_type,
+                                            intermediate_output_ids);
       expression.SetAttr(attr);
       expressions.push_back(expression);
     }
@@ -164,20 +170,19 @@ std::string CodeGenerator::Generate(
     std::string func_name,
     const std::vector<OperationExpression>& expressions) {
   // TODO(liuyiqun): Check whether all expressions are elementwise operations.
-  std::set<int> input_ids = std::move(DistilInputIds(expressions));
-  std::set<int> output_ids = std::move(DistilOutputIds(expressions));
-  std::set<int> intermediate_output_ids =
-      std::move(DistilIntermediateIds(expressions));
-  std::unordered_map<int, std::string> dtypes =
-      std::move(DistilDtypes(expressions));
+  std::set<int> input_ids = DistilInputIds(expressions);
+  std::set<int> output_ids = DistilOutputIds(expressions);
+  std::set<int> intermediate_output_ids = DistilIntermediateIds(expressions);
+  std::unordered_map<int, std::string> dtypes = DistilDtypes(expressions);
   TemplateVariable template_var;
   template_var.Add("func_name", func_name);
   template_var.Add(
       "parameters",
       EmitParameters(input_ids, output_ids, intermediate_output_ids, dtypes));
-  template_var.Add("compute_body",
-                   EmitComputeBody(expressions, input_ids, output_ids,
-                                   intermediate_output_ids, dtypes));
+  template_var.Add(
+      "compute_body",
+      EmitComputeBody(
+          expressions, input_ids, output_ids, intermediate_output_ids, dtypes));
 
   std::set<std::string> all_dtype;
   for (const auto& type : dtypes) {
@@ -200,9 +205,9 @@ std::string CodeGenerator::Generate(
 std::set<int> CodeGenerator::DistilInputIds(
     const std::vector<OperationExpression>& expressions) {
   std::set<int> input_ids;
-  // Use std::set to remove the reptead id and get a ordered list.
-  for (size_t i = 0; i < expressions.size(); i++) {
-    for (auto id : expressions[i].GetInputIds()) {
+  // Use std::set to remove the repeated id and get a ordered list.
+  for (const auto& expression : expressions) {
+    for (auto id : expression.GetInputIds()) {
       if (id >= 0) {
         input_ids.insert(id);
       }
@@ -214,9 +219,9 @@ std::set<int> CodeGenerator::DistilInputIds(
 std::set<int> CodeGenerator::DistilOutputIds(
     const std::vector<OperationExpression>& expressions) {
   std::set<int> output_ids;
-  // Use std::set to remove the reptead id and get a ordered list.
-  for (size_t i = 0; i < expressions.size(); i++) {
-    for (auto id : expressions[i].GetOutputIds()) {
+  // Use std::set to remove the repeated id and get a ordered list.
+  for (const auto& expression : expressions) {
+    for (auto id : expression.GetOutputIds()) {
       output_ids.insert(id);
     }
   }
@@ -226,9 +231,9 @@ std::set<int> CodeGenerator::DistilOutputIds(
 std::set<int> CodeGenerator::DistilIntermediateIds(
     const std::vector<OperationExpression>& expressions) {
   std::set<int> intermediate_output_ids;
-  // Use std::set to remove the reptead id and get a ordered list.
-  for (size_t i = 0; i < expressions.size(); i++) {
-    for (auto id : expressions[i].GetIntermediateOutputIds()) {
+  // Use std::set to remove the repeated id and get a ordered list.
+  for (const auto& expression : expressions) {
+    for (auto id : expression.GetIntermediateOutputIds()) {
       intermediate_output_ids.insert(id);
     }
   }
@@ -245,8 +250,9 @@ std::unordered_map<int, std::string> CodeGenerator::DistilDtypes(
         dtypes[id] = dtype;
       } else {
         PADDLE_ENFORCE_EQ(
-            dtypes[id], dtype,
-            platform::errors::PreconditionNotMet(
+            dtypes[id],
+            dtype,
+            phi::errors::PreconditionNotMet(
                 "In fusion group, Same Node id must have same date type"));
       }
     }
@@ -256,8 +262,9 @@ std::unordered_map<int, std::string> CodeGenerator::DistilDtypes(
         dtypes[id] = dtype;
       } else {
         PADDLE_ENFORCE_EQ(
-            dtypes[id], dtype,
-            platform::errors::PreconditionNotMet(
+            dtypes[id],
+            dtype,
+            phi::errors::PreconditionNotMet(
                 "In fusion group, Same Node id must have same date type"));
       }
     }
@@ -267,7 +274,8 @@ std::unordered_map<int, std::string> CodeGenerator::DistilDtypes(
 
 // we get the parameter list code for the expression information
 std::string CodeGenerator::EmitParameters(
-    const std::set<int>& input_ids, const std::set<int>& output_ids,
+    const std::set<int>& input_ids,
+    const std::set<int>& output_ids,
     const std::set<int>& intermediate_ids,
     const std::unordered_map<int, std::string>& dtypes) const {
   std::stringstream ret;
@@ -290,7 +298,7 @@ std::string CodeGenerator::EmitParameters(
       output_args.push_back(args_str);
     }
   }
-  for (auto args : output_args) {
+  for (auto const& args : output_args) {
     ret << args;
     if (index != output_args.size() - 1) {
       ret << ", ";
@@ -302,14 +310,15 @@ std::string CodeGenerator::EmitParameters(
 
 std::string CodeGenerator::EmitComputeBody(
     const std::vector<OperationExpression>& expressions,
-    const std::set<int>& input_ids, const std::set<int>& output_ids,
+    const std::set<int>& input_ids,
+    const std::set<int>& output_ids,
     const std::set<int>& intermediate_ids,
     const std::unordered_map<int, std::string>& dtypes) const {
   std::ostringstream compute;
   std::unordered_set<int> used;
-  for (size_t i = 0; i < expressions.size(); i++) {
-    VLOG(3) << DebugString(expressions[i]);
-    compute << expressions[i].GetExpression(&used);
+  for (const auto& expression : expressions) {
+    VLOG(3) << DebugString(expression);
+    compute << expression.GetExpression(&used);
   }
 
   // Load input to temporal variables.
@@ -352,7 +361,7 @@ std::unordered_map<Node*, int> CodeGenerator::EncodeVarNodes(
 
   // Encoding output vars.
   for (auto* out : output_var_nodes) {
-    VLOG(3) << "Ecoding output names:" << out->Name() << "(" << out
+    VLOG(3) << "Encoding output names:" << out->Name() << "(" << out
             << "), id:" << id;
     if (var_ids.find(out) == var_ids.end()) {
       var_ids[out] = id++;
@@ -361,7 +370,4 @@ std::unordered_map<Node*, int> CodeGenerator::EncodeVarNodes(
   return var_ids;
 }
 
-}  // namespace fusion_group
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir::fusion_group

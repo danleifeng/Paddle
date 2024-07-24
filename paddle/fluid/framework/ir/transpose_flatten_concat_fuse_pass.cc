@@ -13,11 +13,10 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/ir/transpose_flatten_concat_fuse_pass.h"
+
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 TransposeFlattenConcatFusePass::TransposeFlattenConcatFusePass() {
   AddOpCompat(OpCompat("transpose2"))
@@ -68,6 +67,7 @@ void TransposeFlattenConcatFusePass::RunTransposeFlattenConcatFuse(
 
   GraphPatternDetector gpd;
   std::vector<PDNode *> input_nodes;
+  input_nodes.reserve(times);
   for (int i = 0; i < times; i++) {
     input_nodes.push_back(gpd.mutable_pattern()
                               ->NewNode("x" + std::to_string(i))
@@ -84,33 +84,63 @@ void TransposeFlattenConcatFusePass::RunTransposeFlattenConcatFuse(
       LOG(WARNING) << "Pass in op compat failed.";
       return;
     }
+
     const int kNumFields = 5;
     const int kTransOffset = 1;
     const int kTransOutOffset = 2;
     const int kFlattenOffset = 3;
     const int kFlattenOutOffset = 4;
-    std::vector<Node *> nodes;
 
+    std::vector<Node *> nodes;
+    std::vector<int> trans_axis0;
+    int flatten_axis0 = 0;
     for (int i = 0; i < times; i++) {
       PADDLE_ENFORCE_NOT_NULL(
           subgraph.at(pattern.GetPDNode("transpose" + std::to_string(i))),
-          platform::errors::NotFound("Can not find transpose%d in subgraph.",
-                                     i));
+          phi::errors::NotFound("Can not find transpose%d in subgraph.", i));
       PADDLE_ENFORCE_NOT_NULL(
           subgraph.at(pattern.GetPDNode("transpose_out" + std::to_string(i))),
-          platform::errors::NotFound(
-              "Can not find transpose_out%d in subgraph.", i));
+          phi::errors::NotFound("Can not find transpose_out%d in subgraph.",
+                                i));
       PADDLE_ENFORCE_NOT_NULL(
           subgraph.at(pattern.GetPDNode("flatten" + std::to_string(i))),
-          platform::errors::NotFound("Can not find flatten%d in subgraph.", i));
+          phi::errors::NotFound("Can not find flatten%d in subgraph.", i));
       PADDLE_ENFORCE_NOT_NULL(
           subgraph.at(pattern.GetPDNode("flatten_out" + std::to_string(i))),
-          platform::errors::NotFound("Can not find flatten_out%d in subgraph.",
-                                     i));
+          phi::errors::NotFound("Can not find flatten_out%d in subgraph.", i));
       PADDLE_ENFORCE_NOT_NULL(
           subgraph.at(input_nodes[i]),
-          platform::errors::NotFound("Can not find %s in subgraph.",
-                                     input_nodes[i]->name()));
+          phi::errors::NotFound("Can not find %s in subgraph.",
+                                input_nodes[i]->name()));
+
+      if (i == 0) {
+        trans_axis0 = PADDLE_GET_CONST(
+            std::vector<int>,
+            subgraph.at(pattern.GetPDNode("transpose" + std::to_string(0)))
+                ->Op()
+                ->GetAttr("axis"));
+        flatten_axis0 = PADDLE_GET_CONST(
+            int,
+            subgraph.at(pattern.GetPDNode("flatten" + std::to_string(0)))
+                ->Op()
+                ->GetAttr("axis"));
+      } else {
+        std::vector<int> trans_axis = PADDLE_GET_CONST(
+            std::vector<int>,
+            subgraph.at(pattern.GetPDNode("transpose" + std::to_string(i)))
+                ->Op()
+                ->GetAttr("axis"));
+        // All axis of transpose should be the same
+        if (trans_axis0 != trans_axis) return;
+
+        int flatten_axis = PADDLE_GET_CONST(
+            int,
+            subgraph.at(pattern.GetPDNode("flatten" + std::to_string(0)))
+                ->Op()
+                ->GetAttr("axis"));
+        // All axis of flatten should be the same
+        if (flatten_axis0 != flatten_axis) return;
+      }
 
       nodes.push_back(subgraph.at(input_nodes[i]));
       nodes.push_back(
@@ -126,13 +156,14 @@ void TransposeFlattenConcatFusePass::RunTransposeFlattenConcatFuse(
     Node *concat_op = subgraph.at(pattern.GetPDNode("concat"));
     Node *concat_out = subgraph.at(pattern.GetPDNode("concat_out"));
     std::vector<std::string> input_names;
-    std::vector<int> trans_axis = BOOST_GET_CONST(
+    std::vector<int> trans_axis = PADDLE_GET_CONST(
         std::vector<int>, nodes[kTransOffset]->Op()->GetAttr("axis"));
     int flatten_axis =
-        BOOST_GET_CONST(int, nodes[kFlattenOffset]->Op()->GetAttr("axis"));
-    int concat_axis = BOOST_GET_CONST(int, concat_op->Op()->GetAttr("axis"));
+        PADDLE_GET_CONST(int, nodes[kFlattenOffset]->Op()->GetAttr("axis"));
+    int concat_axis = PADDLE_GET_CONST(int, concat_op->Op()->GetAttr("axis"));
     std::string output_name = concat_out->Name();
 
+    input_names.reserve(times);
     for (int i = 0; i < times; i++) {
       input_names.push_back(nodes[i * kNumFields]->Name());
     }
@@ -180,9 +211,7 @@ void TransposeFlattenConcatFusePass::ApplyImpl(ir::Graph *graph) const {
   }
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(transpose_flatten_concat_fuse_pass,
               paddle::framework::ir::TransposeFlattenConcatFusePass);

@@ -18,9 +18,9 @@
 #include <vector>
 
 #include "paddle/fluid/memory/allocation/allocator.h"
-#include "paddle/fluid/memory/detail/buddy_allocator.h"
-#include "paddle/fluid/memory/detail/system_allocator.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/memory/allocation/buddy_allocator.h"
+#include "paddle/fluid/memory/allocation/system_allocator.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace memory {
@@ -30,7 +30,7 @@ class ThreadLocalAllocatorImpl;
 
 class ThreadLocalAllocation : public Allocation {
  public:
-  ThreadLocalAllocation(void* ptr, size_t size, platform::Place place)
+  ThreadLocalAllocation(void* ptr, size_t size, phi::Place place)
       : Allocation(ptr, size, place) {}
 
   void SetThreadLocalAllocatorImpl(
@@ -49,14 +49,14 @@ class ThreadLocalAllocation : public Allocation {
 class ThreadLocalAllocatorImpl
     : public std::enable_shared_from_this<ThreadLocalAllocatorImpl> {
  public:
-  explicit ThreadLocalAllocatorImpl(const platform::Place& p);
+  explicit ThreadLocalAllocatorImpl(const phi::Place& p);
   ThreadLocalAllocation* AllocateImpl(size_t size);
   void FreeImpl(ThreadLocalAllocation* allocation);
   uint64_t ReleaseImpl();
 
  private:
   std::unique_ptr<memory::detail::BuddyAllocator> buddy_allocator_;
-  platform::Place place_;
+  phi::Place place_;
 };
 
 class ThreadLocalCUDAAllocatorPool {
@@ -77,22 +77,22 @@ class ThreadLocalCUDAAllocatorPool {
 
 class ThreadLocalCUDAAllocator : public Allocator {
  public:
-  explicit ThreadLocalCUDAAllocator(const platform::CUDAPlace& p)
+  explicit ThreadLocalCUDAAllocator(const phi::GPUPlace& p)
       : gpu_id_(p.device) {}
 
   bool IsAllocThreadSafe() const override { return true; }
 
  protected:
-  Allocation* AllocateImpl(size_t size) override {
+  phi::Allocation* AllocateImpl(size_t size) override {
     return ThreadLocalCUDAAllocatorPool::Instance().Get(gpu_id_)->AllocateImpl(
         size);
   }
-  void FreeImpl(Allocation* allocation) override {
+  void FreeImpl(phi::Allocation* allocation) override {
     auto* tl_allocation = static_cast<ThreadLocalAllocation*>(allocation);
     auto allocator_impl = tl_allocation->GetAllocator();
     allocator_impl->FreeImpl(tl_allocation);
   }
-  uint64_t ReleaseImpl(const platform::Place& p) override {
+  uint64_t ReleaseImpl(const phi::Place& p) override {
     return ThreadLocalCUDAAllocatorPool::Instance().Get(gpu_id_)->ReleaseImpl();
   }
 

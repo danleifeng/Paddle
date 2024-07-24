@@ -15,52 +15,40 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/instance_norm_op_plugin.h"
 
-namespace nvinfer1 {
-class IPluginLayer;
-}  // namespace nvinfer1
-namespace paddle {
-namespace framework {
-class Scope;
-
-namespace proto {
-class OpDesc;
-}  // namespace proto
-}  // namespace framework
-}  // namespace paddle
-
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class InstanceNormOpConverter : public OpConverter {
  public:
   void operator()(const framework::proto::OpDesc& op,
-                  const framework::Scope& scope, bool test_mode) override {
+                  const framework::Scope& scope,
+                  bool test_mode) override {
     VLOG(4) << "convert fluid prelu op to tensorrt instance norm layer";
 
     framework::OpDesc op_desc(op, nullptr);
     auto* input = engine_->GetITensor(op_desc.Input("X")[0]);
 
-    float eps = BOOST_GET_CONST(float, op_desc.GetAttr("epsilon"));
+    float eps = PADDLE_GET_CONST(float, op_desc.GetAttr("epsilon"));
 
     auto* scale_var = scope.FindVar(op_desc.Input("Scale")[0]);
     auto* bias_var = scope.FindVar(op_desc.Input("Bias")[0]);
     PADDLE_ENFORCE_NOT_NULL(
         scale_var,
-        platform::errors::InvalidArgument(
+        phi::errors::InvalidArgument(
             "Input [Scale] of instance_norm op converter should not be null"));
     PADDLE_ENFORCE_NOT_NULL(
         bias_var,
-        platform::errors::InvalidArgument(
+        phi::errors::InvalidArgument(
             "Input [Bias] of instance_norm op converter should not be null"));
-    auto* scale_tensor = scale_var->GetMutable<framework::LoDTensor>();
-    auto* bias_tensor = bias_var->GetMutable<framework::LoDTensor>();
+    auto* scale_tensor = scale_var->GetMutable<phi::DenseTensor>();
+    auto* bias_tensor = bias_var->GetMutable<phi::DenseTensor>();
     PADDLE_ENFORCE_EQ(
-        scale_tensor->numel(), bias_tensor->numel(),
-        platform::errors::InvalidArgument(
+        scale_tensor->numel(),
+        bias_tensor->numel(),
+        phi::errors::InvalidArgument(
             "Num of input [Scale] and [Bias] of instance_norm op converter "
             "should be equal. Got Scale num = %ld, but Bias num = %ld",
-            scale_tensor->numel(), bias_tensor->numel()));
+            scale_tensor->numel(),
+            bias_tensor->numel()));
     auto* scale_d = scale_tensor->data<float>();
     auto* bias_d = bias_tensor->data<float>();
 
@@ -71,18 +59,22 @@ class InstanceNormOpConverter : public OpConverter {
       bias_v.push_back(bias_d[i]);
     }
 
-    plugin::InstanceNormPlugin* plugin =
-        new plugin::InstanceNormPlugin(eps, scale_v, bias_v);
-    plugin->getPluginType();
-    auto* layer = engine_->AddPlugin(&input, 1, plugin);
+    nvinfer1::IPluginV2* plugin = nullptr;
+    if (engine_->with_dynamic_shape()) {
+      plugin = new plugin::InstanceNormPluginDynamic(eps, scale_v, bias_v);
+    } else {
+      plugin = new plugin::InstanceNormPlugin(eps, scale_v, bias_v);
+    }
+
+    std::vector<nvinfer1::ITensor*> instance_norm_inputs{input};
+    auto* layer = engine_->network()->addPluginV2(
+        instance_norm_inputs.data(), instance_norm_inputs.size(), *plugin);
 
     auto output_name = op_desc.Output("Y")[0];
-    RreplenishLayerAndOutput(layer, "instance_norm", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "instance_norm", {output_name}, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(instance_norm, InstanceNormOpConverter);

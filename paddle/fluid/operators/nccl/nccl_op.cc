@@ -18,28 +18,29 @@ limitations under the License. */
 namespace paddle {
 namespace operators {
 
-static constexpr char kParallelScopes[] = "parallel_scopes";
+static constexpr char kParallelScopes[] = "parallel_scopes";  // NOLINT
 
 // NCCLinitOp
 class NCCLInitOp : public framework::OperatorBase {
  public:
-  NCCLInitOp(const std::string &type, const framework::VariableNameMap &inputs,
+  NCCLInitOp(const std::string &type,
+             const framework::VariableNameMap &inputs,
              const framework::VariableNameMap &outputs,
              const framework::AttributeMap &attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &place) const override {
+               const phi::Place &place) const override {
     PADDLE_ENFORCE_NOT_NULL(
         scope.FindVar(Input(kParallelScopes)),
-        platform::errors::NotFound("Can not find variable '%s' in the scope.",
-                                   kParallelScopes));
+        phi::errors::NotFound("Can not find variable '%s' in the scope.",
+                              kParallelScopes));
     const auto &name = Output("Communicator");
     PADDLE_ENFORCE_NOT_NULL(
         scope.FindVar(name),
-        platform::errors::NotFound(
-            "Output(%s) is needed for ncclInit operator.", name));
+        phi::errors::NotFound("Output(%s) is needed for ncclInit operator.",
+                              name));
     // A parallel do may not use all the gpus. For example, the batch size is 7
     // in the last batch while we have 8 gpu. In this case, parallel_do will
     // create 7 parallel scopes, so should ncclInitOp create 7 gpu peers
@@ -49,8 +50,9 @@ class NCCLInitOp : public framework::OperatorBase {
     for (int i = 0; i < static_cast<int>(parallel_scopes.size()); ++i) {
       gpus[i] = i;
     }
-    PADDLE_ENFORCE_EQ(!gpus.empty(), true,
-                      platform::errors::PreconditionNotMet(
+    PADDLE_ENFORCE_EQ(!gpus.empty(),
+                      true,
+                      phi::errors::PreconditionNotMet(
                           "gpus is empty, NCCL must init with gpus"));
 
     platform::Communicator *comm =
@@ -94,16 +96,18 @@ class NCCLAllReduceOp : public framework::OperatorWithKernel {
  protected:
   void InferShape(framework::InferShapeContext *ctx) const override {
     OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "NCCLAllReduce");
-    OP_INOUT_CHECK(ctx->HasInput("Communicator"), "Input", "Communicator",
+    OP_INOUT_CHECK(ctx->HasInput("Communicator"),
+                   "Input",
+                   "Communicator",
                    "NCCLAllReduce");
 
     OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "NCCLAllReduce");
 
     std::string reduction = ctx->Attrs().Get<std::string>("reduction");
-    PADDLE_ENFORCE_EQ(
-        (reduction == "ncclSum" || reduction == "ncclProd" ||
-         reduction == "ncclMin" || reduction == "ncclMax"),
-        true, platform::errors::InvalidArgument("invalid nccl reduction."));
+    PADDLE_ENFORCE_EQ((reduction == "ncclSum" || reduction == "ncclProd" ||
+                       reduction == "ncclMin" || reduction == "ncclMax"),
+                      true,
+                      phi::errors::InvalidArgument("invalid nccl reduction."));
 
     auto x_dims = ctx->GetInputsDim("X");
     ctx->SetOutputsDim("Out", x_dims);
@@ -139,16 +143,16 @@ class NCCLReduceOp : public framework::OperatorWithKernel {
  protected:
   void InferShape(framework::InferShapeContext *ctx) const override {
     OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "NCCLReduce");
-    OP_INOUT_CHECK(ctx->HasInput("Communicator"), "Input", "Communicator",
-                   "NCCLReduce");
+    OP_INOUT_CHECK(
+        ctx->HasInput("Communicator"), "Input", "Communicator", "NCCLReduce");
 
     OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "NCCLReduce");
 
     std::string reduction = ctx->Attrs().Get<std::string>("reduction");
-    PADDLE_ENFORCE_EQ(
-        (reduction == "ncclSum" || reduction == "ncclProd" ||
-         reduction == "ncclMin" || reduction == "ncclMax"),
-        true, platform::errors::InvalidArgument("invalid nccl reduction."));
+    PADDLE_ENFORCE_EQ((reduction == "ncclSum" || reduction == "ncclProd" ||
+                       reduction == "ncclMin" || reduction == "ncclMax"),
+                      true,
+                      phi::errors::InvalidArgument("invalid nccl reduction."));
 
     auto x_dims = ctx->GetInputsDim("X");
     ctx->SetOutputsDim("Out", x_dims);
@@ -189,15 +193,15 @@ class NCCLBcastOp : public framework::OperatorWithKernel {
  protected:
   void InferShape(framework::InferShapeContext *ctx) const override {
     OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "NCCLBcast");
-    OP_INOUT_CHECK(ctx->HasInput("Communicator"), "Input", "Communicator",
-                   "NCCLBcast");
+    OP_INOUT_CHECK(
+        ctx->HasInput("Communicator"), "Input", "Communicator", "NCCLBcast");
 
     OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "NCCLBcast");
 
     int root = ctx->Attrs().Get<int>("root");
-    PADDLE_ENFORCE_EQ(
-        root != platform::kInvalidGPUId, true,
-        platform::errors::InvalidArgument("Bcast root must be set."));
+    PADDLE_ENFORCE_EQ(root != platform::kInvalidGPUId,
+                      true,
+                      phi::errors::InvalidArgument("Bcast root must be set."));
 
     auto x_dims = ctx->GetInputsDim("X");
     ctx->SetOutputsDim("Out", x_dims);
@@ -231,15 +235,20 @@ Bcast the tensors.
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
-    ncclInit, ops::NCCLInitOp,
+    ncclInit,
+    ops::NCCLInitOp,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
-    ops::NCCLInitOpMaker, ops::NCCLInitOpVarTypeInference,
+    ops::NCCLInitOpMaker,
+    ops::NCCLInitOpVarTypeInference,
     ops::NCCLInitOpShapeInference);
 
-REGISTER_OP_WITHOUT_GRADIENT(ncclAllReduce, ops::NCCLAllReduceOp,
+REGISTER_OP_WITHOUT_GRADIENT(ncclAllReduce,
+                             ops::NCCLAllReduceOp,
                              ops::NCCLAllReduceOpMaker);
-REGISTER_OP_WITHOUT_GRADIENT(ncclBcast, ops::NCCLBcastOp,
+REGISTER_OP_WITHOUT_GRADIENT(ncclBcast,
+                             ops::NCCLBcastOp,
                              ops::NCCLBcastOpMaker);
-REGISTER_OP_WITHOUT_GRADIENT(ncclReduce, ops::NCCLReduceOp,
+REGISTER_OP_WITHOUT_GRADIENT(ncclReduce,
+                             ops::NCCLReduceOp,
                              ops::NCCLReduceOpMaker);

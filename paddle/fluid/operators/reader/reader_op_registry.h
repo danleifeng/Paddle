@@ -48,7 +48,7 @@ int RegisterFileReader(const std::string& filetype) {
   return 0;
 }
 
-extern std::vector<framework::DDim> RestoreShapes(
+extern std::vector<phi::DDim> RestoreShapes(
     const std::vector<int>& shape_concat, const std::vector<int>& ranks);
 
 class FileReaderMakerBase : public framework::OpProtoAndCheckerMaker {
@@ -93,16 +93,19 @@ class DecoratedReaderMakerBase : public framework::OpProtoAndCheckerMaker {
 }  // namespace operators
 }  // namespace paddle
 
-#define REGISTER_FILE_READER_OPERATOR(op_name, ...)                          \
-  REGISTER_OPERATOR(                                                         \
-      op_name, __VA_ARGS__, paddle::operators::reader::FileReaderInferShape, \
-      paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,        \
-      paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,       \
+#define REGISTER_FILE_READER_OPERATOR(op_name, ...)                    \
+  REGISTER_OPERATOR(                                                   \
+      op_name,                                                         \
+      __VA_ARGS__,                                                     \
+      paddle::operators::reader::FileReaderInferShape,                 \
+      paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,  \
+      paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>, \
       paddle::operators::reader::FileReaderInferVarType)
 
 #define REGISTER_DECORATED_READER_OPERATOR(op_name, ...)               \
   REGISTER_OPERATOR(                                                   \
-      op_name, __VA_ARGS__,                                            \
+      op_name,                                                         \
+      __VA_ARGS__,                                                     \
       paddle::operators::reader::DecoratedReaderInferShape,            \
       paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,  \
       paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>, \

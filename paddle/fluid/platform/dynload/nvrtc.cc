@@ -14,23 +14,14 @@ limitations under the License. */
 
 #include "paddle/fluid/platform/dynload/nvrtc.h"
 
-namespace paddle {
-namespace platform {
-namespace dynload {
+#include "paddle/phi/backends/dynload/nvrtc.h"
 
-std::once_flag nvrtc_dso_flag;
-void* nvrtc_dso_handle = nullptr;
+namespace paddle::platform::dynload {
 
 #define DEFINE_WRAP(__name) DynLoad__##__name __name
 
 NVRTC_ROUTINE_EACH(DEFINE_WRAP);
 
-bool HasNVRTC() {
-  std::call_once(nvrtc_dso_flag,
-                 []() { nvrtc_dso_handle = GetNVRTCDsoHandle(); });
-  return nvrtc_dso_handle != nullptr;
-}
+bool HasNVRTC() { return phi::dynload::HasNVRTC(); }
 
-}  // namespace dynload
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform::dynload

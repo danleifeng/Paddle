@@ -10,8 +10,9 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/fleet/gloo_wrapper.h"
+
 #include "paddle/fluid/framework/io/fs.h"
-#include "paddle/fluid/string/string_helper.h"
+#include "paddle/utils/string/string_helper.h"
 
 namespace gloo {
 namespace transport {
@@ -27,10 +28,10 @@ class Store;
 
 constexpr int kNodeSize = 136;
 
-HdfsStore::HdfsStore(const std::string& path) {
+HdfsStore::HdfsStore(const std::string& path)
+    : wait_timeout_(std::chrono::seconds(999999999)), self_rank_(0) {
   path_ = path;
   wait_sleep_ms_ = 10000;
-  wait_timeout_ = std::chrono::seconds(999999999);
   retry_times_ = 100;
 }
 
@@ -62,7 +63,7 @@ void HdfsStore::set(const std::string& key, const std::vector<char>& data) {
       paddle::framework::fs_remove(tmp);
       if (i == retry_times_) {
         VLOG(0) << "fs_open_write failed, retry times reaches limit";
-        PADDLE_THROW(paddle::platform::errors::PreconditionNotMet(
+        PADDLE_THROW(phi::errors::PreconditionNotMet(
             "fs_open_write failed, retry times reaches %d limit.",
             retry_times_));
       }
@@ -78,7 +79,7 @@ void HdfsStore::set(const std::string& key, const std::vector<char>& data) {
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - start);
     if (wait_timeout_ != gloo::kNoTimeout && elapsed > wait_timeout_) {
-      PADDLE_THROW(paddle::platform::errors::ExecutionTimeout(
+      PADDLE_THROW(phi::errors::ExecutionTimeout(
           "fs_mv failed, tmp: %s, path: %s", tmp, path));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(wait_sleep_ms_));
@@ -87,7 +88,8 @@ void HdfsStore::set(const std::string& key, const std::vector<char>& data) {
 }
 
 #ifdef PADDLE_WITH_GLOO
-int retry_do_func(std::function<int(void)> func, uint32_t max_try_time,
+int retry_do_func(std::function<int(void)> func,
+                  uint32_t max_try_time,
                   uint32_t retry_interval_ms) {
   for (uint32_t i = 0; i < max_try_time; ++i) {
     if (func() == 0) {
@@ -108,12 +110,14 @@ std::vector<char> HdfsStore::get(const std::string& key) {
   // block until key is set
   wait({key});
   int ret = retry_do_func(
-      [&path]() { return paddle::framework::fs_exists(path) ? 0 : -1; }, 5,
+      [&path]() { return paddle::framework::fs_exists(path) ? 0 : -1; },
+      5,
       wait_sleep_ms_);
   bool is_exists = (ret == 0);
-  PADDLE_ENFORCE_EQ(is_exists, true,
-                    paddle::platform::errors::NotFound(
-                        "HdfsStore::get, path not exists: " + path));
+  PADDLE_ENFORCE_EQ(
+      is_exists,
+      true,
+      phi::errors::NotFound("HdfsStore::get, path not exists: " + path));
 
   int read_status = retry_do_func(
       [&path, &result]() {
@@ -132,10 +136,12 @@ std::vector<char> HdfsStore::get(const std::string& key) {
         }
         return err_no;
       },
-      5, wait_sleep_ms_);
-  PADDLE_ENFORCE_EQ(read_status, 0,
-                    paddle::platform::errors::Fatal(
-                        "HdfsStore::get, path read faied: " + path));
+      5,
+      wait_sleep_ms_);
+  PADDLE_ENFORCE_EQ(
+      read_status,
+      0,
+      phi::errors::Fatal("HdfsStore::get, path read failed: " + path));
 #endif
   return result;
 }
@@ -159,13 +165,14 @@ void HdfsStore::wait(const std::vector<std::string>& keys,
       int32_t last_check_rank = -1;
       for (size_t i = 0; i < check_key_status.size(); ++i) {
         if (!check_key_status[i]) {
-          last_check_rank = i;
+          last_check_rank = static_cast<int32_t>(i);
           break;
         }
       }
-      PADDLE_THROW(paddle::platform::errors::ExecutionTimeout(
-          "TIMEOUT self_rank = %d pair_rank = %d", self_rank_,
-          last_check_rank));
+      PADDLE_THROW(
+          phi::errors::ExecutionTimeout("TIMEOUT self_rank = %d pair_rank = %d",
+                                        self_rank_,
+                                        last_check_rank));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(wait_sleep_ms_));
   }
@@ -245,7 +252,7 @@ void ParallelConnectContext::connectFullMesh(
     connect_threads[i].reset(new std::thread(
         [&store, &transportContext, total_add_size, this](
             size_t thread_idx, size_t thread_num) -> void {
-          for (int i = thread_idx; i < size; i += thread_num) {
+          for (int i = thread_idx; i < size; i += thread_num) {  // NOLINT
             if (i == rank) {
               continue;
             }
@@ -278,31 +285,15 @@ void ParallelConnectContext::connectFullMesh(
             std::string ip = getCharIpAddr(sa->sin_addr.s_addr);
             VLOG(0) << "peer " << i << " ip addr: " << ip
                     << ", port: " << sa->sin_port;
-
-            auto start = std::chrono::steady_clock::now();
-            std::chrono::seconds connect_wait_timeout_ =
-                std::chrono::seconds(600);
-            while (true) {
-              auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                  std::chrono::steady_clock::now() - start);
-              if (elapsed > connect_wait_timeout_) {
-                break;
-              }
-              try {
-                transportContext->getPair(i)->connect(addr);
-                break;
-              } catch (...) {
-                VLOG(0) << "gloo connect failed, retrying...";
-              }
-            }
             transportContext->getPair(i)->connect(addr);
           }
           VLOG(0) << "peer connected success";
         },
-        i, connect_threads.size()));
+        i,
+        connect_threads.size()));
   }
-  for (uint32_t i = 0; i < connect_threads.size(); ++i) {
-    connect_threads[i]->join();
+  for (auto& connect_thread : connect_threads) {
+    connect_thread->join();
   }
   device_ = dev;
   transportContext_ = std::move(transportContext);
@@ -361,7 +352,8 @@ void GlooWrapper::Init() {
   }
 #endif
   is_initialized_ = true;
-  VLOG(3) << "gloo initialized done.";
+  VLOG(0) << "gloo initialized done, rank=" << rank_ << ", size=" << size_
+          << ", store_type=" << store_type_;
 }
 
 template std::vector<int64_t> GlooWrapper::AllReduce<int64_t>(

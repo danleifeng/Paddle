@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "paddle/fluid/operators/pull_sparse_v2_op.h"
+
 #include <string>
 
 namespace paddle {
@@ -22,24 +23,26 @@ class PullSparseV2Op : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE_GE(ctx->Inputs("Ids").size(), 1UL,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_GE(ctx->Inputs("Ids").size(),
+                      1UL,
+                      phi::errors::InvalidArgument(
                           "Input(Ids) of PullSparseV2Op can not be null"));
-    PADDLE_ENFORCE_GE(ctx->Outputs("Out").size(), 1UL,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_GE(ctx->Outputs("Out").size(),
+                      1UL,
+                      phi::errors::InvalidArgument(
                           "Output(Out) of PullSparseV2Op can not be null"));
 
     auto hidden_size =
         static_cast<uint32_t>(ctx->Attrs().Get<int>("EmbeddingDim"));
     auto all_ids_dim = ctx->GetInputsDim("Ids");
     const size_t n_ids = all_ids_dim.size();
-    std::vector<framework::DDim> outs_dims;
+    std::vector<phi::DDim> outs_dims;
     outs_dims.resize(n_ids);
     for (size_t i = 0; i < n_ids; ++i) {
       const auto ids_dims = all_ids_dim[i];
-      auto out_dim = framework::vectorize(ids_dims);
+      auto out_dim = common::vectorize(ids_dims);
       out_dim.push_back(hidden_size);
-      outs_dims[i] = framework::make_ddim(out_dim);
+      outs_dims[i] = common::make_ddim(out_dim);
     }
     ctx->SetOutputsDim("Out", outs_dims);
     for (size_t i = 0; i < n_ids; ++i) {
@@ -48,10 +51,9 @@ class PullSparseV2Op : public framework::OperatorWithKernel {
   }
 
  protected:
-  framework::OpKernelType GetExpectedKernelType(
+  phi::KernelKey GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
-    return framework::OpKernelType(framework::proto::VarType::FP32,
-                                   ctx.device_context());
+    return phi::KernelKey(framework::proto::VarType::FP32, ctx.GetPlace());
   }
 };
 
@@ -116,20 +118,24 @@ class PushSparseV2Op : public framework::OperatorWithKernel {
   void InferShape(framework::InferShapeContext* ctx) const override {}
 
  protected:
-  framework::OpKernelType GetExpectedKernelType(
+  phi::KernelKey GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
-    return framework::OpKernelType(OperatorWithKernel::IndicateVarDataType(
-                                       ctx, framework::GradVarName("Out")),
-                                   ctx.device_context());
+    return phi::KernelKey(OperatorWithKernel::IndicateVarDataType(
+                              ctx, framework::GradVarName("Out")),
+                          ctx.GetPlace());
   }
 };
 }  // namespace operators
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OPERATOR(pull_sparse_v2, ops::PullSparseV2Op, ops::PullSparseV2OpMaker,
+REGISTER_OPERATOR(pull_sparse_v2,
+                  ops::PullSparseV2Op,
+                  ops::PullSparseV2OpMaker,
                   ops::PushSparseV2OpMaker<paddle::framework::OpDesc>,
                   ops::PushSparseV2OpMaker<paddle::imperative::OpBase>);
 REGISTER_OPERATOR(push_sparse_v2, ops::PushSparseV2Op);
-REGISTER_OP_CPU_KERNEL(pull_sparse_v2, ops::PullSparseV2CPUKernel<float>)
-REGISTER_OP_CPU_KERNEL(push_sparse_v2, ops::PushSparseV2CPUKernel<float>)
+PD_REGISTER_STRUCT_KERNEL(
+    pull_sparse_v2, CPU, ALL_LAYOUT, ops::PullSparseV2CPUKernel, float) {}
+PD_REGISTER_STRUCT_KERNEL(
+    push_sparse_v2, CPU, ALL_LAYOUT, ops::PushSparseV2CPUKernel, float) {}

@@ -11,17 +11,16 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class FakeInitInferShape : public framework::InferShapeBase {
  public:
   void operator()(framework::InferShapeContext *ctx) const override {
     OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "Out", "FakeInit");
     auto &shape = ctx->Attrs().Get<std::vector<int64_t>>("shape");
-    ctx->SetOutputDim("Out", framework::make_ddim(shape));
+    ctx->SetOutputDim("Out", common::make_ddim(shape));
   }
 };
 
@@ -31,21 +30,21 @@ class FakeInitOp : public framework::OperatorBase {
 
  private:
   void RunImpl(const framework::Scope &scope,
-               const platform::Place &dev_place) const override {
-    framework::Tensor *tensor = nullptr;
+               const phi::Place &dev_place) const override {
+    phi::DenseTensor *tensor = nullptr;
 
     auto &out_var = *scope.FindVar(Output("Out"));
 
-    if (out_var.IsType<framework::LoDTensor>()) {
-      tensor = out_var.GetMutable<framework::LoDTensor>();
-      tensor->Resize(framework::make_ddim(Attr<std::vector<int64_t>>("shape")));
-    } else if (out_var.IsType<framework::SelectedRows>()) {
-      tensor = out_var.GetMutable<framework::SelectedRows>()->mutable_value();
-      tensor->Resize(framework::make_ddim(Attr<std::vector<int64_t>>("shape")));
+    if (out_var.IsType<phi::DenseTensor>()) {
+      tensor = out_var.GetMutable<phi::DenseTensor>();
+      tensor->Resize(common::make_ddim(Attr<std::vector<int64_t>>("shape")));
+    } else if (out_var.IsType<phi::SelectedRows>()) {
+      tensor = out_var.GetMutable<phi::SelectedRows>()->mutable_value();
+      tensor->Resize(common::make_ddim(Attr<std::vector<int64_t>>("shape")));
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
+      PADDLE_THROW(phi::errors::InvalidArgument(
           "fake init op's output only"
-          "supports SelectedRows and LoDTensor"));
+          "supports SelectedRows and phi::DenseTensor"));
     }
   }
 };
@@ -70,12 +69,14 @@ table parameter at trainer side in distributed lookup table.
 )DOC");
   }
 };
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
-    fake_init, ops::FakeInitOp, ops::FakeInitInferShape, ops::FakeInitOpMaker,
+    fake_init,
+    ops::FakeInitOp,
+    ops::FakeInitInferShape,
+    ops::FakeInitOpMaker,
     paddle::framework::EmptyGradOpMaker<paddle::framework::OpDesc>,
     paddle::framework::EmptyGradOpMaker<paddle::imperative::OpBase>,
     ops::FakeInitOpVarTypeInference);

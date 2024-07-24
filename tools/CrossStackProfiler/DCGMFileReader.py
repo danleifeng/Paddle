@@ -12,25 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+import multiprocessing
 import os
 import re
-import json
-import glob
-import logging
 import tempfile
-import argparse
-import pandas as pd
-import multiprocessing
 from multiprocessing import Process
 
-from CspChromeTraceFormatter import ChromeTraceFormatter
-
-from CspFileReader import FileReader
-from CspFileReader import getLogger
-from CspFileReader import dcgmMetricParameterMap
-from CspFileReader import TIME_PATH, DCGM_PATH, NET_PATH, PROFILE_PATH
-from CspFileReader import NETINFO_TRACE_NUM, DCGMINFO_TRACE_NUM, PIPELINEINFO_TRACE_NUM
-from CspFileReader import FILEORGANIZEFORM_BYRANK, FILEORGANIZEFORM_BYTRAINER, FILEORGANIZEFORM_BYOTHER, FILEORGANIZEFORM
+import pandas as pd
+from CspFileReader import (
+    FILEORGANIZEFORM_BYTRAINER,
+    PIPELINEINFO_TRACE_NUM,
+    FileReader,
+    dcgmMetricParameterMap,
+    getLogger,
+)
 
 
 class dcgmFileReader(FileReader):
@@ -43,8 +39,9 @@ class dcgmFileReader(FileReader):
             return self._parseTask(fileFist)
 
         else:
-            self._logger.info("using [%d] process to do this work!" %
-                              processNum)
+            self._logger.info(
+                "using [%d] process to do this work!" % processNum
+            )
             processPool = []
             pidList = []
 
@@ -54,22 +51,27 @@ class dcgmFileReader(FileReader):
             taskList = self._splitTaskListForMultiProcess(fileFist, processNum)
             for task in taskList:
                 subproc = Process(
-                    target=self._parseTask, args=(
+                    target=self._parseTask,
+                    args=(
                         task,
-                        q, ))
+                        q,
+                    ),
+                )
                 processPool.append(subproc)
                 subproc.start()
                 pidList.append(subproc.pid)
                 self._logger.info(
                     "[DCGM reader]: process [%d] has been started, total task num is %d ..."
-                    % (subproc.pid, len(processPool)))
+                    % (subproc.pid, len(processPool))
+                )
 
             for t in processPool:
                 t.join()
                 pidList.remove(t.pid)
                 self._logger.info(
                     "[DCGM reader]: process [%d] has exited! remained %d process!"
-                    % (t.pid, len(pidList)))
+                    % (t.pid, len(pidList))
+                )
 
             isFistProcess = True
             for t in processPool:
@@ -78,14 +80,15 @@ class dcgmFileReader(FileReader):
                     dcgm_data = q.get()
                 else:
                     dcgm_data = pd.concat(
-                        [dcgm_data, q.get()], axis=0, join='outer')
+                        [dcgm_data, q.get()], axis=0, join='outer'
+                    )
 
             return dcgm_data
 
     def _parseTask(self, taskList, q=None):
         is_first = True
         for fileName in taskList:
-            self._logger.info("I am processing %s!" % fileName)
+            self._logger.info(f"I am processing {fileName}!")
             tmp_data = self._parseSingleFile(fileName)
             if tmp_data is None:
                 continue
@@ -95,11 +98,12 @@ class dcgmFileReader(FileReader):
                 dcgm_data = tmp_data
             else:
                 dcgm_data = pd.concat(
-                    [dcgm_data, tmp_data], axis=0, join='outer')
+                    [dcgm_data, tmp_data], axis=0, join='outer'
+                )
         dcgm_data = dcgm_data.dropna()
-        if not q is None:
+        if q is not None:
             q.put(dcgm_data)
-        self._logger.info("I finish processing %s!" % fileName)
+        self._logger.info(f"I finish processing {fileName}!")
         return dcgm_data
 
     def _parseSingleFile(self, fileName):
@@ -120,18 +124,23 @@ class dcgmFileReader(FileReader):
 
             for line in fp:
                 # skip `nvidia-dcgm-dmon.sh` init and fini info lines
-                if 'nv-hostengine' in line or 'dmon' in line or 'Host Engine Listener Started' in line:
+                if (
+                    'nv-hostengine' in line
+                    or 'dmon' in line
+                    or 'Host Engine Listener Started' in line
+                ):
                     continue
 
-                if not line.strip().startswith("GPU") and not line.strip(
-                ).startswith("# Entity"):
+                if not line.strip().startswith(
+                    "GPU"
+                ) and not line.strip().startswith("# Entity"):
                     continue
 
-                # skip non-needed headers (only the header in 1th line was needed)
+                # skip non-needed headers (only the header in 1st line was needed)
                 if line.strip().startswith("# Entity"):
                     line = line.strip()[2:]
 
-                if 'Entity' == line[0:len('Entity')]:
+                if 'Entity' == line[0 : len('Entity')]:
                     if has_header:
                         continue
                     else:
@@ -156,20 +165,18 @@ class dcgmFileReader(FileReader):
 
         return dcgm
 
-    def _getDCGMTraceInfoByGpuId(self,
-                                 groupId,
-                                 gpuId,
-                                 dcgm_data,
-                                 pid_map,
-                                 q=None):
+    def _getDCGMTraceInfoByGpuId(
+        self, groupId, gpuId, dcgm_data, pid_map, q=None
+    ):
         self._logger.info(
-            "Begin to generate dcgm info, groupId = %d, gpuID = %d ..." %
-            (groupId, gpuId))
+            "Begin to generate dcgm info, groupId = %d, gpuID = %d ..."
+            % (groupId, gpuId)
+        )
 
         gpuDcgmData = dcgm_data[dcgm_data['Entity'].isin([gpuId])]
 
         traceEventList = []
-        for metric, parameteList in dcgmMetricParameterMap.items():
+        for metric, parameterList in dcgmMetricParameterMap.items():
             metaInfo = {}
             metaInfo['name'] = 'process_name'
             metaInfo['ph'] = 'M'
@@ -178,14 +185,14 @@ class dcgmFileReader(FileReader):
             traceEventList.append(metaInfo)
 
         for index, row in gpuDcgmData.iterrows():
-            for metric, parameteList in dcgmMetricParameterMap.items():
+            for metric, parameterList in dcgmMetricParameterMap.items():
                 trainerId = int(row['trainerId']) % self._groupSize
                 if trainerId >= self._displaySize:
                     continue
 
                 di = {}
                 # name = "%s_%d" % (metric, trainerId)
-                name = "%s" % (metric)
+                name = f"{metric}"
                 di['name'] = name
                 di['pid'] = pid_map[metric]
                 di['ts'] = self._align_ts(int(row['ts']))
@@ -196,7 +203,7 @@ class dcgmFileReader(FileReader):
                 di['id'] = trainerId
 
                 args = {}
-                for p in parameteList:
+                for p in parameterList:
                     args[p[0]] = row[p[1]]
                 di['args'] = args
 
@@ -230,20 +237,24 @@ class dcgmFileReader(FileReader):
                     gpuId,
                     dcgm_data,
                     pid_map,
-                    q, ))
+                    q,
+                ),
+            )
             processPool.append(subproc)
             subproc.start()
             pidList.append(subproc.pid)
             self._logger.info(
                 "[DCGM info]: process [%d] has been started, total task num is %d ..."
-                % (subproc.pid, 1))
+                % (subproc.pid, 1)
+            )
 
         for t in processPool:
             t.join()
             pidList.remove(t.pid)
             self._logger.info(
-                "[DCGM info]: process [%d] has exited! remained %d process!" %
-                (t.pid, len(pidList)))
+                "[DCGM info]: process [%d] has exited! remained %d process!"
+                % (t.pid, len(pidList))
+            )
 
         dcgmInfo = {}
 

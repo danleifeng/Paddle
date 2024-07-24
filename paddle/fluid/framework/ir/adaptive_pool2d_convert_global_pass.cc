@@ -20,11 +20,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
-AdaptivePool2dConvertGlobalPass::AdaptivePool2dConvertGlobalPass() {
+AdaptivePool2dConvertGlobalPass::AdaptivePool2dConvertGlobalPass() {  // NOLINT
   AddOpCompat(OpCompat("pool2d"))
       .AddInput("X")
       .IsTensor()
@@ -67,15 +65,27 @@ AdaptivePool2dConvertGlobalPass::AdaptivePool2dConvertGlobalPass() {
 
 void AdaptivePool2dConvertGlobalPass::ApplyImpl(ir::Graph* graph) const {
   std::string name_scope = "adaptive_pool2d_convert_global_pass";
+
   FusePassBase::Init(name_scope, graph);
   int num = 0;
   for (const Node* n : graph->Nodes()) {
     if (n->IsOp()) {
       auto* op = n->Op();
-      if (op->HasAttr("adaptive") && op->HasAttr("ksize")) {
-        bool adaptive = BOOST_GET_CONST(bool, op->GetAttr("adaptive"));
+      if (op->Type() == "pool2d" && op->HasAttr("adaptive") &&
+          op->HasAttr("ksize")) {
+        if (op->HasAttr("global_pooling")) {
+          bool global_pooling =
+              PADDLE_GET_CONST(bool, op->GetAttr("global_pooling"));
+          if (global_pooling) continue;
+        }
+        if (!op->HasAttr("pooling_type")) continue;
+        std::string type =
+            PADDLE_GET_CONST(std::string, op->GetAttr("pooling_type"));
+        // adaptive has no effect on max pooling
+        if (type == "max") continue;
+        bool adaptive = PADDLE_GET_CONST(bool, op->GetAttr("adaptive"));
         std::vector<int> ksize =
-            BOOST_GET_CONST(std::vector<int>, op->GetAttr("ksize"));
+            PADDLE_GET_CONST(std::vector<int>, op->GetAttr("ksize"));
         if (adaptive && ksize.size() == 2 && ksize[0] == 1 && ksize[1] == 1) {
           op->SetAttr("adaptive", false);
           op->SetAttr("global_pooling", true);
@@ -84,13 +94,10 @@ void AdaptivePool2dConvertGlobalPass::ApplyImpl(ir::Graph* graph) const {
       }
     }
   }
-  // LOG(INFO) << "---  processed " << num << " nodes";
   AddStatis(num);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(adaptive_pool2d_convert_global_pass,
               paddle::framework::ir::AdaptivePool2dConvertGlobalPass);

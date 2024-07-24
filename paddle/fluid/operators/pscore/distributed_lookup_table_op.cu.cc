@@ -15,8 +15,9 @@
 #include "paddle/fluid/operators/pscore/distributed_lookup_table_op.h"
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
-REGISTER_OP_CUDA_KERNEL(
-    distributed_lookup_table,
-    ops::DistributedLookupTableKernel<plat::CUDADeviceContext, float>);
+PD_REGISTER_STRUCT_KERNEL(distributed_lookup_table,
+                          GPU,
+                          ALL_LAYOUT,
+                          ops::DistributedLookupTableKernel,
+                          float) {}

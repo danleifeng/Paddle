@@ -14,7 +14,6 @@ limitations under the License. */
 
 #pragma once
 
-#include <gflags/gflags.h>
 #include <map>
 #include <memory>
 #include <string>
@@ -24,10 +23,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/node.h"
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/variant.h"
+
+#include "paddle/common/flags.h"
 #include "paddle/utils/any.h"
 
-DECLARE_bool(convert_all_blocks);
+PD_DECLARE_bool(convert_all_blocks);
+PD_DECLARE_bool(all_blocks_convert_trt);
 
 namespace paddle {
 namespace framework {
@@ -44,6 +45,8 @@ namespace details {
 // This attr is not recommended, because the graph should not dependence
 // the program once it is built.
 constexpr char kStaleProgramOpDescs[] = "stale_program_op_descs";
+constexpr char kRemovedVars[] = "removed_vars";
+typedef std::unordered_set<std::shared_ptr<ir::Node>> RemovedVars;
 }  //  namespace details
 
 namespace ir {
@@ -66,7 +69,7 @@ namespace ir {
  *   Write-After-Read
  *     a = op1(x)
  *     x = op2(b)
- *     A control-dependency connection is created bettwen op1 and op2 such that
+ *     A control-dependency connection is created between op1 and op2 such that
  *     op1->op2, so as to ensure correct order.
  *
  *   Write-After-Write
@@ -83,19 +86,22 @@ namespace ir {
 class Graph {
  public:
   // Construct a main_graph with some sub_graphs
-  explicit Graph(const ProgramDesc &program);
+  TEST_API explicit Graph(const ProgramDesc &program);
 
   // Construct a main_graph with some sub_graphs, and the 1st sub_graph is
   // constructed with ops[start_op_index, end_op_index)
-  Graph(const ProgramDesc &program, const int64_t start_op_index,
+  Graph(const ProgramDesc &program,
+        const int64_t start_op_index,
         const int64_t end_op_index);
 
   // Construct a sub_graph
   Graph(const BlockDesc &block, const Graph *main_graph);
 
   // Construct a sub_graph with ops[start_op_index, end_op_index)
-  Graph(const BlockDesc &block, const Graph *main_graph,
-        const int64_t start_op_index, const int64_t end_op_index);
+  Graph(const BlockDesc &block,
+        const Graph *main_graph,
+        const int64_t start_op_index,
+        const int64_t end_op_index);
 
   virtual ~Graph() {
     for (auto &attr : attrs_) {
@@ -144,15 +150,17 @@ class Graph {
       }
     }
     PADDLE_ENFORCE_EQ(
-        Has(attr_name), true,
-        platform::errors::PreconditionNotMet(
+        Has(attr_name),
+        true,
+        phi::errors::PreconditionNotMet(
             "%s attribute not registered for current graph.", attr_name));
     try {
       return *paddle::any_cast<AttrType *>(attrs_.at(attr_name));
     } catch (paddle::bad_any_cast &) {
-      PADDLE_THROW(platform::errors::InvalidArgument(
+      PADDLE_THROW(phi::errors::InvalidArgument(
           "Invalid attribute type of %s, expected: %s, received: %s.",
-          attr_name, platform::demangle(typeid(AttrType *).name()),  // NOLINT
+          attr_name,
+          platform::demangle(typeid(AttrType *).name()),  // NOLINT
           platform::demangle(attrs_.at(attr_name).type().name())));
     }
   }
@@ -165,8 +173,9 @@ class Graph {
       }
     }
     PADDLE_ENFORCE_EQ(
-        attrs_.count(attr_name), 0,
-        platform::errors::AlreadyExists(
+        attrs_.count(attr_name),
+        0,
+        phi::errors::AlreadyExists(
             "The attribute %s to be set already exists in the graph.",
             attr_name));
     attrs_[attr_name] = attr;
@@ -184,10 +193,11 @@ class Graph {
       }
     }
     PADDLE_ENFORCE_EQ(
-        attrs_.count(attr_name), 0,
-        platform::errors::AlreadyExists("The attribute %s to be set(not owned) "
-                                        "already exists in the graph.",
-                                        attr_name));
+        attrs_.count(attr_name),
+        0,
+        phi::errors::AlreadyExists("The attribute %s to be set(not owned) "
+                                   "already exists in the graph.",
+                                   attr_name));
     attrs_[attr_name] = attr;
     attr_dels_[attr_name] = []() {};
   }
@@ -199,8 +209,9 @@ class Graph {
       }
     }
     PADDLE_ENFORCE_NE(
-        attrs_.count(attr_name), 0,
-        platform::errors::NotFound(
+        attrs_.count(attr_name),
+        0,
+        phi::errors::NotFound(
             "The attribute %s to be erased does not exist in the graph.",
             attr_name));
     attr_dels_[attr_name]();
@@ -225,11 +236,13 @@ class Graph {
       }
     }
     PADDLE_ENFORCE_NOT_NULL(
-        var_desc, platform::errors::InvalidArgument(
-                      "The VarDesc used to create variable node is null."));
+        var_desc,
+        phi::errors::InvalidArgument(
+            "The VarDesc used to create variable node is null."));
     auto *x =
         AddNode(new ir::Node(var_desc, block_id == -1 ? block_id_ : block_id));
     x->SetId(num_node_created_++);
+    x->SetGraphId(block_id_);
     return x;
   }
 
@@ -241,10 +254,12 @@ class Graph {
       }
     }
     PADDLE_ENFORCE_NOT_NULL(
-        op_desc, platform::errors::InvalidArgument(
-                     "The OpDesc used to create operator node is null."));
+        op_desc,
+        phi::errors::InvalidArgument(
+            "The OpDesc used to create operator node is null."));
     auto *x = AddNode(new ir::Node(op_desc));
     x->SetId(num_node_created_++);
+    x->SetGraphId(block_id_);
     return x;
   }
 
@@ -258,11 +273,13 @@ class Graph {
       }
     }
     // TODO(panyx0718): control var name should be really unique.
-    const std::string name = string::Sprintf(
-        "%s@%llu", static_cast<const char *>(ir::Node::kControlDepVarName),
-        num_node_created_);
+    const std::string name =
+        string::Sprintf("%s@%llu",
+                        static_cast<const char *>(ir::Node::kControlDepVarName),
+                        num_node_created_);
     auto *x = AddNode(new ir::Node(name, ir::Node::Type::kVariable, block_id_));
     x->SetId(num_node_created_++);
+    x->SetGraphId(block_id_);
     return x;
   }
 
@@ -276,6 +293,7 @@ class Graph {
     }
     auto *x = AddNode(new ir::Node(name, type, block_id_));
     x->SetId(num_node_created_++);
+    x->SetGraphId(block_id_);
     return x;
   }
 
@@ -302,8 +320,9 @@ class Graph {
         return GetSubGraph(0)->RemoveNode(node);
       }
     }
-    PADDLE_ENFORCE_EQ(node_set_.find(node) != node_set_.end(), true,
-                      platform::errors::PreconditionNotMet(
+    PADDLE_ENFORCE_EQ(node_set_.find(node) != node_set_.end(),
+                      true,
+                      phi::errors::PreconditionNotMet(
                           "The node to be removed does not exist."));
     std::unique_ptr<ir::Node> ret;
     ret.reset(nodes_.at(node).release());
@@ -347,8 +366,9 @@ class Graph {
         return GetSubGraph(0)->AddNode(node);
       }
     }
-    PADDLE_ENFORCE_EQ(node_set_.find(node) == node_set_.end(), true,
-                      platform::errors::PreconditionNotMet(
+    PADDLE_ENFORCE_EQ(node_set_.find(node) == node_set_.end(),
+                      true,
+                      phi::errors::PreconditionNotMet(
                           "The node to be added already exists."));
     nodes_[node].reset(node);
     node_set_.insert(node);
@@ -364,13 +384,16 @@ class Graph {
 
   bool IsMainGraph() const { return main_graph_ == nullptr; }
 
+  const Graph *GetMainGraph() const { return main_graph_; }
+
   Graph *GetSubGraph(const size_t idx) const {
     PADDLE_ENFORCE_EQ(
-        this->IsMainGraph(), true,
-        platform::errors::InvalidArgument("This graph is not main_graph"));
-    PADDLE_ENFORCE_LT(
-        idx, sub_graphs_.size(),
-        platform::errors::InvalidArgument("Invalid sub_graph index"));
+        this->IsMainGraph(),
+        true,
+        phi::errors::InvalidArgument("This graph is not main_graph"));
+    PADDLE_ENFORCE_LT(idx,
+                      sub_graphs_.size(),
+                      phi::errors::InvalidArgument("Invalid sub_graph index"));
     return sub_graphs_.at(idx).get();
   }
 
@@ -385,35 +408,55 @@ class Graph {
 
   size_t SubGraphsSize() const {
     PADDLE_ENFORCE_EQ(
-        this->IsMainGraph(), true,
-        platform::errors::InvalidArgument("This graph is not main_graph"));
+        this->IsMainGraph(),
+        true,
+        phi::errors::InvalidArgument("This graph is not main_graph"));
     return sub_graphs_.size();
+  }
+
+  std::vector<std::string> AttrNames() const {
+    if (FLAGS_convert_all_blocks) {
+      if (IsMainGraph()) {
+        return GetSubGraph(0)->AttrNames();
+      }
+    }
+    std::vector<std::string> res;
+    res.reserve(attrs_.size());
+    for (auto &attr : attrs_) {
+      res.push_back(attr.first);
+    }
+    return res;
   }
 
  private:
   // TODO(levi): delete this interface after when we can convert all
   // blocks into sub_graphs.
   std::map<std::string, std::vector<ir::Node *>> InitFromProgram(
-      const ProgramDesc &program, const int64_t start_op_index,
+      const ProgramDesc &program,
+      const int64_t start_op_index,
       const int64_t end_op_index);
 
   std::map<std::string, std::vector<ir::Node *>> InitFromBlock(
-      const BlockDesc &block, const int64_t start_op_index,
+      const BlockDesc &block,
+      const int64_t start_op_index,
       const int64_t end_op_index);
 
   void ReleaseSubGraphs() {
     PADDLE_ENFORCE_EQ(
-        this->IsMainGraph(), true,
-        platform::errors::InvalidArgument("This graph is not main_graph"));
+        this->IsMainGraph(),
+        true,
+        phi::errors::InvalidArgument("This graph is not main_graph"));
     sub_graphs_.clear();
   }
 
   void AddSubGraph(std::unique_ptr<Graph> sub_graph) {
     PADDLE_ENFORCE_EQ(
-        this->IsMainGraph(), true,
-        platform::errors::InvalidArgument("This graph is not main_graph"));
-    PADDLE_ENFORCE_EQ(sub_graphs_.size(), sub_graph->block_id_,
-                      platform::errors::InvalidArgument(
+        this->IsMainGraph(),
+        true,
+        phi::errors::InvalidArgument("This graph is not main_graph"));
+    PADDLE_ENFORCE_EQ(sub_graphs_.size(),
+                      sub_graph->block_id_,
+                      phi::errors::InvalidArgument(
                           "sub_graph idx is not equal to block_id_"));
     sub_graphs_.push_back(std::move(sub_graph));
   }
@@ -433,7 +476,7 @@ class Graph {
   std::unordered_set<ir::Node *> node_set_;
   size_t num_node_created_{0};  // help to generate a unique node id.
   // NOTE(Aurelius84): Whether is constructed with partial ProgramDesc.
-  // In case of @to_static, whole trainning program is splited into two
+  // In case of @to_static, whole training program is splited into two
   // parts: forward graph and backward graph, which can be executed
   // independently.
   bool is_partial_{false};

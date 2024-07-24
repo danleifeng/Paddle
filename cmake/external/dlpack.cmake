@@ -15,32 +15,21 @@
 include(ExternalProject)
 
 set(DLPACK_PREFIX_DIR ${THIRD_PARTY_PATH}/dlpack)
-set(DLPACK_SOURCE_DIR ${THIRD_PARTY_PATH}/dlpack/src/extern_dlpack)
-
-set(DLPACK_REPOSITORY ${GIT_URL}/dmlc/dlpack.git)
-set(DLPACK_TAG        v0.4)
-
-cache_third_party(extern_dlpack
-    REPOSITORY    ${DLPACK_REPOSITORY}
-    TAG           ${DLPACK_TAG}
-    DIR           DLPACK_SOURCE_DIR)
-
-set(DLPACK_INCLUDE_DIR  ${DLPACK_SOURCE_DIR}/include)
-include_directories(${DLPACK_INCLUDE_DIR})
+set(DLPACK_TAG v0.4)
+set(DLPACK_INCLUDE_DIR ${THIRD_PARTY_PATH}/dlpack/src/extern_dlpack/include)
+set(SOURCE_DIR ${PADDLE_SOURCE_DIR}/third_party/dlpack)
+include_directories(${SOURCE_DIR}/include)
 
 ExternalProject_Add(
   extern_dlpack
   ${EXTERNAL_PROJECT_LOG_ARGS}
-  ${SHALLOW_CLONE}
-  "${DLPACK_DOWNLOAD_CMD}"
-  PREFIX          ${DLPACK_PREFIX_DIR}
-  SOURCE_DIR      ${DLPACK_SOURCE_DIR}
-  UPDATE_COMMAND    ""
+  SOURCE_DIR ${SOURCE_DIR}
+  PREFIX ${DLPACK_PREFIX_DIR}
+  UPDATE_COMMAND ""
   CONFIGURE_COMMAND ""
-  BUILD_COMMAND     ""
-  INSTALL_COMMAND   ""
-  TEST_COMMAND      ""
-)
+  BUILD_COMMAND ""
+  INSTALL_COMMAND ""
+  TEST_COMMAND "")
 
 add_library(dlpack INTERFACE)
 

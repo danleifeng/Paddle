@@ -9,24 +9,23 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
-    defined(PADDLE_WITH_ASCEND_CL)
-#include <float.h>
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include <cfloat>
+
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/framework/executor_gc_helper.h"
 #include "paddle/fluid/platform/device_context.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class TrainerDesc;
 
 uint64_t SectionWorker::batch_id_(0);
 
 void SectionWorker::Initialize(const TrainerDesc &desc) {
-  dev_ctx_ = platform::DeviceContextPool::Instance().Get(place_);
-  program_.reset(
-      new ProgramDesc(desc.section_param().section_config().program_desc()));
+  dev_ctx_ = phi::DeviceContextPool::Instance().Get(place_);
+  program_ = std::make_unique<ProgramDesc>(
+      desc.section_param().section_config().program_desc());
   for (auto &op_desc : program_->Block(0).AllOps()) {
     ops_.push_back(OpRegistry::CreateOp(*op_desc));
   }
@@ -52,7 +51,7 @@ void SectionWorker::Initialize(const TrainerDesc &desc) {
     } else if (op_role == static_cast<int>(OpRole::kOptimize)) {
       optimizer_ops_.push_back(op.get());
     } else {
-      PADDLE_THROW(platform::errors::PreconditionNotMet(
+      PADDLE_THROW(phi::errors::PreconditionNotMet(
           "The op %s is None of LRSched, Forward, Backward or Optimize.",
           op->Type()));
     }
@@ -73,8 +72,9 @@ void SectionWorker::Initialize(const TrainerDesc &desc) {
 
     auto var_name = op->InputVars()[0];
     VLOG(3) << "Pipeline backward send var " << var_name;
-    PADDLE_ENFORCE_NE(is_first_stage, true,
-                      platform::errors::PreconditionNotMet(
+    PADDLE_ENFORCE_NE(is_first_stage,
+                      true,
+                      phi::errors::PreconditionNotMet(
                           "The first pipeline stage must do not have a "
                           "backward send var, please check var %s",
                           var_name));
@@ -85,12 +85,13 @@ void SectionWorker::Initialize(const TrainerDesc &desc) {
 }
 
 void SectionWorker::PrepareUnusedVar() {
-  VLOG(5) << "begin prepare the unsed vars";
+  VLOG(5) << "begin prepare the unused vars";
   unused_vars_ = GetUnusedVars(program_->Block(0), ops_, skip_vars_);
 }
 
 void SectionWorker::RunForward(
-    int micro_id, std::unique_ptr<GarbageCollector> &gc,
+    int micro_id,
+    std::unique_ptr<GarbageCollector> &gc,
     std::unordered_map<const OperatorBase *, std::vector<std::string>>
         &unused_vars_) {
   std::vector<OperatorBase *> &forward_tmp =
@@ -100,14 +101,15 @@ void SectionWorker::RunForward(
             << micro_id;
     op->Run(*microbatch_scopes_[micro_id], place_);
     if (gc) {
-      DeleteUnusedTensors(*microbatch_scopes_[micro_id], op, unused_vars_,
-                          gc.get());
+      DeleteUnusedTensors(
+          *microbatch_scopes_[micro_id], op, unused_vars_, gc.get());
     }
   }
 }
 
 void SectionWorker::RunBackward(
-    int micro_id, std::unique_ptr<GarbageCollector> &gc,
+    int micro_id,
+    std::unique_ptr<GarbageCollector> &gc,
     std::unordered_map<const OperatorBase *, std::vector<std::string>>
         &unused_vars_) {
   for (auto &op : backward_ops_) {
@@ -115,8 +117,8 @@ void SectionWorker::RunBackward(
             << micro_id;
     op->Run(*microbatch_scopes_[micro_id], place_);
     if (gc) {
-      DeleteUnusedTensors(*microbatch_scopes_[micro_id], op, unused_vars_,
-                          gc.get());
+      DeleteUnusedTensors(
+          *microbatch_scopes_[micro_id], op, unused_vars_, gc.get());
     }
   }
 }
@@ -129,8 +131,10 @@ void SectionWorker::RunUpdate(
     VLOG(3) << "Update: running op " << op->Type();
     op->Run(*microbatch_scopes_[num_microbatches_ - 1], place_);
     if (gc) {
-      DeleteUnusedTensors(*microbatch_scopes_[num_microbatches_ - 1], op,
-                          unused_vars_, gc.get());
+      DeleteUnusedTensors(*microbatch_scopes_[num_microbatches_ - 1],
+                          op,
+                          unused_vars_,
+                          gc.get());
     }
   }
 }
@@ -151,7 +155,7 @@ void SectionWorker::RunFThenB(std::unique_ptr<GarbageCollector> &gc) {
 }
 
 void SectionWorker::Run1F1B(std::unique_ptr<GarbageCollector> &gc) {
-  // 1F1B scheduler, which runs forward phase and backward phase altertively
+  // 1F1B scheduler, which runs forward phase and backward phase alternatively
   // after startup phase. For a stage, the number of microbatches for
   // startup is num_pipeline_stages_ - pipeline_stage_ - 1, where
   // num_pipeline_stages_ is the total number of pipeline stages and
@@ -161,11 +165,13 @@ void SectionWorker::Run1F1B(std::unique_ptr<GarbageCollector> &gc) {
           << ", num_stages: " << num_pipeline_stages_
           << ", stage:" << pipeline_stage_;
   PADDLE_ENFORCE_GT(
-      num_microbatches_, startup_steps,
-      platform::errors::InvalidArgument(
+      num_microbatches_,
+      startup_steps,
+      phi::errors::InvalidArgument(
           "To use pipeline with 1F1B scheduler, please make sure number of "
           "microbatches (%d) is than startup steps (%d).",
-          num_microbatches_, startup_steps));
+          num_microbatches_,
+          startup_steps));
   int fw_step = 0;
   int bw_step = 0;
 
@@ -182,8 +188,8 @@ void SectionWorker::Run1F1B(std::unique_ptr<GarbageCollector> &gc) {
 
     // delete backward send var at step=(bw_step - 2)
     if (gc && bw_step >= 2) {
-      DeleteUnusedTensors(*microbatch_scopes_[bw_step - 2], backward_send_vars_,
-                          gc.get());
+      DeleteUnusedTensors(
+          *microbatch_scopes_[bw_step - 2], backward_send_vars_, gc.get());
     }
 
     RunBackward(bw_step, gc, unused_vars_);
@@ -208,8 +214,8 @@ void SectionWorker::Run1F1B(std::unique_ptr<GarbageCollector> &gc) {
     // NOTE(wangxi): program must add sync backward send comm at update
     // delete backward send var
     for (int i = reserve_bw_send_step; i < num_microbatches_; ++i) {
-      DeleteUnusedTensors(*microbatch_scopes_[i], backward_send_vars_,
-                          gc.get());
+      DeleteUnusedTensors(
+          *microbatch_scopes_[i], backward_send_vars_, gc.get());
     }
   }
 }
@@ -222,30 +228,16 @@ void SectionWorker::TrainFiles() {
   std::unique_ptr<GarbageCollector> gc;
   if (max_memory_size >= 0) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-    if (platform::is_gpu_place(place_)) {
+    if (phi::is_gpu_place(place_)) {
       if (IsFastEagerDeletionModeEnabled()) {
-        gc.reset(new UnsafeFastGPUGarbageCollector(
-            BOOST_GET_CONST(platform::CUDAPlace, place_), max_memory_size));
+        gc = std::make_unique<UnsafeFastGPUGarbageCollector>(place_,
+                                                             max_memory_size);
       }
-    }
-#elif defined(PADDLE_WITH_ASCEND_CL)
-    if (IsFastEagerDeletionModeEnabled()) {
-      VLOG(4) << "Use unsafe fast gc for NPU.";
-      gc.reset(new NPUUnsafeFastGarbageCollector(
-          BOOST_GET_CONST(platform::NPUPlace, place_), max_memory_size));
-    } else {
-      PADDLE_THROW(platform::errors::Unimplemented(
-          "Please set FLAGS_fast_eager_deletion_mode=true to use "
-          "GarbageCollector on NPU."));
-      // TODO(zhiqiu): fix bugs and enable NPUDefaultStreamGarbageCollector.
-      VLOG(4) << "Use default stream gc for NPU.";
-      gc.reset(new NPUDefaultStreamGarbageCollector(
-          BOOST_GET_CONST(platform::NPUPlace, place_), max_memory_size));
     }
 #endif
   }  // max_memory_size >= 0
 
-  if (schedule_mode_ == 0) {
+  if (schedule_mode_ == 0) {  // NOLINT
     RunFThenB(gc);
   } else {
     Run1F1B(gc);
@@ -255,6 +247,5 @@ void SectionWorker::TrainFiles() {
   ++batch_id_;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 #endif

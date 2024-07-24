@@ -27,7 +27,6 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_set.h"
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/framework/fleet/heter_context.h"
-//#include "paddle/fluid/framework/fleet/heter_wrapper.h"
 #include "paddle/fluid/framework/heter_util.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/program_desc.h"
@@ -35,13 +34,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/trainer_desc.pb.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #include "paddle/fluid/operators/reader/blocking_queue.h"
-#include "paddle/fluid/platform/port.h"
+#include "paddle/phi/common/port.h"
 
 namespace paddle {
 namespace framework {
 
 class Dataset;
-class LoDTensor;
 class ProgramDesc;
 class PullDenseWorker;
 class Scope;
@@ -65,13 +63,14 @@ class TrainerBase {
   virtual void Initialize(const TrainerDesc& trainer_desc,
                           Dataset* data_set) = 0;
   virtual void InitTrainerEnv(const ProgramDesc& main_program,
-                              const platform::Place& place) = 0;
+                              const phi::Place& place) = 0;
   virtual void InitOtherEnv(const ProgramDesc& main_program) = 0;
   virtual void Run() = 0;
   virtual void Finalize() = 0;
   virtual Scope* GetWorkerScope(int thread_id) = 0;
   virtual void InitDumpEnv() = 0;
   virtual void DumpWork(int tid);
+  virtual void ResetDataset(Dataset* dataset_ptr UNUSED) {}
 
  protected:
   virtual std::string GetDumpPath(int tid) = 0;
@@ -91,6 +90,7 @@ class TrainerBase {
   std::string dump_converter_;
   std::vector<std::string> dump_param_;
   std::vector<std::string> dump_fields_;
+  std::string dump_fields_mode_;
   int dump_thread_num_;
   std::vector<std::thread> dump_thread_;
   std::shared_ptr<paddle::framework::ChannelObject<std::string>> queue_;
@@ -105,33 +105,39 @@ class MultiTrainer : public TrainerBase {
   virtual ~MultiTrainer() {}
   virtual void Initialize(const TrainerDesc& trainer_desc, Dataset* data_set);
   virtual void InitTrainerEnv(const ProgramDesc& main_program,
-                              const platform::Place& place);
+                              const phi::Place& place);
   virtual void InitOtherEnv(const ProgramDesc& main_program);
   virtual void Run();
   virtual void Finalize();
   virtual void InitDumpEnv();
   virtual Scope* GetWorkerScope(int thread_id);
   virtual std::string GetDumpPath(int tid);
-
+#ifdef PADDLE_WITH_HETERPS
+  virtual void ResetDataset(Dataset* dataset_ptr);
+#endif
   template <typename T>
-  void MergeToRootScope(LoDTensor* root_tensor, LoDTensor* thread_tensor);
+  void MergeToRootScope(phi::DenseTensor* root_tensor,
+                        phi::DenseTensor* thread_tensor);
 #ifdef PADDLE_WITH_HETERPS
 
   void MergeDenseParam();
 #endif
 
  protected:
+  void MergeWorkerVars(void);
   int thread_num_;
-  std::vector<std::thread> threads_;
   std::vector<DataFeed*> readers_;
   std::vector<std::shared_ptr<DeviceWorker>> workers_;
   std::vector<std::string> need_merge_var_names_;
+  std::vector<std::string> trainable_param_;
 #ifdef PADDLE_WITH_HETERPS
-  std::vector<platform::Place> places_;
+  std::vector<phi::Place> places_;
 #endif
   int mpi_rank_;
   int mpi_size_;
   int dump_file_num_;
+  int use_ps_gpu_;
+  int use_gpu_graph_;
 };
 
 class DistMultiTrainer : public MultiTrainer {
@@ -140,12 +146,13 @@ class DistMultiTrainer : public MultiTrainer {
   virtual ~DistMultiTrainer() {}
   virtual void Initialize(const TrainerDesc& trainer_desc, Dataset* data_set);
   virtual void InitTrainerEnv(const ProgramDesc& main_program,
-                              const platform::Place& place);
+                              const phi::Place& place);
   virtual void InitOtherEnv(const ProgramDesc& main_program);
   virtual void Run();
   virtual void Finalize();
   template <typename T>
-  void MergeToRootScope(LoDTensor* root_tensor, LoDTensor* thread_tensor);
+  void MergeToRootScope(phi::DenseTensor* root_tensor,
+                        phi::DenseTensor* thread_tensor);
   virtual void InitDumpEnv();
   virtual Scope* GetWorkerScope(int thread_id);
   virtual void RegisterHeterCallback();
@@ -156,7 +163,7 @@ class DistMultiTrainer : public MultiTrainer {
 
 #if (defined PADDLE_WITH_CUDA || defined PADDLE_WITH_HIP || \
      defined PADDLE_WITH_XPU) &&                            \
-    (defined PADDLE_WITH_PSLIB)
+    (defined PADDLE_WITH_PSLIB) && (!defined(PADDLE_WITH_HETERPS))
 class HeterServiceContext {
  public:
   HeterServiceContext() {}
@@ -188,7 +195,7 @@ class HeterXpuTrainer : public TrainerBase {
   }
   virtual void Initialize(const TrainerDesc& trainer_desc, Dataset* data_set);
   virtual void InitTrainerEnv(const ProgramDesc& main_program,
-                              const platform::Place& place);
+                              const phi::Place& place);
   virtual void InitOtherEnv(const ProgramDesc& main_program);
   virtual void Run();
   virtual void Finalize();
@@ -203,17 +210,20 @@ class HeterXpuTrainer : public TrainerBase {
   virtual void InitDumpEnv() {}
   template <typename T>
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  void HeterMemCpy(LoDTensor* tensor, LoDTensor* root_tensor,
-                   const paddle::platform::Place& thread_place,
+  void HeterMemCpy(phi::DenseTensor* tensor,
+                   phi::DenseTensor* root_tensor,
+                   const phi::Place& thread_place,
                    gpuStream_t stream);
 #endif
 #ifdef PADDLE_WITH_XPU
-  void HeterMemCpy(LoDTensor* thread_tensor, LoDTensor* root_tensor,
-                   const paddle::platform::Place& thread_place);
+  void HeterMemCpy(phi::DenseTensor* thread_tensor,
+                   phi::DenseTensor* root_tensor,
+                   const phi::Place& thread_place);
 #endif
   void CreateThreadParam(const ProgramDesc& program, int num);
   template <typename T>
-  void MergeToRootScope(LoDTensor* root_tensor, LoDTensor* thread_tensor);
+  void MergeToRootScope(phi::DenseTensor* root_tensor,
+                        phi::DenseTensor* thread_tensor);
   int EndPass(const HeterRequest* request, HeterResponse* response);
   int StopService(const HeterRequest* request, HeterResponse* response);
 
@@ -225,7 +235,7 @@ class HeterXpuTrainer : public TrainerBase {
   int xpu_begin_op_index_;
   int xpu_end_op_index_;
   bool running_;
-  paddle::platform::Place place_;
+  phi::Place place_;
   std::mutex mutex_;
   ProgramDesc program_;
   std::condition_variable cond_;
@@ -236,7 +246,7 @@ class HeterXpuTrainer : public TrainerBase {
   std::vector<std::string> op_names_;
   std::vector<Scope*> place_scopes_;
   BtObjectPool<HeterServiceContext> object_pool_;
-  std::vector<platform::Place> places_;
+  std::vector<phi::Place> places_;
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   std::vector<gpuStream_t> copy_streams_;
   std::vector<gpuEvent_t> events_;
@@ -245,7 +255,8 @@ class HeterXpuTrainer : public TrainerBase {
 
 #endif
 
-#if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL) && \
+#if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL || \
+     defined PADDLE_WITH_XPU_BKCL) &&                        \
     (defined PADDLE_WITH_PSLIB)
 class PSGPUTrainer : public TrainerBase {
  public:
@@ -253,7 +264,7 @@ class PSGPUTrainer : public TrainerBase {
   virtual ~PSGPUTrainer() {}
   virtual void Initialize(const TrainerDesc& trainer_desc, Dataset* data_set);
   virtual void InitTrainerEnv(const ProgramDesc& main_program,
-                              const platform::Place& place);
+                              const phi::Place& place);
   virtual void InitOtherEnv(const ProgramDesc& main_program);
   virtual void Run();
   virtual void Finalize();
@@ -263,11 +274,13 @@ class PSGPUTrainer : public TrainerBase {
     new (&program_) ProgramDesc(main_program);
   }
   virtual std::string GetDumpPath(int tid);
-  virtual void InitDumpEnv() override;
+  void InitDumpEnv() override;
   virtual void MergeDenseParam();
 
   template <typename T>
-  void MergeToRootScope(LoDTensor* root_tensor, LoDTensor* thread_tensor);
+  void MergeToRootScope(phi::DenseTensor* root_tensor,
+                        phi::DenseTensor* thread_tensor);
+  void InitializeGPUServer(const TrainerDesc& trainer_desc);
 
  protected:
   Dataset* dataset_;
@@ -276,11 +289,11 @@ class PSGPUTrainer : public TrainerBase {
   std::vector<std::string> need_merge_var_names_;
   std::vector<std::string> trainable_param_;
   float scale_datanorm_;
-  paddle::platform::Place place_;
+  phi::Place place_;
   ProgramDesc program_;
   std::shared_ptr<paddle::framework::PullDenseWorker> pull_dense_worker_;
   std::vector<std::shared_ptr<DeviceWorker>> workers_;
-  std::vector<platform::Place> places_;
+  std::vector<phi::Place> places_;
   // ps-gpu
   std::vector<std::thread> threads_;
   int use_ps_gpu_;
@@ -288,18 +301,20 @@ class PSGPUTrainer : public TrainerBase {
   int mpi_rank_;
   int mpi_size_;
   int dump_file_num_;
+
+  // _ps_param for gpups optimizer config
+  ::paddle::PSParameter _ps_param;
 };
 #endif
 
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
-    defined(PADDLE_WITH_ASCEND_CL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 class PipelineTrainer : public TrainerBase {
  public:
   PipelineTrainer() {}
   ~PipelineTrainer() override {}
   void Initialize(const TrainerDesc& trainer_desc, Dataset* data_set) override;
   void InitTrainerEnv(const ProgramDesc& main_program,
-                      const platform::Place& place) override;
+                      const phi::Place& place) override;
   void InitOtherEnv(const ProgramDesc& main_program) override;
   void Run() override;
   void Finalize() override;
@@ -310,7 +325,7 @@ class PipelineTrainer : public TrainerBase {
 
  protected:
   int num_microbatches_;
-  platform::Place place_;
+  phi::Place place_;
   std::vector<std::string> skip_vars_;
   TrainerDesc trainer_desc_;
 
@@ -320,8 +335,56 @@ class PipelineTrainer : public TrainerBase {
   // microbatch_scopes_: [microbatch_id]
   std::vector<Scope*> microbatch_scopes_;
 
-  void CopyParameters(int microbatch_id, const ProgramDesc& program,
-                      const platform::Place& place);
+  void CopyParameters(int microbatch_id,
+                      const ProgramDesc& program,
+                      const phi::Place& place);
+};
+#endif
+
+#if defined(PADDLE_WITH_PSCORE)
+class HeterPipelineTrainer : public TrainerBase {
+ public:
+  HeterPipelineTrainer() {}
+  ~HeterPipelineTrainer() override {}
+  void Initialize(const TrainerDesc& trainer_desc, Dataset* data_set) override;
+  void InitTrainerEnv(const ProgramDesc& main_program,
+                      const phi::Place& place) override;
+  void InitOtherEnv(const ProgramDesc& main_program) override;
+  void Run() override;
+  void Finalize() override;
+  Scope* GetWorkerScope(int thread_id) override;
+  void InitDumpEnv() override;
+  std::string GetDumpPath(int tid) override;
+  void ResetDataset(Dataset* dataset_ptr) override;
+
+ protected:
+  int trainer_id_;             // stage_trainer_id
+  std::vector<int> trainers_;  //  std::vector<int> trainers
+  int thread_num_;
+  std::vector<std::thread> threads_;
+
+  int num_microbatches_;
+  phi::Place place_;
+  TrainerDesc trainer_desc_;
+
+  int num_pipeline_stages_;
+  int pipeline_stage_;
+  std::unordered_map<int, std::shared_ptr<paddle::framework::DeviceWorker>>
+      workers_;
+
+  std::shared_ptr<
+      std::unordered_map<int,
+                         std::shared_ptr<::paddle::framework::BlockingQueue<
+                             std::pair<std::string, int>>>>>
+      task_queue_;
+
+  phi::DeviceContext* dev_ctx_ = nullptr;
+
+  std::shared_ptr<std::unordered_map<int, Scope*>> mini_scopes_;
+  std::shared_ptr<std::unordered_map<int, std::shared_ptr<std::vector<Scope*>>>>
+      micro_scopes_;
+
+  std::unique_ptr<std::thread> listen_ptr_ = nullptr;
 };
 #endif
 

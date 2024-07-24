@@ -13,35 +13,36 @@
 // limitations under the License.
 
 #include "paddle/fluid/platform/device_event.h"
+
 #include "glog/logging.h"
 #include "gtest/gtest.h"
+#include "paddle/phi/common/place.h"
 
-using ::paddle::platform::kCUDA;
 using ::paddle::platform::kCPU;
+using ::paddle::platform::kCUDA;
 
 using paddle::platform::DeviceEvent;
-using paddle::platform::DeviceContextPool;
+using phi::DeviceContextPool;
 
 #ifdef PADDLE_WITH_CUDA
 #include <cuda_runtime.h>
 
 TEST(DeviceEvent, CUDA) {
   VLOG(1) << "In Test";
-  using paddle::platform::CUDAPlace;
+  using phi::GPUPlace;
 
   auto& pool = DeviceContextPool::Instance();
-  auto place = CUDAPlace(0);
-  auto* context =
-      static_cast<paddle::platform::CUDADeviceContext*>(pool.Get(place));
+  auto place = GPUPlace(0);
+  auto* context = static_cast<phi::GPUContext*>(pool.Get(place));
 
   ASSERT_NE(context, nullptr);
   // case 1. test for event_creator
-  DeviceEvent event(place);
+  DeviceEvent event(place, paddle::platform::GenerateDeviceEventFlag());
   ASSERT_NE(event.GetEvent().get(), nullptr);
+  bool status = event.Query();
+  ASSERT_EQ(status, true);
   // case 2. test for event_recorder
   event.Record(context);
-  bool status = event.Query();
-  ASSERT_EQ(status, false);
   // case 3. test for event_finisher
   event.Finish();
   status = event.Query();
@@ -52,8 +53,8 @@ TEST(DeviceEvent, CUDA) {
   int size = 1000000 * sizeof(float);
   cudaMallocHost(reinterpret_cast<void**>(&src_fp32), size);
   cudaMalloc(reinterpret_cast<void**>(&dst_fp32), size);
-  cudaMemcpyAsync(dst_fp32, src_fp32, size, cudaMemcpyHostToDevice,
-                  context->stream());
+  cudaMemcpyAsync(
+      dst_fp32, src_fp32, size, cudaMemcpyHostToDevice, context->stream());
   event.Record(context);  // step 1. record it
   status = event.Query();
   ASSERT_EQ(status, false);
@@ -62,7 +63,7 @@ TEST(DeviceEvent, CUDA) {
   status = event.Query();
   ASSERT_EQ(status, false);  // async
 
-  event.Wait(kCPU, context);  // step 3. EventSynchornize
+  event.Wait(kCPU, context);  // step 3. EventSynchronize
   status = event.Query();
   ASSERT_EQ(status, true);  // sync
 
@@ -72,16 +73,67 @@ TEST(DeviceEvent, CUDA) {
 }
 #endif
 
+#ifdef PADDLE_WITH_HIP
+#include <hip/hip_runtime.h>
+
+TEST(DeviceEvent, CUDA) {
+  VLOG(1) << "In Test";
+  using phi::GPUPlace;
+
+  auto& pool = DeviceContextPool::Instance();
+  auto place = GPUPlace(0);
+  auto* context = static_cast<phi::GPUContext*>(pool.Get(place));
+
+  ASSERT_NE(context, nullptr);
+  // case 1. test for event_creator
+  DeviceEvent event(place, paddle::platform::GenerateDeviceEventFlag());
+  ASSERT_NE(event.GetEvent().get(), nullptr);
+  bool status = event.Query();
+  ASSERT_EQ(status, true);
+  // case 2. test for event_recorder
+  event.Record(context);
+  status = event.Query();
+  ASSERT_EQ(status, false);
+  // case 3. test for event_finisher
+  event.Finish();
+  status = event.Query();
+  ASSERT_EQ(status, true);
+
+  // case 4. test for event_waiter
+  float *src_fp32, *dst_fp32;
+  int size = 1000000 * sizeof(float);
+  hipMallocHost(reinterpret_cast<void**>(&src_fp32), size);
+  hipMalloc(reinterpret_cast<void**>(&dst_fp32), size);
+  hipMemcpyAsync(
+      dst_fp32, src_fp32, size, hipMemcpyHostToDevice, context->stream());
+  event.Record(context);  // step 1. record it
+  status = event.Query();
+  ASSERT_EQ(status, false);
+
+  event.Wait(kCUDA, context);  // step 2. add streamWaitEvent
+  status = event.Query();
+  ASSERT_EQ(status, false);  // async
+
+  event.Wait(kCPU, context);  // step 3. EventSynchronize
+  status = event.Query();
+  ASSERT_EQ(status, true);  // sync
+
+  // release resource
+  hipFree(dst_fp32);
+  hipFreeHost(src_fp32);
+}
+#endif
+
 TEST(DeviceEvent, CPU) {
-  using paddle::platform::CPUPlace;
+  using phi::CPUPlace;
   auto place = CPUPlace();
-  DeviceEvent event(place);
+  DeviceEvent event(place, paddle::platform::GenerateDeviceEventFlag());
   auto& pool = DeviceContextPool::Instance();
   auto* context = pool.Get(place);
 
   // TODO(Aurelius84): All DeviceContext should has Record/Wait
   event.Record(context);
-  event.SetFininshed();
+  event.SetFinished();
   bool status = event.Query();
   ASSERT_EQ(status, true);
 

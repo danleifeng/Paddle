@@ -15,32 +15,20 @@ limitations under the License. */
 #pragma once
 
 #include <hip/hip_runtime.h>
+
 #include <mutex>  // NOLINT
 
-#include "paddle/fluid/platform/dynload/dynamic_loader.h"
-#include "paddle/fluid/platform/port.h"
+#include "paddle/phi/backends/dynload/rocm_driver.h"
 
 namespace paddle {
 namespace platform {
 namespace dynload {
 
-extern std::once_flag rocm_dso_flag;
-extern void* rocm_dso_handle;
 extern bool HasCUDADriver();
 
-#define DECLARE_DYNAMIC_LOAD_ROCM_WRAP(__name)                           \
-  struct DynLoad__##__name {                                             \
-    template <typename... Args>                                          \
-    auto operator()(Args... args) -> DECLARE_TYPE(__name, args...) {     \
-      using rocm_func = decltype(&::__name);                             \
-      std::call_once(rocm_dso_flag, []() {                               \
-        rocm_dso_handle = paddle::platform::dynload::GetCUDADsoHandle(); \
-      });                                                                \
-      static void* p_##__name = dlsym(rocm_dso_handle, #__name);         \
-      return reinterpret_cast<rocm_func>(p_##__name)(args...);           \
-    }                                                                    \
-  };                                                                     \
-  extern struct DynLoad__##__name __name
+#define PLATFORM_DECLARE_DYNAMIC_LOAD_ROCM_WRAP(__name)      \
+  using DynLoad__##__name = phi::dynload::DynLoad__##__name; \
+  extern DynLoad__##__name __name
 
 /**
  * include all needed cuda driver functions
@@ -51,17 +39,37 @@ extern bool HasCUDADriver();
   __macro(hipModuleLoadData);                                 \
   __macro(hipModuleGetFunction);                              \
   __macro(hipModuleUnload);                                   \
-  /*rocm3.5 not support the function*/                        \
+  /* DTK not support the function*/                           \
   /* __macro(hipOccupancyMaxActiveBlocksPerMultiprocessor);*/ \
   __macro(hipModuleLaunchKernel);                             \
   __macro(hipLaunchKernel);                                   \
   __macro(hipGetDevice);                                      \
   __macro(hipGetDeviceCount);                                 \
-  __macro(hipDevicePrimaryCtxGetState)
+  __macro(hipDevicePrimaryCtxGetState);                       \
+  __macro(hipDeviceGetAttribute);                             \
+  __macro(hipDeviceGet)
 
-ROCM_ROUTINE_EACH(DECLARE_DYNAMIC_LOAD_ROCM_WRAP);
+#define ROCM_ROUTINE_EACH_VVM(__macro)     \
+  __macro(hipMemGetAllocationGranularity); \
+  __macro(hipMemAddressReserve);           \
+  __macro(hipMemCreate);                   \
+  __macro(hipMemMap);                      \
+  __macro(hipMemSetAccess);                \
+  __macro(hipMemUnmap);                    \
+  __macro(hipMemRelease);                  \
+  __macro(hipMemAddressFree)
 
-#undef DECLARE_DYNAMIC_LOAD_ROCM_WRAP
+#define ROCM_ROUTINE_EACH_GPU_GRAPH(__macro) \
+  __macro(hipGraphNodeGetType);              \
+  __macro(hipGraphKernelNodeGetParams);      \
+  __macro(hipGraphExecKernelNodeSetParams)
+
+ROCM_ROUTINE_EACH_VVM(PLATFORM_DECLARE_DYNAMIC_LOAD_ROCM_WRAP);
+ROCM_ROUTINE_EACH_GPU_GRAPH(PLATFORM_DECLARE_DYNAMIC_LOAD_ROCM_WRAP);
+
+ROCM_ROUTINE_EACH(PLATFORM_DECLARE_DYNAMIC_LOAD_ROCM_WRAP);
+
+#undef PLATFORM_DECLARE_DYNAMIC_LOAD_ROCM_WRAP
 
 }  // namespace dynload
 }  // namespace platform

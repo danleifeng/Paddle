@@ -19,15 +19,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/var_type.h"
 #include "paddle/fluid/platform/device_context.h"
 
-namespace paddle {
-namespace platform {
-class DeviceContext;
-}  // namespace platform
-}  // namespace paddle
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace framework {
-class LoDTensor;
 class Variable;
 }  // namespace framework
 }  // namespace paddle
@@ -36,12 +33,11 @@ namespace paddle {
 namespace operators {
 class AssignFunctor {
  public:
-  AssignFunctor(framework::Variable *out,
-                const platform::DeviceContext &dev_ctx)
+  AssignFunctor(framework::Variable *out, const phi::DeviceContext &dev_ctx)
       : out_(out), dev_ctx_(dev_ctx) {}
 
-  void operator()(const framework::LoDTensor &lod_tensor) const {
-    auto &out_tensor = *out_->GetMutable<framework::LoDTensor>();
+  void operator()(const phi::DenseTensor &lod_tensor) const {
+    auto &out_tensor = *out_->GetMutable<phi::DenseTensor>();
     copy_tensor(lod_tensor, &out_tensor);
   }
 
@@ -53,9 +49,8 @@ class AssignFunctor {
     }
   }
 
-  void operator()(const framework::SelectedRows &rows) const {
-    framework::SelectedRows &out_rows =
-        *out_->GetMutable<framework::SelectedRows>();
+  void operator()(const phi::SelectedRows &rows) const {
+    phi::SelectedRows &out_rows = *out_->GetMutable<phi::SelectedRows>();
     out_rows.set_rows(rows.rows());
     out_rows.set_height(rows.height());
     auto &t = rows.value();
@@ -64,24 +59,25 @@ class AssignFunctor {
   }
 
   template <typename T>
-  void operator()(const T &v) const {
+  void operator()(const T &v UNUSED) const {
     PADDLE_ENFORCE_EQ(
-        true, false,
-        platform::errors::PermissionDenied(
+        true,
+        false,
+        phi::errors::PermissionDenied(
             "Not support type for assign op with type %s", typeid(T).name()));
   }
 
  private:
-  void copy_tensor(const framework::LoDTensor &lod_tensor,
-                   framework::LoDTensor *out) const {
-    if (lod_tensor.numel() == 0) return;
+  void copy_tensor(const phi::DenseTensor &lod_tensor,
+                   phi::DenseTensor *out) const {
+    if (!lod_tensor.IsInitialized()) return;
     auto &out_tensor = *out;
-    TensorCopy(lod_tensor, lod_tensor.place(), &out_tensor);
+    paddle::framework::TensorCopy(lod_tensor, lod_tensor.place(), &out_tensor);
     out_tensor.set_lod(lod_tensor.lod());
   }
 
   framework::Variable *out_;
-  const platform::DeviceContext &dev_ctx_;
+  const phi::DeviceContext &dev_ctx_;
 };
 
 }  // namespace operators

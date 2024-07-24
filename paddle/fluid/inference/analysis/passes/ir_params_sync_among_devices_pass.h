@@ -15,12 +15,9 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include "paddle/fluid/framework/ir/fuse_pass_base.h"
-#include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/analysis/analysis_pass.h"
-#include "paddle/fluid/platform/place.h"
 
 namespace paddle {
 namespace inference {
@@ -33,6 +30,19 @@ class IrParamsSyncAmongDevicesPass : public AnalysisPass {
  public:
   void RunImpl(Argument *argument) override;
   std::string repr() const override;
+
+ private:
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  void CopyParamsToGpu(Argument *argument);
+#endif
+
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+  void CopyParamsToCustomDevice(Argument *argument);
+#endif
+
+#ifdef PADDLE_WITH_XPU
+  void CopyParamsToXpu(Argument *argument);
+#endif
 };
 
 }  // namespace analysis

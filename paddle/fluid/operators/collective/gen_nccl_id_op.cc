@@ -20,10 +20,10 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/var_type_traits.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/gen_comm_id_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 
 namespace paddle {
 namespace framework {
@@ -36,9 +36,8 @@ namespace operators {
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 static void GenNCCLID(std::vector<ncclUniqueId>* nccl_ids) {
-  for (size_t i = 0; i < nccl_ids->size(); ++i) {
-    PADDLE_ENFORCE_CUDA_SUCCESS(
-        platform::dynload::ncclGetUniqueId(&(*nccl_ids)[i]));
+  for (auto& nccl_id : *nccl_ids) {
+    PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclGetUniqueId(&nccl_id));
   }
 }
 
@@ -49,8 +48,9 @@ static void CopyNCCLIDToVar(const std::vector<ncclUniqueId>& nccl_ids,
     std::string var_name = func(i);
     auto var = scope.FindVar(var_name);
     PADDLE_ENFORCE_NOT_NULL(
-        var, platform::errors::NotFound("Variable with name %s is not found",
-                                        var_name.c_str()));
+        var,
+        phi::errors::NotFound("Variable with name %s is not found",
+                              var_name.c_str()));
     auto nccl_id = var->GetMutable<ncclUniqueId>();
     memcpy(nccl_id, &nccl_ids[i], sizeof(ncclUniqueId));
   }
@@ -58,26 +58,30 @@ static void CopyNCCLIDToVar(const std::vector<ncclUniqueId>& nccl_ids,
 
 class GenNCCLIdOp : public framework::OperatorBase {
  public:
-  GenNCCLIdOp(const std::string& type, const framework::VariableNameMap& inputs,
+  GenNCCLIdOp(const std::string& type,
+              const framework::VariableNameMap& inputs,
               const framework::VariableNameMap& outputs,
               const framework::AttributeMap& attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
+               const phi::Place& dev_place) const override {
     std::vector<std::string> trainers =
         Attr<std::vector<std::string>>("trainers");
     int trainer_id = Attr<int>("trainer_id");
     std::string endpoint = trainers[trainer_id];
 
-    PADDLE_ENFORCE_GE(trainer_id, 0, platform::errors::InvalidArgument(
-                                         "trainer_id %d is less than 0. Its "
-                                         "valid range is [0, trainer_size)"));
+    PADDLE_ENFORCE_GE(
+        trainer_id,
+        0,
+        phi::errors::InvalidArgument("trainer_id %d is less than 0. Its "
+                                     "valid range is [0, trainer_size)"));
     PADDLE_ENFORCE_LT(
-        trainer_id, static_cast<int>(trainers.size()),
-        platform::errors::OutOfRange("trainer_id %d is out of range. Its valid "
-                                     "range is [0, trainer_size)",
-                                     trainer_id));
+        trainer_id,
+        static_cast<int>(trainers.size()),
+        phi::errors::OutOfRange("trainer_id %d is out of range. Its valid "
+                                "range is [0, trainer_size)",
+                                trainer_id));
 
     int nccl_comm_num = Attr<int>("nccl_comm_num");
     int use_hierarchical_allreduce = Attr<bool>("use_hierarchical_allreduce");
@@ -87,19 +91,23 @@ class GenNCCLIdOp : public framework::OperatorBase {
 
     if (use_hierarchical_allreduce) {
       PADDLE_ENFORCE_GT(
-          trainers.size(), 1,
-          platform::errors::PreconditionNotMet(
+          trainers.size(),
+          1,
+          phi::errors::PreconditionNotMet(
               "The number of collective trainers %llu <= 1", trainers.size()));
       PADDLE_ENFORCE_GT(
-          inter_nranks, 1,
-          platform::errors::PreconditionNotMet(
+          inter_nranks,
+          1,
+          phi::errors::PreconditionNotMet(
               "inter_nranks %d <= 1 while in hierarchical allreduce mode",
               inter_nranks));
       PADDLE_ENFORCE_EQ(
-          trainers.size() % inter_nranks, 0,
-          platform::errors::PreconditionNotMet(
+          trainers.size() % inter_nranks,
+          0,
+          phi::errors::PreconditionNotMet(
               "The number of trainers %llu mod inter_nranks %d is not equal 0",
-              trainers.size(), inter_nranks));
+              trainers.size(),
+              inter_nranks));
 
       inter_trainer_id = trainer_id % inter_nranks;
 
@@ -109,8 +117,8 @@ class GenNCCLIdOp : public framework::OperatorBase {
     }
 
     std::ostringstream ss;
-    for (size_t i = 0; i < trainers.size(); i++) {
-      ss << trainers[i] << ",";
+    for (auto& trainer : trainers) {
+      ss << trainer << ",";
     }
 
     VLOG(1) << "trainer_id:" << trainer_id
@@ -133,8 +141,8 @@ class GenNCCLIdOp : public framework::OperatorBase {
 
       // server endpoints
       std::vector<std::string> flat_endpoints;
-      flat_endpoints.insert(flat_endpoints.begin(), trainers.begin() + 1,
-                            trainers.end());
+      flat_endpoints.insert(
+          flat_endpoints.begin(), trainers.begin() + 1, trainers.end());
       platform::SendBroadCastCommID(flat_endpoints, &nccl_ids);
     } else {
       server_fd = platform::CreateListenSocket(endpoint);
@@ -198,13 +206,14 @@ class GenNCCLIdOp : public framework::OperatorBase {
 #else
 class GenNCCLIdOp : public framework::OperatorBase {
  public:
-  GenNCCLIdOp(const std::string& type, const framework::VariableNameMap& inputs,
+  GenNCCLIdOp(const std::string& type,
+              const framework::VariableNameMap& inputs,
               const framework::VariableNameMap& outputs,
               const framework::AttributeMap& attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {}
+               const phi::Place& dev_place) const override {}
 };
 
 #endif
@@ -212,7 +221,7 @@ class GenNCCLIdOp : public framework::OperatorBase {
 class GenNCCLIdOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
-    AddOutput("NCCLID", "Raw variable contains a NCCL UniqueId instaces.");
+    AddOutput("NCCLID", "Raw variable contains a NCCL UniqueId instances.");
     AddComment(R"DOC(
 GenNCCLId operator
 
@@ -233,11 +242,11 @@ For trainer 1~n: start a gRPC server to get the UniqueId, once got, stop the ser
         .SetDefault(1);
     AddAttr<bool>("use_hierarchical_allreduce",
                   "(bool default false) "
-                  "Wheter to use hierarchical allreduce.")
+                  "Whether to use hierarchical allreduce.")
         .SetDefault(false);
     AddAttr<int>("hierarchical_allreduce_inter_nranks",
                  "(int default 1) "
-                 "Wheter to use hierarchical allreduce.")
+                 "Whether to use hierarchical allreduce.")
         .SetDefault(-1);
   }
 };

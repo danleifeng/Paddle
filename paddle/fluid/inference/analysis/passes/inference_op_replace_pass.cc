@@ -21,6 +21,10 @@ namespace inference {
 namespace analysis {
 
 void InferenceOpReplacePass::RunImpl(Argument* argument) {
+  if (argument->use_pir()) {
+    return;
+  }
+
   std::unordered_map<std::string, std::string> replaced_map{
       {"conditional_block", "conditional_block_infer"},
       {"merge_lod_tensor", "merge_lod_tensor_infer"},
@@ -40,7 +44,7 @@ void InferenceOpReplacePass::RunImpl(Argument* argument) {
 }
 
 std::string InferenceOpReplacePass::repr() const {
-  return "inference-op-replace-pass";
+  return "inference_op_replace_pass";
 }
 
 }  // namespace analysis

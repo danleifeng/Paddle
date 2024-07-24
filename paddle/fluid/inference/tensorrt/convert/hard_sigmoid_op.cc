@@ -15,16 +15,6 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
 namespace paddle {
-namespace framework {
-class Scope;
-
-namespace proto {
-class OpDesc;
-}  // namespace proto
-}  // namespace framework
-}  // namespace paddle
-
-namespace paddle {
 namespace inference {
 namespace tensorrt {
 
@@ -34,24 +24,25 @@ namespace tensorrt {
 class HardSigmoidOpConverter : public OpConverter {
  public:
   void operator()(const framework::proto::OpDesc& op,
-                  const framework::Scope& scope, bool test_mode) override {
+                  const framework::Scope& scope,
+                  bool test_mode) override {
 #if IS_TRT_VERSION_GE(5130)
-    VLOG(3) << "convert a fluid HardSigmoid op to tensorrt IActivationLayer "
+    VLOG(3) << "convert a HardSigmoid op to tensorrt IActivationLayer "
                "layer without bias";
     framework::OpDesc op_desc(op, nullptr);
     // Declare inputs
     auto* input = engine_->GetITensor(op_desc.Input("X")[0]);
-    float slope = BOOST_GET_CONST(float, op_desc.GetAttr("slope"));
-    float offset = BOOST_GET_CONST(float, op_desc.GetAttr("offset"));
-    auto* layer = TRT_ENGINE_ADD_LAYER(engine_, Activation, *input,
-                                       nvinfer1::ActivationType::kHARD_SIGMOID);
+    float slope = PADDLE_GET_CONST(float, op_desc.GetAttr("slope"));
+    float offset = PADDLE_GET_CONST(float, op_desc.GetAttr("offset"));
+    auto* layer = TRT_ENGINE_ADD_LAYER(
+        engine_, Activation, *input, nvinfer1::ActivationType::kHARD_SIGMOID);
     layer->setAlpha(slope);
     layer->setBeta(offset);
 
     auto output_name = op_desc.Output("Out")[0];
-    RreplenishLayerAndOutput(layer, "hard_sigmoid", {output_name}, test_mode);
+    ReplenishLayerAndOutput(layer, "hard_sigmoid", {output_name}, test_mode);
 #else
-    PADDLE_THROW(platform::errors::Fatal(
+    PADDLE_THROW(phi::errors::Fatal(
         "Hard sigmoid TRT converter is only supported on TRT 5 or higher. "
         "Please confirm your TRT version is no less than 5.0."));
 #endif

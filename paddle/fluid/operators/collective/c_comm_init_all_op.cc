@@ -11,60 +11,21 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
-#include <string>
 
-#include "paddle/fluid/framework/op_info.h"
-#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/operators/collective/c_comm_init_all_op.h"
 
-#include "paddle/fluid/framework/threadpool.h"
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-#include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
-#endif
+namespace paddle::operators {
 
-namespace paddle {
-namespace framework {
-class InferShapeContext;
-class Scope;
-}  // namespace framework
-}  // namespace paddle
-
-namespace paddle {
-namespace operators {
-
-class CCommInitAllInferShape : public framework::InferShapeBase {
+class CCommInitAllOp : public framework::OperatorWithKernel {
  public:
-  ~CCommInitAllInferShape() {}
-  void operator()(framework::InferShapeContext* ctx) const override{};
-};
+  using framework::OperatorWithKernel::OperatorWithKernel;
 
-class CCommInitAllOp : public framework::OperatorBase {
- public:
-  CCommInitAllOp(const std::string& type,
-                 const framework::VariableNameMap& inputs,
-                 const framework::VariableNameMap& outputs,
-                 const framework::AttributeMap& attrs)
-      : OperatorBase(type, inputs, outputs, attrs) {}
+  void InferShape(framework::InferShapeContext* ctx) const override {}
 
-  void RunImpl(const framework::Scope& scope,
-               const platform::Place& place) const override {
-    PADDLE_ENFORCE_EQ(is_gpu_place(place), true,
-                      platform::errors::PreconditionNotMet(
-                          "CCommInitAllOp can run on gpu place only"));
-
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-    std::vector<int> devices = Attr<std::vector<int>>("devices");
-    if (devices.empty()) {
-      devices = platform::GetSelectedDevices();
-    }
-
-    int rid = Attr<int>("ring_id");
-
-    platform::NCCLCommContext::Instance().CreateAllNCCLComms(devices, rid);
-#else
-    PADDLE_THROW(platform::errors::PreconditionNotMet(
-        "PaddlePaddle should compile with GPU."));
-#endif
+ protected:
+  phi::KernelKey GetExpectedKernelType(
+      const framework::ExecutionContext& ctx) const override {
+    return phi::KernelKey(framework::proto::VarType::FP32, ctx.GetPlace());
   }
 };
 
@@ -74,7 +35,7 @@ class CCommInitAllOpMaker : public framework::OpProtoAndCheckerMaker {
     AddComment(R"DOC(
 CCommInitAll operator
 
-Initialize all collective communicatoin context
+Initialize all collective communication context
 )DOC");
     AddAttr<std::vector<int>>(
         "devices",
@@ -85,10 +46,10 @@ Initialize all collective communicatoin context
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 
-REGISTER_OPERATOR(c_comm_init_all, ops::CCommInitAllOp,
-                  ops::CCommInitAllInferShape, ops::CCommInitAllOpMaker);
+REGISTER_OPERATOR(c_comm_init_all,
+                  ops::CCommInitAllOp,
+                  ops::CCommInitAllOpMaker);

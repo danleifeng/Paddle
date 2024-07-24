@@ -13,12 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/ir/node.h"
+
 #include "gtest/gtest.h"
 #include "paddle/fluid/framework/var_desc.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Node;
 
@@ -102,6 +101,4 @@ TEST(NodeTest, ToString) {
   EXPECT_EQ(n3->ToString(), "{n2} = n3(n1)");
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

@@ -18,52 +18,48 @@
 #include <unordered_map>
 #include <vector>
 
+#include "paddle/fluid/framework/lod_tensor.h"
+#include "paddle/fluid/framework/new_executor/interpreter/plan.h"
 #include "paddle/fluid/framework/new_executor/interpretercore.h"
+#include "paddle/fluid/framework/new_executor/new_executor_defs.h"
+#include "paddle/fluid/framework/program_desc.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/pir/include/core/program.h"
 
 namespace paddle {
 namespace framework {
 
-class ExecutorBase {
- public:
-  virtual ~ExecutorBase() {}
-  virtual paddle::framework::FetchList Run(
-      const std::vector<std::string>& feed_names,
-      const std::vector<framework::Tensor>& feed_tensors,
-      const std::vector<std::string>& fetch_names) = 0;
-};
+class InterpreterCore;
 
-class StandaloneExecutor : public ExecutorBase {
+class StandaloneExecutor {
  public:
-  StandaloneExecutor(const platform::Place& place,
-                     const ProgramDesc& startup_prog,
-                     const ProgramDesc& main_prog, Scope* scope);
+  StandaloneExecutor(const phi::Place& place,
+                     const interpreter::Plan& plan_,
+                     Scope* scope);
 
   ~StandaloneExecutor() {}
 
-  virtual paddle::framework::FetchList Run(
+  paddle::framework::FetchList Run(
       const std::vector<std::string>& feed_names,
-      const std::vector<framework::Tensor>& feed_tensors,
-      const std::vector<std::string>& fetch_names);
+      const bool enable_job_schedule_profiler = false);
 
-  const CostInfo& DryRun(const std::vector<std::string>& feed_names,
-                         const std::vector<framework::Tensor>& feed_tensors);
+  std::shared_ptr<framework::ProgramDesc> RunProfile(
+      const std::vector<std::string>& feed_names);
 
  private:
-  void BuildVariableOuterScope(const framework::ProgramDesc& pdesc,
-                               VariableScope* var_scope, Scope* outer_scope);
+  bool is_interpretercore_build_result_shared_{false};
+  const phi::Place place_;
+  interpreter::Plan plan_;
+  std::vector<std::shared_ptr<InterpreterCore>> interpretercores_;
 
-  std::shared_ptr<InterpreterCore> GetInterpreterCore(
-      const std::vector<std::string>& feed_names,
-      const std::vector<std::string>& fetch_names);
+  Scope* scope_;
+  std::vector<Scope*> micro_batch_scopes_;
 
-  const platform::Place& place_;
-  const ProgramDesc& startup_prog_;
-  const ProgramDesc& main_prog_;
-  Scope* outer_scope_;
-  VariableScope global_scope_;
+  std::vector<std::string> fetch_var_names_;
+  FetchUnmergedList fetch_list_;
 
-  std::unordered_map<std::string, std::shared_ptr<InterpreterCore>>
-      interpretercores_;
+  std::vector<std::unordered_map<std::string, std::shared_ptr<EventInter>>>
+      vec_force_events_to_wait_;
 };
 
 }  // namespace framework

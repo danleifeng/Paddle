@@ -12,24 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
-
+import collections
+import hashlib
 import importlib
 import inspect
-import collections
 import sys
-import pydoc
-import hashlib
-import functools
-import platform
 
-__all__ = ['get_apis_with_and_without_core_ops', ]
+__all__ = [
+    'get_apis_with_and_without_core_ops',
+]
 
-# APIs that should not be printed into API.spec 
+# APIs that should not be printed into API.spec
 omitted_list = [
-    "paddle.fluid.LoDTensor.set",  # Do not know why it should be omitted
-    "paddle.fluid.io.ComposeNotAligned",
-    "paddle.fluid.io.ComposeNotAligned.__init__",
+    "paddle.base.LoDTensor.set",  # Do not know why it should be omitted
+    "paddle.base.io.ComposeNotAligned",
+    "paddle.base.io.ComposeNotAligned.__init__",
+    "paddle.distributed.passes.pass_utils.shadow_var_between_sub_programs",  # append shadow_output and data op in this function
 ]
 
 
@@ -41,9 +39,9 @@ def md5(doc):
     except UnicodeDecodeError as e:
         md5sum = None
         print(
-            "Error({}) occurred when `md5({})`, discard it.".format(
-                str(e), doc),
-            file=sys.stderr)
+            f"Error({e}) occurred when `md5({doc})`, discard it.",
+            file=sys.stderr,
+        )
     return md5sum
 
 
@@ -54,11 +52,13 @@ def split_with_and_without_core_ops(member, cur_name):
     if member.__doc__.find(':api_attr: Static Graph') != -1:
         return
 
-    if cur_name.find('ParamBase') != -1 or cur_name.find(
-            'Parameter') != -1 or cur_name.find(
-                'Variable') != -1 or cur_name.find(
-                    'control_flow') != -1 or cur_name.find(
-                        'contrib.mixed_precision') != -1:
+    if (
+        cur_name.find('EagerParamBase') != -1
+        or cur_name.find('Parameter') != -1
+        or cur_name.find('Variable') != -1
+        or cur_name.find('control_flow') != -1
+        or cur_name.find('contrib.mixed_precision') != -1
+    ):
         return
 
     if inspect.isclass(member):
@@ -98,8 +98,9 @@ def visit_member(parent_name, member, func):
     if inspect.isclass(member):
         func(member, cur_name)
         for name, value in inspect.getmembers(member):
-            if hasattr(value, '__name__') and (not name.startswith("_") or
-                                               name == "__init__"):
+            if hasattr(value, '__name__') and (
+                not name.startswith("_") or name == "__init__"
+            ):
                 visit_member(cur_name, value, func)
     elif inspect.ismethoddescriptor(member):
         return
@@ -108,12 +109,13 @@ def visit_member(parent_name, member, func):
     elif inspect.isgetsetdescriptor(member):
         return
     else:
-        raise RuntimeError("Unsupported generate signature of member, type {0}".
-                           format(str(type(member))))
+        raise RuntimeError(
+            f"Unsupported generate signature of member, type {type(member)}"
+        )
 
 
 def is_primitive(instance):
-    int_types = (int, )
+    int_types = (int,)
     pritimitive_types = int_types + (float, str)
     if isinstance(instance, pritimitive_types):
         return True
@@ -129,7 +131,6 @@ def is_primitive(instance):
 
 ErrorSet = set()
 IdSet = set()
-skiplist = []
 visited_modules = set()
 
 
@@ -138,7 +139,7 @@ def visit_all_module(mod, func):
     if mod_name != 'paddle' and not mod_name.startswith('paddle.'):
         return
 
-    if mod_name.startswith('paddle.fluid.core'):
+    if mod_name.startswith('paddle.base.core'):
         return
 
     if mod in visited_modules:
@@ -152,8 +153,6 @@ def visit_all_module(mod, func):
         if member_name.startswith('_'):
             continue
         cur_name = mod_name + '.' + member_name
-        if cur_name in skiplist:
-            continue
         try:
             instance = getattr(mod, member_name)
             if inspect.ismodule(instance):
@@ -165,7 +164,7 @@ def visit_all_module(mod, func):
                 IdSet.add(instance_id)
                 visit_member(mod.__name__, instance, func)
         except:
-            if not cur_name in ErrorSet and not cur_name in skiplist:
+            if cur_name not in ErrorSet:
                 ErrorSet.add(cur_name)
 
 
@@ -175,7 +174,8 @@ def get_apis_with_and_without_core_ops(modules):
     api_without_ops = []
     for m in modules:
         visit_all_module(
-            importlib.import_module(m), split_with_and_without_core_ops)
+            importlib.import_module(m), split_with_and_without_core_ops
+        )
     return api_with_ops, api_without_ops
 
 
@@ -192,7 +192,8 @@ if __name__ == "__main__":
         modules = sys.argv[2].split(",")
         if sys.argv[1] == '-c':
             api_with_ops, api_without_ops = get_apis_with_and_without_core_ops(
-                modules)
+                modules
+            )
 
             print('api_with_ops:', len(api_with_ops))
             print('\n'.join(api_with_ops))
@@ -206,9 +207,11 @@ if __name__ == "__main__":
                 print(name, func_dict[name])
 
     else:
-        print("""Usage: 
-            1. Count and list all operator-raleated APIs that contains append_op but not core.ops.xx. 
+        print(
+            """Usage:
+            1. Count and list all operator-related APIs that contains append_op but not _legacy_C_ops.xx.
                 python ./count_api_without_core_ops.py -c paddle
             2. Print api and the md5 of source code of the api.
                 python ./count_api_without_core_ops.py -p paddle
-            """)
+            """
+        )

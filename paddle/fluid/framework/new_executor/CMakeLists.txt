@@ -1,13 +1,68 @@
-set(INTERPRETERCORE_DEPS op_registry device_context scope framework_proto data_feed_proto heter_service_proto trainer_desc_proto glog 
-lod_rank_table fs shell fleet_wrapper heter_wrapper ps_gpu_wrapper box_wrapper lodtensor_printer feed_fetch_method
-graph_to_program_pass variable_helper timer monitor)
+file(GLOB_RECURSE standalone_executor_srcs "*.cc")
 
-cc_library(workqueue SRCS workqueue.cc workqueue_utils.cc DEPS enforce)
-cc_library(interpretercore_garbage_collector SRCS interpretercore_garbage_collector.cc DEPS workqueue ${DEVICE_EVENT_LIBS})
-cc_library(interpretercore_util SRCS interpretercore_util.cc DEPS ${INTERPRETERCORE_DEPS} workqueue)
-cc_library(event_manager SRCS event_manager.cc DEPS ${DEVICE_EVENT_LIBS} glog)
-cc_library(stream_analyzer SRCS stream_analyzer.cc DEPS ${DEVICE_EVENT_LIBS} glog device_context)
-cc_library(interpretercore SRCS interpretercore.cc DEPS workqueue ${DEVICE_EVENT_LIBS} interpretercore_util interpretercore_garbage_collector stream_analyzer event_manager)
-cc_library(standalone_executor SRCS standalone_executor.cc DEPS interpretercore)
-cc_test(workqueue_test SRCS workqueue_test.cc DEPS workqueue)
-# cc_binary(standalone_executor_test SRCS standalone_executor_test.cc DEPS interpretercore standalone_executor operator op_registry executor ${GLOB_OP_LIB} ${GLOB_OPERATOR_DEPS} profiler)
+if(NOT (WITH_CINN))
+  list(REMOVE_ITEM standalone_executor_srcs
+       ${CMAKE_CURRENT_SOURCE_DIR}/instruction/cinn_jit_instruction.cc)
+endif()
+
+if(NOT WITH_ONEDNN)
+  list(
+    REMOVE_ITEM
+    standalone_executor_srcs
+    ${CMAKE_CURRENT_SOURCE_DIR}/instruction/onednn/onednn_legacy_instruction.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/instruction/onednn/onednn_instruction.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/instruction/onednn/onednn_mixed_instruction.cc)
+endif()
+
+if(NOT TENSORRT_FOUND OR NOT WITH_TENSORRT)
+  list(REMOVE_ITEM standalone_executor_srcs
+       ${CMAKE_CURRENT_SOURCE_DIR}/instruction/tensorrt_engine_instruction.cc)
+endif()
+
+set(standalone_executor_deps
+    pir
+    program_translator
+    op_dialect_vjp
+    global_utils
+    buffered_reader
+    framework_io
+    garbage_collector
+    executor_gc_helper
+    device_event_base
+    framework_proto)
+
+if(WITH_CINN)
+  set(standalone_executor_deps
+      ${standalone_executor_deps}
+      cinn_runtime_dialect
+      phi
+      common
+      cinnapi
+      device_context
+      op_registry
+      ${DEVICE_EVENT_LIBS})
+endif()
+
+if(TENSORRT_FOUND AND WITH_TENSORRT)
+  set(standalone_executor_deps ${standalone_executor_deps} trt_engine)
+endif()
+
+if(WITH_CUSTOM_DEVICE)
+  set(standalone_executor_deps ${standalone_executor_deps}
+                               device_event_custom_device)
+endif()
+
+if(WITH_GPU)
+  set(standalone_executor_deps ${standalone_executor_deps} device_event_gpu)
+endif()
+
+cc_library(
+  standalone_executor
+  SRCS ${standalone_executor_srcs}
+  DEPS ${standalone_executor_deps})
+
+add_dependencies(standalone_executor xxhash framework_proto)
+
+if(WITH_ONEDNN)
+  add_dependencies(standalone_executor onednn)
+endif()

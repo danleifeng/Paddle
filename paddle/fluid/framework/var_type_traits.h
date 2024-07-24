@@ -23,8 +23,11 @@
 
 #include "paddle/fluid/framework/feed_fetch_type.h"
 #include "paddle/fluid/framework/lod_tensor_array.h"
+#include "paddle/fluid/framework/raw_tensor.h"
 #include "paddle/fluid/framework/string_array.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/fluid/framework/tensor_ref_array.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/utils/test_macros.h"
 #ifdef PADDLE_WITH_CUDA
 #include <cudnn.h>
 #if defined(PADDLE_WITH_NCCL)
@@ -34,18 +37,27 @@
 #ifdef PADDLE_WITH_HIP
 #include <miopen/miopen.h>
 #ifdef PADDLE_WITH_RCCL
-#include <rccl.h>
+#include <rccl/rccl.h>
 #endif
-#endif
-
-#ifdef PADDLE_WITH_ASCEND_CL
-#include <hccl/hccl.h>
-#include <hccl/hccl_types.h>
 #endif
 
 #if defined(PADDLE_WITH_XPU_BKCL)
 #include "xpu/bkcl.h"
 #endif
+
+#if defined(PADDLE_WITH_CUSTOM_DEVICE)
+#include "paddle/phi/backends/c_comm_lib.h"
+#endif
+
+namespace phi {
+class DenseTensor;
+class SelectedRows;
+class SparseCooTensor;
+class SparseCsrTensor;
+namespace funcs {
+class CudnnRNNCache;
+}
+}  // namespace phi
 
 // Users should add forward declarations here
 namespace paddle {
@@ -57,10 +69,6 @@ class Communicator;
 class NCCLCommunicator;
 #endif
 #endif
-#ifdef PADDLE_WITH_ASCEND_CL
-class Communicator;
-class HCCLCommunicator;
-#endif
 
 #if defined(PADDLE_WITH_XPU_BKCL)
 class BKCLCommunicator;
@@ -69,16 +77,14 @@ class BKCLCommunicator;
 
 namespace framework {
 class LoDRankTable;
-class LoDTensor;
+class Scope;
 class ReaderHolder;
 class Scope;
-class SelectedRows;
-class Tensor;
 }  // namespace framework
 
 namespace operators {
 
-class CudnnRNNCache;
+class CUDAGraphWithInOuts;
 
 namespace reader {
 class LoDTensorBlockingQueueHolder;
@@ -91,20 +97,26 @@ class OrderedMultiDeviceLoDTensorBlockingQueueHolder;
 namespace paddle {
 namespace framework {
 
-const char *ToTypeName(int var_id);
-const std::type_index &VarTraitIdToTypeIndex(int var_id);
-int TypeIndexToVarTraitId(const std::type_index &type);
+TEST_API const char *ToTypeName(int var_id);
+TEST_API const std::type_index &VarTraitIdToTypeIndex(int var_id);
+TEST_API int TypeIndexToVarTraitId(const std::type_index &type);
 
 namespace detail {
 
-template <bool kStop, int kStart, int kEnd, typename T1, typename T2,
+template <bool kStop,
+          int kStart,
+          int kEnd,
+          typename T1,
+          typename T2,
           typename... Args>
 struct TypePosFinderImpl {
-  static constexpr int kPos =
-      std::is_same<T1, T2>::value
-          ? kStart
-          : TypePosFinderImpl<kStart + 2 == kEnd, kStart + 1, kEnd, T1,
-                              Args...>::kPos;
+  static constexpr int kPos = std::is_same<T1, T2>::value
+                                  ? kStart
+                                  : TypePosFinderImpl<kStart + 2 == kEnd,
+                                                      kStart + 1,
+                                                      kEnd,
+                                                      T1,
+                                                      Args...>::kPos;
 };
 
 template <int kStart, int kEnd, typename T1, typename T2>
@@ -117,8 +129,8 @@ struct TypePosFinderImpl<true, kStart, kEnd, T1, T2> {
 template <typename T, typename... Args>
 struct TypePosFinder {
   static constexpr int kPos =
-      TypePosFinderImpl<sizeof...(Args) == 1, 0, sizeof...(Args), T,
-                        Args...>::kPos;
+      TypePosFinderImpl<sizeof...(Args) == 1, 0, sizeof...(Args), T, Args...>::
+          kPos;
 };
 
 template <typename... Args>
@@ -163,23 +175,46 @@ struct VarTypeRegistryImpl {
 // Users should add other variable types below.
 // Paddle would generate unique Ids for each registered variable types.
 using VarTypeRegistry = detail::VarTypeRegistryImpl<
-    Tensor, LoDTensor, SelectedRows, std::vector<Scope *>, LoDRankTable,
-    Strings, LoDTensorArray, platform::PlaceList, ReaderHolder, String, Scope *,
-    operators::reader::LoDTensorBlockingQueueHolder, FetchList, FeedList,
+    phi::DenseTensor,
+    phi::SelectedRows,
+    phi::SparseCooTensor,
+    phi::SparseCsrTensor,
+    std::vector<Scope *>,
+    LoDRankTable,
+    Strings,
+    LoDTensorArray,
+    phi::PlaceList,
+    ReaderHolder,
+    String,
+    Scope *,
+    operators::reader::LoDTensorBlockingQueueHolder,
+    FetchList,
+    FeedList,
     operators::reader::OrderedMultiDeviceLoDTensorBlockingQueueHolder,
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
-    ncclUniqueId, platform::Communicator, platform::NCCLCommunicator,
+    ncclUniqueId,
+    platform::Communicator,
+    platform::NCCLCommunicator,
 #endif
-    operators::CudnnRNNCache,
-#endif
-#if defined(PADDLE_WITH_ASCEND_CL)
-    HcclRootInfo,
+    phi::funcs::CudnnRNNCache,
 #endif
 #if defined(PADDLE_WITH_XPU_BKCL)
-    BKCLUniqueId, platform::BKCLCommunicator,
+    BKCLUniqueId,
+    platform::BKCLCommunicator,
 #endif
-    int, float, Vocab>;
+#if defined(PADDLE_WITH_CUSTOM_DEVICE)
+    phi::ccl::CCLRootId,
+#endif
+    std::vector<std::unique_ptr<operators::CUDAGraphWithInOuts>>,
+    int,
+    float,
+    Vocab,
+    std::vector<int>,
+    std::vector<float>,
+    std::vector<std::string>,
+    RawTensor,
+    VariableRefArray>;
 template <typename T>
 struct VarTypeTrait {
   static_assert(VarTypeRegistry::IsRegistered<T>(), "Must be registered type");
@@ -202,12 +237,12 @@ struct VarTypeTrait {
 
 // Users should set some of variable type ids to be what is defined in
 // framework.proto below
-REG_PROTO_VAR_TYPE_TRAIT(LoDTensor, proto::VarType::LOD_TENSOR);
-REG_PROTO_VAR_TYPE_TRAIT(SelectedRows, proto::VarType::SELECTED_ROWS);
+REG_PROTO_VAR_TYPE_TRAIT(phi::DenseTensor, proto::VarType::LOD_TENSOR);
+REG_PROTO_VAR_TYPE_TRAIT(phi::SelectedRows, proto::VarType::SELECTED_ROWS);
 REG_PROTO_VAR_TYPE_TRAIT(std::vector<Scope *>, proto::VarType::STEP_SCOPES);
 REG_PROTO_VAR_TYPE_TRAIT(LoDRankTable, proto::VarType::LOD_RANK_TABLE);
 REG_PROTO_VAR_TYPE_TRAIT(LoDTensorArray, proto::VarType::LOD_TENSOR_ARRAY);
-REG_PROTO_VAR_TYPE_TRAIT(platform::PlaceList, proto::VarType::PLACE_LIST);
+REG_PROTO_VAR_TYPE_TRAIT(phi::PlaceList, proto::VarType::PLACE_LIST);
 REG_PROTO_VAR_TYPE_TRAIT(ReaderHolder, proto::VarType::READER);
 REG_PROTO_VAR_TYPE_TRAIT(FeedList, proto::VarType::FEED_LIST);
 REG_PROTO_VAR_TYPE_TRAIT(FetchList, proto::VarType::FETCH_LIST);
@@ -216,6 +251,7 @@ REG_PROTO_VAR_TYPE_TRAIT(float, proto::VarType::FP32);
 REG_PROTO_VAR_TYPE_TRAIT(Vocab, proto::VarType::VOCAB);
 REG_PROTO_VAR_TYPE_TRAIT(String, proto::VarType::STRING);
 REG_PROTO_VAR_TYPE_TRAIT(Strings, proto::VarType::STRINGS);
+REG_PROTO_VAR_TYPE_TRAIT(phi::SparseCooTensor, proto::VarType::SPARSE_COO);
 
 /** End of variable type registration */
 

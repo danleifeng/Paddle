@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "paddle/fluid/platform/denormal.h"
+
 #include <tuple>
 #include <utility>
 
@@ -28,7 +29,8 @@
 #endif
 
 #if !defined(GCC_WITHOUT_INTRINSICS) && !defined(PADDLE_WITH_ARM) && \
-    !defined(PADDLE_WITH_SW) && !defined(PADDLE_WITH_MIPS) && !defined(_WIN32)
+    !defined(PADDLE_WITH_SW) && !defined(PADDLE_WITH_MIPS) &&        \
+    !defined(_WIN32) && !defined(PADDLE_WITH_LOONGARCH)
 #define DENORM_USE_INTRINSICS
 #endif
 
@@ -36,8 +38,7 @@
 #include <pmmintrin.h>
 #endif
 
-namespace paddle {
-namespace platform {
+namespace paddle::platform {
 
 static void SetDenormalState(bool flush_zero_mode, bool denormals_zero_mode) {
 #ifdef DENORM_USE_INTRINSICS
@@ -68,7 +69,8 @@ static std::pair<bool, bool> GetDenormalState() {
   return {false, false};
 }
 
-ScopedRestoreFlushDenormalState::ScopedRestoreFlushDenormalState() {
+ScopedRestoreFlushDenormalState::ScopedRestoreFlushDenormalState()
+    : flush_zero_mode_(false), denormals_zero_mode_(false) {
   std::tie(flush_zero_mode_, denormals_zero_mode_) = GetDenormalState();
 }
 
@@ -77,5 +79,4 @@ ScopedRestoreFlushDenormalState::~ScopedRestoreFlushDenormalState() {
 }
 
 ScopedFlushDenormal::ScopedFlushDenormal() { SetDenormalState(true, true); }
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform

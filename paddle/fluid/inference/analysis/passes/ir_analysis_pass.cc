@@ -13,14 +13,11 @@
 // limitations under the License.
 
 #include "paddle/fluid/inference/analysis/passes/ir_analysis_pass.h"
-#include <memory>
-#include <utility>
+
 #include "paddle/fluid/framework/ir/fuse_pass_base.h"
 #include "paddle/fluid/inference/analysis/ir_pass_manager.h"
 
-namespace paddle {
-namespace inference {
-namespace analysis {
+namespace paddle::inference::analysis {
 
 void IrAnalysisPass::RunImpl(Argument* argument) {
   ARGUMENT_CHECK_FIELD(argument, ir_analysis_passes);
@@ -34,8 +31,9 @@ void IrAnalysisPass::RunImpl(Argument* argument) {
   IRPassManager the_ir_manager(argument);
   graph = the_ir_manager.Apply(std::move(graph));
   PADDLE_ENFORCE_GT(
-      graph->Nodes().size(), 0,
-      platform::errors::PreconditionNotMet(
+      graph->Nodes().size(),
+      0,
+      phi::errors::PreconditionNotMet(
           "The graph nodes size should be greater than 0, but got 0"));
   argument->SetMainGraph(graph.release());
   CollectFusionStatis(argument);
@@ -51,8 +49,6 @@ void IrAnalysisPass::CollectFusionStatis(Argument* argument) {
           framework::ir::kFuseStatisAttr));
 }
 
-std::string IrAnalysisPass::repr() const { return "ir-analysis-pass"; }
+std::string IrAnalysisPass::repr() const { return "ir_analysis_pass"; }
 
-}  // namespace analysis
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::analysis

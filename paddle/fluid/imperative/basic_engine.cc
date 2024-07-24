@@ -24,14 +24,17 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/flags.h"
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/imperative/gradient_accumulator.h"
 #include "paddle/fluid/imperative/layer.h"
 #include "paddle/fluid/imperative/op_base.h"
 #include "paddle/fluid/imperative/tracer.h"
-#include "paddle/fluid/operators/math/math_function.h"
 #include "paddle/fluid/platform/profiler.h"
+#include "paddle/phi/kernels/autotune/switch_autotune.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
-DECLARE_bool(sort_sum_gradient);
+COMMON_DECLARE_bool(sort_sum_gradient);
 
 namespace paddle {
 namespace imperative {
@@ -43,16 +46,24 @@ void BasicEngine::Init(
   retain_graph_ = retain_graph;
 
   PADDLE_ENFORCE_EQ(
-      tensors.size(), grad_tensors.size(),
-      platform::errors::Unavailable(
+      tensors.size(),
+      grad_tensors.size(),
+      phi::errors::Unavailable(
           "The size of tensors do not equal the size of grad_tensors,"
           "the size of tensors is %s, but the size of grad_tensors is %s.",
-          tensors.size(), grad_tensors.size()));
+          tensors.size(),
+          grad_tensors.size()));
 
-  PADDLE_ENFORCE_EQ(accumulators_.empty(), true,
-                    platform::errors::AlreadyExists(
+  PADDLE_ENFORCE_EQ(accumulators_.empty(),
+                    true,
+                    phi::errors::AlreadyExists(
                         "Accumulators are not empty before preparing it for "
                         "backward network execution."));
+  PADDLE_ENFORCE_EQ(accumulators_with_grad_node_.empty(),
+                    true,
+                    phi::errors::AlreadyExists(
+                        "Accumulators with grad_node as the key are not empty "
+                        "before preparing it for backward network execution."));
 
   for (size_t i = 0; i < tensors.size(); ++i) {
     auto var = tensors[i];
@@ -61,8 +72,9 @@ void BasicEngine::Init(
     auto init_node = var->GradVarBase()->GradNode();
 
     PADDLE_ENFORCE_EQ(
-        var->GradVarBase()->GraphIsFreed(), false,
-        platform::errors::Unavailable(
+        var->GradVarBase()->GraphIsFreed(),
+        false,
+        phi::errors::Unavailable(
             "%s trying to backward through the same graph a second "
             "time, but this graph have already been freed. Please "
             "specify Tensor.backward(retain_graph=True) when "
@@ -73,10 +85,9 @@ void BasicEngine::Init(
       VLOG(5) << "Clear the auto-grad graph from grad var " << var->Name()
               << " because of retain_graph=False when calling backward";
       var->GradVarBase()->SetGraphIsFreed(true);
-      var->GradVarBase()->ClearGradNode();
     }
 
-    if (init_node == nullptr || var->OverridedStopGradient()) {
+    if (init_node == nullptr || var->OverriddenStopGradient()) {
       VLOG(3) << "Skip auto grad since there is no grad op for var or loss is "
                  "stop_gradient=True: "
               << var->Name();
@@ -86,36 +97,42 @@ void BasicEngine::Init(
     VLOG(3) << "Init node of backward";
 
     PADDLE_ENFORCE_EQ(
-        var->HasGradVar(), true,
-        platform::errors::NotFound("Tensor %s has no gradient", var->Name()));
+        var->HasGradVar(),
+        true,
+        phi::errors::NotFound("Tensor %s has no gradient", var->Name()));
 
-    auto& fwd_var = var->Var().Get<framework::LoDTensor>();
+    auto& fwd_var = var->Var().Get<phi::DenseTensor>();
     auto* grad_var =
-        var->GradVarBase()->MutableVar()->GetMutable<framework::LoDTensor>();
+        var->GradVarBase()->MutableVar()->GetMutable<phi::DenseTensor>();
     VLOG(6) << "init loss grad:" << var->GradVarBase()->Name()
             << " as stop_gradient false";
-    var->GradVarBase()->InnerSetOverridedStopGradient(false);
-    auto* dev_ctx =
-        platform::DeviceContextPool::Instance().Get(fwd_var.place());
+    var->GradVarBase()->InnerSetOverriddenStopGradient(false);
+    auto* dev_ctx = phi::DeviceContextPool::Instance().Get(fwd_var.place());
     if (grad_tensor == nullptr) {
       grad_var->Resize(fwd_var.dims());
       grad_var->mutable_data(fwd_var.place(), fwd_var.type());
-      operators::math::set_constant(*dev_ctx, grad_var, 1.0);
+      phi::funcs::set_constant(*dev_ctx, grad_var, 1.0f);
     } else {
-      paddle::framework::TensorCopy(
-          grad_tensor->Var().Get<framework::LoDTensor>(), fwd_var.place(),
-          *dev_ctx, grad_var);
+      paddle::framework::TensorCopy(grad_tensor->Var().Get<phi::DenseTensor>(),
+                                    fwd_var.place(),
+                                    *dev_ctx,
+                                    grad_var);
     }
 
     VariableWrapper* init_grad_var = var->GradVarBase()->SharedVar().get();
-    auto& accumulator = accumulators_[init_grad_var];
+    auto& accumulator =
+        accumulators_with_grad_node_[init_grad_var->GetGradNode()]
+                                    [init_grad_var];
     if (!accumulator) {
       if (FLAGS_sort_sum_gradient) {
-        accumulator.reset(new SortedGradientAccumulator(init_grad_var));
+        accumulator =
+            std::make_unique<SortedGradientAccumulator>(init_grad_var);
       } else {
-        accumulator.reset(new EagerGradientAccumulator(init_grad_var));
+        accumulator = std::make_unique<EagerGradientAccumulator>(init_grad_var);
       }
     }
+    accumulator->IncreaseRefCnt();
+    accumulator->IncreaseCurCnt();
 
     init_nodes_.push_back(init_node);
   }
@@ -133,23 +150,24 @@ void BasicEngine::CheckBackwardInputs(const OpBase& op) {
       }
 
       auto* inner_var = var->MutableVar();
-      framework::Tensor* tensor = nullptr;
+      phi::DenseTensor* tensor = nullptr;
       if (!inner_var->IsInitialized() ||
-          inner_var->IsType<framework::LoDTensor>()) {
-        tensor = inner_var->GetMutable<framework::LoDTensor>();
+          inner_var->IsType<phi::DenseTensor>()) {
+        tensor = inner_var->GetMutable<phi::DenseTensor>();
       }
 
       if (tensor && !tensor->IsInitialized()) {
-        auto* dev_ctx = platform::DeviceContextPool::Instance().Get(op.place());
+        auto* dev_ctx = phi::DeviceContextPool::Instance().Get(op.place());
         // NOTE(zhiqiu): since grad variable is ungenerated, so the dtype is not
         // correct. var->DataType() returns the default dtype, which is float32.
         // Here, we use the type of the corresponding forward datatype.
 
-        tensor->mutable_data(op.place(), var->ForwardDataType());
+        tensor->mutable_data(
+            op.place(), framework::TransToPhiDataType(var->ForwardDataType()));
         VLOG(6) << "Set ungenerated Grad: " << var->Name()
                 << " as zero with dtype "
                 << framework::DataTypeToString(var->ForwardDataType());
-        operators::math::set_constant(*dev_ctx, tensor, 0.0);
+        phi::funcs::set_constant(*dev_ctx, tensor, 0.0f);
       }
     }
   }
@@ -166,31 +184,15 @@ void BasicEngine::PrepareGradAccumulators(
     for (const auto& var : pair.second) {
       if (!var) continue;
 
-      if (!var->HasGradNode()) {
-        auto& accumulator = accumulators_[var.get()];
-        if (!accumulator) {
-          if (FLAGS_sort_sum_gradient) {
-            accumulator.reset(new SortedGradientAccumulator(var.get()));
-          } else {
-            accumulator.reset(new EagerGradientAccumulator(var.get()));
-          }
-        }
-
-        accumulator->IncreaseRefCnt();
-
-        VLOG(3) << "Prepare to acccumulate variable grad " << var->Name() << "("
-                << var.get()
-                << ") that don't have grad node  with reference count "
-                << accumulator->RefCnt();
-      } else {
+      bool find_grad_node_of_var = false;
+      if (!grad_pending_nodes.empty()) {
         // Because Inplace op overwrites the grad_node of the input grad_var. So
         // only the information of grad_pending_node can be used to find the
         // grad_node of grad_var.
-        bool find_grad_node_of_var = false;
         for (auto& grad_pending_node : grad_pending_nodes) {
           PADDLE_ENFORCE_NOT_NULL(
               grad_pending_node,
-              platform::errors::NotFound("Grad pending node is nullptr."));
+              phi::errors::NotFound("Grad pending node is nullptr."));
           for (auto& grad_pending_op : *grad_pending_node) {
             VLOG(6) << "Determine whether var (" << var->Name()
                     << ") is the input var of grad_pending_op ("
@@ -223,26 +225,51 @@ void BasicEngine::PrepareGradAccumulators(
 
             if (!accumulator) {
               if (FLAGS_sort_sum_gradient) {
-                accumulator.reset(new SortedGradientAccumulator(var.get()));
+                accumulator =
+                    std::make_unique<SortedGradientAccumulator>(var.get());
               } else {
-                accumulator.reset(new EagerGradientAccumulator(var.get()));
+                accumulator =
+                    std::make_unique<EagerGradientAccumulator>(var.get());
               }
             }
 
             accumulator->IncreaseRefCnt();
 
-            VLOG(3) << "Prepare to acccumulate variable grad " << var->Name()
+            VLOG(3) << "Prepare to accumulate variable grad " << var->Name()
                     << "(" << var.get()
                     << ") that has grad node with reference count "
                     << accumulator->RefCnt();
             break;
           }
         }
-        PADDLE_ENFORCE_EQ(
-            find_grad_node_of_var, true,
-            platform::errors::NotFound(
-                "No grad node corresponding to grad Tensor (%s) was found.",
-                var->Name()));
+        if (!find_grad_node_of_var) {
+          // Special case: `set_value` is inplace op, and it can change
+          // the var with `stop_gradient=True` to the var with
+          // `stop_gradient=False `.
+          // This inplace var has grad_node (the inplace op), but it
+          // isn't the input of grad_pending_op.
+          VLOG(6) << "No grad node corresponding to grad Tensor ("
+                  << var->Name() << ") was found.";
+        }
+      }
+
+      if (grad_pending_nodes.empty() || !find_grad_node_of_var) {
+        auto& accumulator = accumulators_[var.get()];
+        if (!accumulator) {
+          if (FLAGS_sort_sum_gradient) {
+            accumulator =
+                std::make_unique<SortedGradientAccumulator>(var.get());
+          } else {
+            accumulator = std::make_unique<EagerGradientAccumulator>(var.get());
+          }
+        }
+
+        accumulator->IncreaseRefCnt();
+
+        VLOG(3) << "Prepare to accumulate variable grad " << var->Name() << "("
+                << var.get()
+                << ") that don't have grad node  with reference count "
+                << accumulator->RefCnt();
       }
     }
   }
@@ -250,20 +277,17 @@ void BasicEngine::PrepareGradAccumulators(
 
 void BasicEngine::PrepareDeps() {
   PADDLE_ENFORCE_EQ(
-      node_deps_.empty(), true,
-      platform::errors::AlreadyExists("Op deps are not empty before preparing "
-                                      "it for backward network execution."));
-  PADDLE_ENFORCE_EQ(accumulators_with_grad_node_.empty(), true,
-                    platform::errors::AlreadyExists(
-                        "Accumulators with grad_node as the key are not empty "
-                        "before preparing it for backward network execution."));
+      node_deps_.empty(),
+      true,
+      phi::errors::AlreadyExists("Op deps are not empty before preparing "
+                                 "it for backward network execution."));
 
   std::queue<GradOpNode*> q;
   std::unordered_set<GradOpNode*> visited;
 
-  for (size_t i = 0; i < init_nodes_.size(); ++i) {
-    q.push(init_nodes_[i].get());
-    visited.insert(init_nodes_[i].get());
+  for (auto& init_node : init_nodes_) {
+    q.push(init_node.get());
+    visited.insert(init_node.get());
   }
 
   while (!q.empty()) {
@@ -280,7 +304,7 @@ void BasicEngine::PrepareDeps() {
     for (auto& grad_pending_node : grad_pending_nodes) {
       PADDLE_ENFORCE_NOT_NULL(
           grad_pending_node,
-          platform::errors::NotFound("Grad pending node is nullptr."));
+          phi::errors::NotFound("Grad pending node is nullptr."));
       ++node_deps_[grad_pending_node.get()];
       if (visited.count(grad_pending_node.get()) == 0) {
         visited.insert(grad_pending_node.get());
@@ -306,6 +330,7 @@ static std::shared_ptr<NameVarMap<VariableWrapper>> CallGradientHooks(
         auto tmp_var = var;
         for (const auto& hook_pair : var->GetVariableWrapperHooks()) {
           tmp_var = (*hook_pair.second)(tmp_var);
+          CheckVar(var, tmp_var);
         }
         (*tmp_ins_ptr)[pair.first][i] = tmp_var;
       }
@@ -316,8 +341,8 @@ static std::shared_ptr<NameVarMap<VariableWrapper>> CallGradientHooks(
 
 static bool IsInputCanInplace(const std::shared_ptr<VariableWrapper>& var) {
   auto* inner_var = var->MutableVar();
-  if (inner_var->IsInitialized() && inner_var->IsType<framework::LoDTensor>()) {
-    auto tensor = inner_var->GetMutable<framework::LoDTensor>();
+  if (inner_var->IsInitialized() && inner_var->IsType<phi::DenseTensor>()) {
+    auto tensor = inner_var->GetMutable<phi::DenseTensor>();
     if (tensor->IsInitialized()) {
       return true;
     }
@@ -334,18 +359,18 @@ static void PerformBackwardInplace(const std::string& op_type,
   if (infer_inplace) {
     auto in_to_outs = infer_inplace(true);
     for (auto& pair : in_to_outs) {
-      framework::LoDTensor *in_tensor = nullptr, *out_tensor = nullptr;
+      phi::DenseTensor *in_tensor = nullptr, *out_tensor = nullptr;
       for (auto& p : ins) {
         if (p.first == pair.first) {
           // has at least one var
-          if (p.second.size() > 0 && p.second[0]) {
+          if (!p.second.empty() && p.second[0]) {
             auto& in_var = p.second[0];
             VLOG(10) << p.first << " use_count: " << in_var.use_count();
             // the refcount of var to be inplaced should be 1
             if (in_var.use_count() == 1) {
               if (IsInputCanInplace(in_var)) {
                 in_tensor =
-                    in_var->MutableVar()->GetMutable<framework::LoDTensor>();
+                    in_var->MutableVar()->GetMutable<phi::DenseTensor>();
               }
             }
           }
@@ -356,11 +381,11 @@ static void PerformBackwardInplace(const std::string& op_type,
       }
       for (auto& p : *outs) {
         if (p.first == pair.second) {
-          if (p.second.size() > 0 && p.second[0]) {
+          if (!p.second.empty() && p.second[0]) {
             auto& out_var = p.second[0];
             if (out_var->Type() == framework::proto::VarType::LOD_TENSOR) {
               out_tensor =
-                  out_var->MutableVar()->GetMutable<framework::LoDTensor>();
+                  out_var->MutableVar()->GetMutable<phi::DenseTensor>();
             }
           }
         }
@@ -377,6 +402,9 @@ static void PerformBackwardInplace(const std::string& op_type,
 }
 
 void BasicEngine::Execute() {
+  platform::RecordEvent backward_record_event(
+      "backward", platform::TracerEventType::UserDefined, 1);
+
   if (init_nodes_.empty()) {
     return;
   }
@@ -384,9 +412,9 @@ void BasicEngine::Execute() {
   PrepareDeps();
   // Start execute Computation graph
   std::queue<std::shared_ptr<GradOpNode>> q;
-  for (size_t i = 0; i < init_nodes_.size(); ++i) {
-    if (node_deps_[init_nodes_[i].get()] == 0) {
-      q.push(std::move(init_nodes_[i]));
+  for (auto& init_node : init_nodes_) {
+    if (node_deps_[init_node.get()] == 0) {
+      q.push(std::move(init_node));
     }
   }
 
@@ -399,7 +427,8 @@ void BasicEngine::Execute() {
     auto& inplace_grad_name_map = shared_cur_node->InplaceGradNameMap();
 
     for (auto& cur_op : *shared_cur_node) {
-      platform::RecordEvent op_type_record_event(cur_op.Type());
+      platform::RecordEvent op_type_record_event(
+          cur_op.Type() + " grad_node", platform::TracerEventType::Operator, 1);
 
       ++op_num;
 
@@ -415,7 +444,7 @@ void BasicEngine::Execute() {
        *
        * - construct the temp output map, avoid to disrupt graph
        * - replace the element in the map by temp var, because a
-       *   var may be coresponding to several grad var in one op
+       *   var may be corresponding to several grad var in one op
        */
       NameVarMap<VariableWrapper> tmp_outs(bwd_outs);
 
@@ -429,23 +458,15 @@ void BasicEngine::Execute() {
             continue;
           }
 
+          const auto& grad_pending_nodes = shared_cur_node->GradPendingNodes();
           std::unordered_map<VariableWrapper*,
                              std::unique_ptr<GradientAccumulator>>::iterator
               iter;
-          if (!var->HasGradNode()) {
-            VLOG(10) << "Find gradient of var (" << var->Name()
-                     << ") with no grad_node.";
-            iter = accumulators_.find(var.get());
-            PADDLE_ENFORCE_EQ(
-                iter != accumulators_.end(), true,
-                platform::errors::NotFound(
-                    "Cannot find gradient of variable %s", var->Name()));
-          } else {
-            bool flag_find_grad = false;
+          bool flag_find_grad = false;
+          if (!grad_pending_nodes.empty()) {
             VLOG(10) << "Find gradient of var (" << var->Name()
                      << ") with grad_node.";
-            for (auto& grad_pending_node :
-                 shared_cur_node->GradPendingNodes()) {
+            for (auto& grad_pending_node : grad_pending_nodes) {
               const auto& iter_grad_node =
                   accumulators_with_grad_node_.find(grad_pending_node);
               if (iter_grad_node != accumulators_with_grad_node_.end()) {
@@ -456,16 +477,27 @@ void BasicEngine::Execute() {
                 }
               }
             }
+            if (!flag_find_grad) {
+              VLOG(6) << "Cannot find gradient of variable " << var->Name()
+                      << " in accumulators_with_grad_node_";
+            }
+          }
+          if (grad_pending_nodes.empty() || !flag_find_grad) {
+            VLOG(10) << "Find gradient of var (" << var->Name()
+                     << ") with no grad_node.";
+            iter = accumulators_.find(var.get());
             PADDLE_ENFORCE_EQ(
-                flag_find_grad, true,
-                platform::errors::NotFound(
-                    "Cannot find gradient of variable %s", var->Name()));
+                iter != accumulators_.end(),
+                true,
+                phi::errors::NotFound("Cannot find gradient of variable %s",
+                                      var->Name()));
           }
 
           // leaf_accumulators_ : hooks and accumulate-grad for leaf tensor,
-          // it should be orderly and not reapeated.
+          // it should be orderly and not repeated.
           if (var->IsLeafGrad()) {
-            if (std::find(leaf_accumulators_.begin(), leaf_accumulators_.end(),
+            if (std::find(leaf_accumulators_.begin(),
+                          leaf_accumulators_.end(),
                           iter->second.get()) == leaf_accumulators_.end()) {
               leaf_accumulators_.push_back(iter->second.get());
             }
@@ -475,7 +507,7 @@ void BasicEngine::Execute() {
             }
           }
 
-          if (var->OverridedStopGradient() || iter->second->RefCnt() > 1) {
+          if (var->OverriddenStopGradient() || iter->second->RefCnt() > 1) {
             auto tmp_var = std::make_shared<VariableWrapper>(var->Name());
             tmp_var->SetType(var->Type());
             tmp_var->SetForwardDataType(var->ForwardDataType());
@@ -515,8 +547,9 @@ void BasicEngine::Execute() {
           auto tensor_version =
               var_wrapper->MutableVar()->CurrentInplaceVersion();
           PADDLE_ENFORCE_EQ(
-              tensor_version, wrapper_version_snapshot,
-              platform::errors::PermissionDenied(
+              tensor_version,
+              wrapper_version_snapshot,
+              phi::errors::PermissionDenied(
                   "Tensor '%s' used in gradient computation in grad op '%s' "
                   "has been "
                   "modified by an inplace operation. "
@@ -524,7 +557,9 @@ void BasicEngine::Execute() {
                   "Please fix your code to void calling an inplace operator "
                   "after using the Tensor which will used in gradient "
                   "computation.",
-                  var_wrapper->Name(), cur_op.Type(), tensor_version,
+                  var_wrapper->Name(),
+                  cur_op.Type(),
+                  tensor_version,
                   wrapper_version_snapshot));
 
           VLOG(6) << " The version of Tensor '" << var_wrapper->Name()
@@ -553,24 +588,38 @@ void BasicEngine::Execute() {
         VLOG(3) << "Start to execute grad op " << cur_op.Type();
         try {
           if (tmp_ins_ptr == nullptr) {
-            OpBase::Run(cur_op.InnerOp(), bwd_ins, tmp_outs, cur_op.Attrs(),
-                        cur_op.DefaultAttrsMap(), cur_op.place());
+            OpBase::Run(cur_op.InnerOp(),
+                        bwd_ins,
+                        tmp_outs,
+                        cur_op.Attrs(),
+                        cur_op.DefaultAttrsMap(),
+                        cur_op.place());
           } else {
-            OpBase::Run(cur_op.InnerOp(), *tmp_ins_ptr, tmp_outs,
-                        cur_op.Attrs(), cur_op.DefaultAttrsMap(),
+            OpBase::Run(cur_op.InnerOp(),
+                        *tmp_ins_ptr,
+                        tmp_outs,
+                        cur_op.Attrs(),
+                        cur_op.DefaultAttrsMap(),
                         cur_op.place());
           }
         } catch (platform::EnforceNotMet& exception) {
           Clear();
-          throw std::move(exception);
+          throw exception;
         } catch (std::exception& ex) {
           Clear();
-          PADDLE_THROW(platform::errors::External("%s", ex.what()));
+          PADDLE_THROW(phi::errors::External("%s", ex.what()));
+        }
+      }
+
+      // Function Post Hook
+      if (cur_op.HasVoidFunctionPostHook()) {
+        for (const auto& hook : cur_op.GetVoidFunctionPostHooks()) {
+          (*hook)();
         }
       }
 
       for (auto& pair : inplace_output_grad_var_list_) {
-        *pair.first = std::move(*pair.second);
+        *pair.first = *pair.second;
       }
 
       // Step 2: Sum Gradient of This graph
@@ -607,7 +656,7 @@ void BasicEngine::Execute() {
     for (auto& grad_pending_node : shared_cur_node->GradPendingNodes()) {
       PADDLE_ENFORCE_NOT_NULL(
           grad_pending_node,
-          platform::errors::NotFound("Grad pending node is nullptr."));
+          phi::errors::NotFound("Grad pending node is nullptr."));
       auto iter = node_deps_.find(grad_pending_node.get());
       if (iter == node_deps_.end()) {
         continue;
@@ -621,6 +670,8 @@ void BasicEngine::Execute() {
   Clear();
 
   VLOG(1) << "Backward op number: " << op_num;
+
+  phi::autotune::AutoTuneStatus::Instance().Update();
 }
 
 void BasicEngine::Clear() {

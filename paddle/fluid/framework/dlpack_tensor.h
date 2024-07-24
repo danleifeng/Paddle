@@ -21,8 +21,6 @@
 namespace paddle {
 namespace framework {
 
-class Tensor;
-
 class DLPackTensor {
  public:
   using LaneType = decltype(::DLTensor::dtype.lanes);  // uint16_t
@@ -30,7 +28,8 @@ class DLPackTensor {
       std::remove_reference<decltype(::DLTensor::shape[0])>::type;  // int64_t
 
   // lanes is only used in CPU to enable vectorization
-  explicit DLPackTensor(const Tensor& tensor, LaneType lanes = 1);
+  TEST_API explicit DLPackTensor(const phi::DenseTensor& tensor,
+                                 LaneType lanes = 1);
 
   inline operator const ::DLTensor&() const { return t_; }
 
@@ -43,8 +42,10 @@ class DLPackTensor {
 
   // The shape in DLTensor is defined as int64_t*
   // Add this member to make TVMTensor init without heap allocation
-  ShapeType shape_[DDim::kMaxRank];
+  ShapeType shape_[phi::DDim::kMaxRank];
 };
+
+DLManagedTensor* toDLPack(const phi::DenseTensor& src);
 
 }  // namespace framework
 }  // namespace paddle

@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/framework/ir/seqpool_concat_fuse_pass.h"
 #include <gtest/gtest.h>
+
+#include "paddle/fluid/framework/ir/seqpool_concat_fuse_pass.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
-void SetOp(ProgramDesc* prog, const std::string& type,
+void SetOp(ProgramDesc* prog,
+           const std::string& type,
            const std::vector<std::string>& inputs,
            const std::vector<std::string>& outputs) {
   auto* op = prog->MutableBlock(0)->AppendOp();
@@ -55,12 +55,14 @@ int CountOpType(const ir::Graph* graph,
 }
 
 std::unique_ptr<ir::Graph> GetNumNodesOfBeforeAfter(
-    std::unique_ptr<ir::Graph> graph, int* before, int* after,
+    std::unique_ptr<ir::Graph> graph,
+    int* before,
+    int* after,
     const std::string& pass_type = "seqpool_concat_fuse_pass") {
   auto pass = PassRegistry::Instance().Get(pass_type);
-  *before = graph->Nodes().size();
+  *before = static_cast<int>(graph->Nodes().size());
   graph.reset(pass->Apply(graph.release()));
-  *after = graph->Nodes().size();
+  *after = static_cast<int>(graph->Nodes().size());
   return graph;
 }
 
@@ -92,17 +94,25 @@ TEST(SeqPoolConcatFusePass, basic) {
     var->SetType(proto::VarType::LOD_TENSOR);
   }
 
-  SetOp(&prog, "sequence_pool", std::vector<std::string>({"a"}),
+  SetOp(&prog,
+        "sequence_pool",
+        std::vector<std::string>({"a"}),
         std::vector<std::string>({"d", "e"}));
-  SetOp(&prog, "sequence_pool", std::vector<std::string>({"b"}),
+  SetOp(&prog,
+        "sequence_pool",
+        std::vector<std::string>({"b"}),
         std::vector<std::string>({"f", "g"}));
-  SetOp(&prog, "sequence_pool", std::vector<std::string>({"c"}),
+  SetOp(&prog,
+        "sequence_pool",
+        std::vector<std::string>({"c"}),
         std::vector<std::string>({"h", "i"}));
-  SetOp(&prog, "concat", std::vector<std::string>({"e", "g", "i"}),
+  SetOp(&prog,
+        "concat",
+        std::vector<std::string>({"e", "g", "i"}),
         std::vector<std::string>({"j"}));
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(prog));
-  int before, after;
+  int before = 0, after = 0;
   graph = GetNumNodesOfBeforeAfter(std::move(graph), &before, &after);
   // Remove 10 Nodes: op1, op2, op3, d, e, f, g, h, i, concat_op
   // Add 1 Node: fusion_seqpool_concat
@@ -138,17 +148,25 @@ TEST(SeqPoolConcatFusePass, advanced) {
     var->SetType(proto::VarType::LOD_TENSOR);
   }
 
-  SetOp(&prog, "sequence_pool", std::vector<std::string>({"a"}),
+  SetOp(&prog,
+        "sequence_pool",
+        std::vector<std::string>({"a"}),
         std::vector<std::string>({"c", "d"}));
-  SetOp(&prog, "sequence_pool", std::vector<std::string>({"b"}),
+  SetOp(&prog,
+        "sequence_pool",
+        std::vector<std::string>({"b"}),
         std::vector<std::string>({"e", "f"}));
-  SetOp(&prog, "op3", std::vector<std::string>({"b"}),
+  SetOp(&prog,
+        "op3",
+        std::vector<std::string>({"b"}),
         std::vector<std::string>({"g"}));
-  SetOp(&prog, "concat", std::vector<std::string>({"d", "f"}),
+  SetOp(&prog,
+        "concat",
+        std::vector<std::string>({"d", "f"}),
         std::vector<std::string>({"h"}));
 
   std::unique_ptr<ir::Graph> graph(new ir::Graph(prog));
-  int before, after;
+  int before = 0, after = 0;
   graph = GetNumNodesOfBeforeAfter(std::move(graph), &before, &after);
   // Remove 7 Nodes: op1, op2, c, d, e, f concat_op
   // Add 1 Node: fusion_seqpool_concat
@@ -168,12 +186,14 @@ ProgramDesc BuildProgramDesc(int num_inputs_of_concat) {
     new_var(prefix + "in");
     new_var(prefix + "out");
     new_var(prefix + "out_unused");
-    SetOp(&prog, "sequence_pool", std::vector<std::string>({prefix + "in"}),
+    SetOp(&prog,
+          "sequence_pool",
+          std::vector<std::string>({prefix + "in"}),
           std::vector<std::string>({prefix + "out", prefix + "out_unused"}));
     concat_inputs.push_back(prefix + "out");
   }
-  SetOp(&prog, "concat", concat_inputs,
-        std::vector<std::string>({"concat_out"}));
+  SetOp(
+      &prog, "concat", concat_inputs, std::vector<std::string>({"concat_out"}));
   return prog;
 }
 
@@ -182,7 +202,7 @@ TEST(SeqPoolConcatFusePass, more_inputs) {
   for (int num : {1, 2, 10}) {
     ProgramDesc prog = BuildProgramDesc(num);
     std::unique_ptr<ir::Graph> graph(new ir::Graph(prog));
-    int before, after;
+    int before = 0, after = 0;
     graph = GetNumNodesOfBeforeAfter(std::move(graph), &before, &after);
     // Remove Nodes: n * (seqpool_op, out, out_unused), and concat_op
     // Add Node: fusion_seqpool_concat op
@@ -191,8 +211,6 @@ TEST(SeqPoolConcatFusePass, more_inputs) {
   }
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(seqpool_concat_fuse_pass);

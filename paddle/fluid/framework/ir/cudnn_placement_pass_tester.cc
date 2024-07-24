@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/framework/ir/cudnn_placement_pass.h"
-
 #include <gtest/gtest.h>
+
+#include "paddle/fluid/framework/ir/cudnn_placement_pass.h"
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/operator.h"
 
@@ -29,13 +29,15 @@ class PlacementPassTest {
     if (!is_registered) {
       auto& all_kernels = OperatorWithKernel::AllOpKernels();
 
-      platform::CUDAPlace place = platform::CUDAPlace(0);
-      OpKernelType plain_kernel_type =
-          OpKernelType(proto::VarType::FP32, place, DataLayout::kAnyLayout,
-                       LibraryType::kPlain);
-      OpKernelType cudnn_kernel_type =
-          OpKernelType(proto::VarType::FP32, place, DataLayout::kAnyLayout,
-                       LibraryType::kCUDNN);
+      phi::GPUPlace place = phi::GPUPlace(0);
+      OpKernelType plain_kernel_type = OpKernelType(proto::VarType::FP32,
+                                                    place,
+                                                    DataLayout::kAnyLayout,
+                                                    LibraryType::kPlain);
+      OpKernelType cudnn_kernel_type = OpKernelType(proto::VarType::FP32,
+                                                    place,
+                                                    DataLayout::kAnyLayout,
+                                                    LibraryType::kCUDNN);
 
       auto fake_kernel_func = [](const ExecutionContext&) -> void {
         static int num_calls = 0;
@@ -90,7 +92,7 @@ class PlacementPassTest {
       if (node->IsOp() && node->Op()) {
         auto* op = node->Op();
         if (op->HasAttr("use_cudnn") &&
-            BOOST_GET_CONST(bool, op->GetAttr("use_cudnn"))) {
+            PADDLE_GET_CONST(bool, op->GetAttr("use_cudnn"))) {
           ++use_cudnn_true_count;
         }
       }
@@ -118,7 +120,7 @@ TEST(CUDNNPlacementPass, enable_relu_pool) {
 
 TEST(CUDNNPlacementPass, enable_all) {
   // 1 conv2d + 1 pool2d
-  // depthwise_conv2d doesnot have CUDNN kernel.
+  // depthwise_conv2d does not have CUDNN kernel.
   PlacementPassTest().MainTest({}, 2);
 }
 

@@ -18,9 +18,6 @@ namespace paddle {
 namespace platform {
 namespace dynload {
 
-std::once_flag rccl_dso_flag;
-void *rccl_dso_handle;
-
 #define DEFINE_WRAP(__name) DynLoad__##__name __name
 
 RCCL_RAND_ROUTINE_EACH(DEFINE_WRAP);
@@ -29,8 +26,16 @@ RCCL_RAND_ROUTINE_EACH(DEFINE_WRAP);
 RCCL_RAND_ROUTINE_EACH_AFTER_2212(DEFINE_WRAP)
 #endif
 
+#if NCCL_VERSION_CODE >= 2304
+RCCL_RAND_ROUTINE_EACH_AFTER_2304(DEFINE_WRAP)
+#endif
+
 #if NCCL_VERSION_CODE >= 2703
 RCCL_RAND_ROUTINE_EACH_AFTER_2703(DEFINE_WRAP)
+#endif
+
+#if NCCL_VERSION_CODE >= 21100
+RCCL_RAND_ROUTINE_EACH_AFTER_21100(DEFINE_WRAP)
 #endif
 
 }  // namespace dynload

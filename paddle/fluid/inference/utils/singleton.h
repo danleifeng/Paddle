@@ -16,6 +16,7 @@ limitations under the License. */
 
 #include <string>
 #include <unordered_map>
+
 #include "paddle/fluid/platform/enforce.h"
 
 namespace paddle {
@@ -34,7 +35,7 @@ struct Singleton {
 };
 
 /*
- * An registor for any type.
+ * An Registry for any type.
  * NOTE not thread-safe.
  */
 template <typename ItemParent>
@@ -46,9 +47,10 @@ struct Registry {
 
   template <typename ItemChild>
   void Register(const std::string& name) {
-    PADDLE_ENFORCE_EQ(items_.count(name), 0,
-                      platform::errors::AlreadyExists(
-                          "Item `%s` has beed registered.", name));
+    PADDLE_ENFORCE_EQ(
+        items_.count(name),
+        0,
+        phi::errors::AlreadyExists("Item `%s` has beed registered.", name));
     items_[name] = new ItemChild;
   }
 

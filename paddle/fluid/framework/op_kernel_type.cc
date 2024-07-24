@@ -16,13 +16,12 @@ limitations under the License. */
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 size_t OpKernelType::Hash::operator()(const OpKernelType& key) const {
   int cur_loc = 0;
 
-  int place = key.place_.which();
+  int place = static_cast<int>(key.place_.GetType());
   cur_loc += OpKernelType::kPlaceBits;
 
   int data_type = static_cast<int>(key.data_type_) << cur_loc;
@@ -35,30 +34,42 @@ size_t OpKernelType::Hash::operator()(const OpKernelType& key) const {
   cur_loc += OpKernelType::kLibBits;
 
   int customized_value = key.customized_type_value_;
-  PADDLE_ENFORCE_LT(customized_value, (1 << OpKernelType::kCustomizeBits),
-                    platform::errors::Unavailable(
+  PADDLE_ENFORCE_LT(customized_value,
+                    (1 << OpKernelType::kCustomizeBits),
+                    phi::errors::Unavailable(
                         "Too many custom OpKernel attribute values, expected "
                         "maximum value is %d, received value is %d.",
-                        (1 << OpKernelType::kCustomizeBits), customized_value));
+                        (1 << OpKernelType::kCustomizeBits),
+                        customized_value));
   customized_value = customized_value << cur_loc;
   cur_loc += OpKernelType::kCustomizeBits;
-  PADDLE_ENFORCE_LT(cur_loc, 64,
-                    platform::errors::Unavailable(
+  PADDLE_ENFORCE_LT(cur_loc,
+                    64,
+                    phi::errors::Unavailable(
                         "Too many OpKernel attribute values, expected maximum "
                         "value is 64, received value is %d.",
                         cur_loc));
-
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+  std::hash<int> hasher;
+  size_t seed =
+      hasher(place + data_type + data_layout + library_type + customized_value);
+  if (phi::is_custom_place(key.place_)) {
+    seed ^= std::hash<std::string>{}(key.place_.GetDeviceType()) + 0x9e3779b9 +
+            (seed << 6) + (seed >> 2) + 4;
+  }
+  return seed;
+#else
   std::hash<int> hasher;
   return hasher(place + data_type + data_layout + library_type +
                 customized_value);
+#endif
 }
 
 bool OpKernelType::operator==(const OpKernelType& o) const {
-  return platform::places_are_same_class(place_, o.place_) &&
+  return phi::places_are_same_class(place_, o.place_) &&
          data_type_ == o.data_type_ && data_layout_ == o.data_layout_ &&
          library_type_ == o.library_type_ &&
          customized_type_value_ == o.customized_type_value_;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

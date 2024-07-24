@@ -27,6 +27,7 @@ limitations under the License. */
 #include <vector>
 #ifdef PADDLE_WITH_GLOO
 #include <gloo/allgather.h>
+#include <gloo/allgatherv.h>
 #include <gloo/allreduce.h>
 #include <gloo/barrier.h>
 #include <gloo/rendezvous/context.h>
@@ -94,7 +95,7 @@ class ParallelConnectContext : public gloo::rendezvous::Context {
       : gloo::rendezvous::Context(rank, size, base) {}
   virtual ~ParallelConnectContext() {}
   // in gloo::rendezvous::Context wait&get one by one,
-  // slowly in case big size, especialy in HdfsStore
+  // slowly in case big size, especially in HdfsStore
   void connectFullMesh(Store& store,                              // NOLINT
                        std::shared_ptr<transport::Device>& dev);  // NOLINT
   struct Impl {
@@ -113,8 +114,13 @@ class ParallelConnectContext : public gloo::rendezvous::Context {
     for (int i = 0; i < NBYTES; i++) {
       octet[i] = ipAddress >> (i * 8);
     }
-    snprintf(ipAddressFinal, sizeof(ipAddressFinal), "%d.%d.%d.%d", octet[0],
-             octet[1], octet[2], octet[3]);
+    snprintf(ipAddressFinal,
+             sizeof(ipAddressFinal),
+             "%d.%d.%d.%d",
+             octet[0],
+             octet[1],
+             octet[2],
+             octet[3]);
     return std::string(ipAddressFinal);
   }
 
@@ -160,7 +166,8 @@ class GlooWrapper {
 
   void SetPrefix(const std::string& prefix) { prefix_ = prefix; }
 
-  void SetHdfsStore(const std::string& path, const std::string& fs_name,
+  void SetHdfsStore(const std::string& path,
+                    const std::string& fs_name,
                     const std::string& fs_ugi) {
     store_type_ = GlooStoreType::HDFS;
     hdfs_path_ = path;
@@ -213,8 +220,10 @@ class GlooWrapper {
           static_cast<void (*)(void*, const void*, const void*, size_t)>(
               &gloo::min<T>));
     } else {
-      PADDLE_ENFORCE_EQ(0, 1, paddle::platform::errors::InvalidArgument(
-                                  "AllReduce mode not known: " + mode));
+      PADDLE_ENFORCE_EQ(
+          0,
+          1,
+          phi::errors::InvalidArgument("AllReduce mode not known: " + mode));
     }
     gloo::allreduce(opts);
 #else
@@ -236,6 +245,41 @@ class GlooWrapper {
     LOG(WARNING) << "AllGather does nothing when WITH_GLOO=OFF";
 #endif
     return ret;
+  }
+
+  // NOTE(@xiongkun03): support all gather array of
+  //                   numbers with different length
+  //                   if the third argument is int, use allgather,
+  //                   if it is vector, use AllgathervOptions,
+  //                   which works in different length occasion.
+  template <typename T>
+  void AllGatherVector(T* input_ptr,
+                       T* output_ptr,
+                       std::vector<size_t>& element_nums) {  // NOLINT
+    CHECK_EQ(is_initialized_, true);
+#ifdef PADDLE_WITH_GLOO
+    gloo::AllgathervOptions opts(context_);
+    opts.setInput(input_ptr, element_nums[rank_]);
+    opts.setOutput(output_ptr, element_nums);
+    gloo::allgatherv(opts);
+#else
+    LOG(WARNING) << "AllGather does nothing when WITH_GLOO=OFF";
+#endif
+  }
+
+  template <typename T>
+  void AllGatherVector(T* input_ptr,
+                       T* output_ptr,
+                       size_t element_num) {  // NOLINT
+    CHECK_EQ(is_initialized_, true);
+#ifdef PADDLE_WITH_GLOO
+    gloo::AllgatherOptions opts(context_);
+    opts.setInput(input_ptr, element_num);
+    opts.setOutput(output_ptr, element_num * size_);
+    gloo::allgather(opts);
+#else
+    LOG(WARNING) << "AllGather does nothing when WITH_GLOO=OFF";
+#endif
   }
 
  protected:

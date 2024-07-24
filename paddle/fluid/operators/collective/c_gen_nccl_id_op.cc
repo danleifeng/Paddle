@@ -20,18 +20,17 @@ limitations under the License. */
 #include "paddle/fluid/framework/var_type_traits.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/place.h"
-
 #include "paddle/fluid/platform/gen_comm_id_helper.h"
+#include "paddle/phi/common/place.h"
 
+COMMON_DECLARE_bool(dynamic_static_unified_comm);
 namespace paddle {
 namespace operators {
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 static void GenNCCLID(std::vector<ncclUniqueId>* nccl_ids) {
-  for (size_t i = 0; i < nccl_ids->size(); ++i) {
-    PADDLE_ENFORCE_CUDA_SUCCESS(
-        platform::dynload::ncclGetUniqueId(&(*nccl_ids)[i]));
+  for (auto& nccl_id : *nccl_ids) {
+    PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclGetUniqueId(&nccl_id));
   }
 }
 
@@ -42,8 +41,9 @@ static void CopyNCCLIDToVar(const std::vector<ncclUniqueId>& nccl_ids,
     std::string var_name = func(i);
     auto var = scope.FindVar(var_name);
     PADDLE_ENFORCE_NOT_NULL(
-        var, platform::errors::NotFound("Variable with name %s is not found",
-                                        var_name.c_str()));
+        var,
+        phi::errors::NotFound("Variable with name %s is not found",
+                              var_name.c_str()));
     auto nccl_id = var->GetMutable<ncclUniqueId>();
     memcpy(nccl_id, &nccl_ids[i], sizeof(ncclUniqueId));
   }
@@ -58,7 +58,7 @@ class CGenNCCLIdOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {
+               const phi::Place& dev_place) const override {
     int rank = Attr<int>("rank");
     int ring_id = Attr<int>("ring_id");
 
@@ -67,18 +67,20 @@ class CGenNCCLIdOp : public framework::OperatorBase {
     };
 
     std::string endpoint = Attr<std::string>("endpoint");
-    int server_fd = platform::SocketServer::GetInstance(endpoint).socket();
 
     std::vector<ncclUniqueId> nccl_ids;
     nccl_ids.resize(1);
 
-    if (rank == 0) {
-      GenNCCLID(&nccl_ids);
-      std::vector<std::string> endpoint_list =
-          Attr<std::vector<std::string>>("other_endpoints");
-      platform::SendBroadCastCommID(endpoint_list, &nccl_ids, ring_id);
-    } else {
-      platform::RecvBroadCastCommID(server_fd, endpoint, &nccl_ids, ring_id);
+    if (!FLAGS_dynamic_static_unified_comm) {
+      int server_fd = platform::SocketServer::GetInstance(endpoint).socket();
+      if (rank == 0) {
+        GenNCCLID(&nccl_ids);
+        std::vector<std::string> endpoint_list =
+            Attr<std::vector<std::string>>("other_endpoints");
+        platform::SendBroadCastCommID(endpoint_list, &nccl_ids, ring_id);
+      } else {
+        platform::RecvBroadCastCommID(server_fd, endpoint, &nccl_ids, ring_id);
+      }
     }
 
     CopyNCCLIDToVar(nccl_ids, func, scope);
@@ -95,7 +97,7 @@ class CGenNCCLIdOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& dev_place) const override {}
+               const phi::Place& dev_place) const override {}
 };
 
 #endif
@@ -103,7 +105,7 @@ class CGenNCCLIdOp : public framework::OperatorBase {
 class CGenNCCLIdOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
-    AddOutput("Out", "Raw variable contains a NCCL UniqueId instaces.");
+    AddOutput("Out", "Raw variable contains a NCCL UniqueId instances.");
     AddComment(R"DOC(
 CGenNCCLId operator
 

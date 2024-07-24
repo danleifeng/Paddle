@@ -13,13 +13,16 @@
 // limitations under the License.
 
 #include "paddle/fluid/memory/allocation/best_fit_allocator.h"
-#include <cmath>
 
+#include <cmath>
+#include <mutex>
+
+#include "paddle/common/macros.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace memory {
-namespace allocation {
+REGISTER_FILE_SYMBOLS(best_fit_allocator);
+
+namespace paddle::memory::allocation {
 
 static int HighestBitPos(size_t N) {
   if (UNLIKELY(N == 0)) {
@@ -33,7 +36,7 @@ static int HighestBitPos(size_t N) {
   }
 }
 
-BestFitAllocator::BestFitAllocator(Allocation* allocation)
+BestFitAllocator::BestFitAllocator(phi::Allocation* allocation)
     : allocation_(allocation) {
   details::Chunk chunk;
   chunk.size_ = allocation_->size();
@@ -60,11 +63,13 @@ BestFitAllocator::ListIt BestFitAllocator::SplitChunk(size_t request_size,
   auto to_split_it = bin_iterator->second;
   free_chunks_[free_chunk_offset].erase(bin_iterator);
 
-  PADDLE_ENFORCE_EQ(to_split_it->is_free, true,
-                    platform::errors::PreconditionNotMet(
-                        "The memory chunk to split is not free"));
-  PADDLE_ENFORCE_GE(to_split_it->size_, request_size,
-                    platform::errors::PreconditionNotMet(
+  PADDLE_ENFORCE_EQ(
+      to_split_it->is_free,
+      true,
+      phi::errors::PreconditionNotMet("The memory chunk to split is not free"));
+  PADDLE_ENFORCE_GE(to_split_it->size_,
+                    request_size,
+                    phi::errors::PreconditionNotMet(
                         "The size of memory chunk to split is "
                         "not larger than size of request memory"));
 
@@ -104,8 +109,9 @@ void BestFitAllocator::EraseFreeNode(const ListIt& it) {
     ++map_it;
   }
   PADDLE_ENFORCE_NE(
-      map_it, free_map.end(),
-      platform::errors::NotFound("The node to erase is not found in map"));
+      map_it,
+      free_map.end(),
+      phi::errors::NotFound("The node to erase is not found in map"));
   free_map.erase(map_it);
 }
 size_t BestFitAllocator::NumFreeChunks() const {
@@ -115,15 +121,17 @@ size_t BestFitAllocator::NumFreeChunks() const {
   }
   return num;
 }
-void BestFitAllocator::FreeImpl(Allocation* allocation) {
+void BestFitAllocator::FreeImpl(phi::Allocation* allocation) {
+  std::lock_guard<SpinLock> guard(spinlock_);
   auto* bf_allocation = dynamic_cast<BestFitAllocation*>(allocation);
   PADDLE_ENFORCE_NOT_NULL(
       bf_allocation,
-      platform::errors::InvalidArgument(
+      phi::errors::InvalidArgument(
           "The input allocation is not type of BestFitAllocation."));
   auto chunk_it = bf_allocation->ChunkIterator();
-  PADDLE_ENFORCE_EQ(chunk_it->is_free, false,
-                    platform::errors::PreconditionNotMet(
+  PADDLE_ENFORCE_EQ(chunk_it->is_free,
+                    false,
+                    phi::errors::PreconditionNotMet(
                         "The chunk of allocation to free is freed already"));
   chunk_it->is_free = true;
   if (chunk_it != chunks_.begin()) {
@@ -150,7 +158,8 @@ void BestFitAllocator::FreeImpl(Allocation* allocation) {
   InsertFreeNode(chunk_it);
   delete allocation;
 }
-Allocation* BestFitAllocator::AllocateImpl(size_t size) {
+phi::Allocation* BestFitAllocator::AllocateImpl(size_t size) {
+  std::lock_guard<SpinLock> guard(spinlock_);
   auto highest_set_bit = static_cast<size_t>(HighestBitPos(size));
   MapIt map_it;
   for (; highest_set_bit < free_chunks_.size(); ++highest_set_bit) {
@@ -160,7 +169,7 @@ Allocation* BestFitAllocator::AllocateImpl(size_t size) {
     }
   }
   if (UNLIKELY(highest_set_bit == free_chunks_.size())) {
-    PADDLE_THROW_BAD_ALLOC(platform::errors::ResourceExhausted(
+    PADDLE_THROW_BAD_ALLOC(phi::errors::ResourceExhausted(
         "Cannot allocate %d, All fragments size is %d.", size, FreeSize()));
   }
   auto chunk_it = SplitChunk(size, highest_set_bit, map_it);
@@ -172,9 +181,8 @@ BestFitAllocation::BestFitAllocation(
     typename details::ChunkList::iterator chunk_it)
     : Allocation(reinterpret_cast<void*>(
                      reinterpret_cast<uintptr_t>(allocator->BasePtr()) +
-                     chunk_it->offset_),
-                 chunk_it->size_, allocator->Place()),
+                     chunk_it->offset_),  // NOLINT
+                 chunk_it->size_,
+                 allocator->Place()),
       chunk_it_(chunk_it) {}
-}  // namespace allocation
-}  // namespace memory
-}  // namespace paddle
+}  // namespace paddle::memory::allocation

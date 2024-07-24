@@ -24,15 +24,15 @@ namespace allocation {
 
 class AlignedAllocator : public Allocator {
  public:
-  AlignedAllocator(const std::shared_ptr<Allocator>& underlying_allocator,
+  AlignedAllocator(std::shared_ptr<Allocator> underlying_allocator,
                    size_t alignment);
 
   bool IsAllocThreadSafe() const override;
 
  protected:
-  Allocation* AllocateImpl(size_t size) override;
+  phi::Allocation* AllocateImpl(size_t size) override;
 
-  void FreeImpl(Allocation* allocation) override;
+  void FreeImpl(phi::Allocation* allocation) override;
 
  private:
   std::shared_ptr<Allocator> underlying_allocator_;

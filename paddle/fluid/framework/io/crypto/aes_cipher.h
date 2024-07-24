@@ -12,19 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 #pragma once
 
 #include <string>
@@ -55,12 +42,14 @@ class AESCipher : public Cipher {
   std::string Decrypt(const std::string& input,
                       const std::string& key) override;
 
-  void EncryptToFile(const std::string& input, const std::string& key,
+  void EncryptToFile(const std::string& input,
+                     const std::string& key,
                      const std::string& filename) override;
   std::string DecryptFromFile(const std::string& key,
                               const std::string& filename) override;
 
-  void Init(const std::string& cipher_name, const int& iv_size,
+  void Init(const std::string& cipher_name,
+            const int& iv_size,
             const int& tag_size);
 
  private:
@@ -75,7 +64,8 @@ class AESCipher : public Cipher {
                                            const std::string& key);
 
   void BuildCipher(
-      bool for_encrypt, bool* need_iv,
+      bool for_encrypt,
+      bool* need_iv,
       CryptoPP::member_ptr<CryptoPP::SymmetricCipher>* m_cipher,
       CryptoPP::member_ptr<CryptoPP::StreamTransformationFilter>* m_filter);
 

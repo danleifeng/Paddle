@@ -16,6 +16,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "paddle/fluid/framework/scope.h"
+#include "paddle/fluid/framework/selected_rows_utils.h"
+#include "paddle/fluid/framework/variable.h"
 #include "paddle/fluid/imperative/parallel_context.h"
 #include "paddle/fluid/platform/device_context.h"
 
@@ -31,7 +35,7 @@ namespace imperative {
 class GLOOParallelContext : public ParallelContext {
  public:
   explicit GLOOParallelContext(const ParallelStrategy& strategy,
-                               const platform::Place& place)
+                               const phi::Place& place)
       : ParallelContext(strategy, place) {}
 
   ~GLOOParallelContext() override = default;
@@ -41,10 +45,13 @@ class GLOOParallelContext : public ParallelContext {
   void InitWithRingID(int ring_id) override;
 
   void AllReduceByStream(const framework::Variable& src,
-                         framework::Variable* dst, int ring_id,
+                         framework::Variable* dst,
+                         int ring_id,
                          bool use_calc_stream) override;
 
-  paddle::platform::DeviceContext* GetDeviceContext(int ring_id) override;
+  void Broadcast(framework::Variable* src, int ring_id) override;
+
+  phi::DeviceContext* GetDeviceContext(int ring_id) override;
 
   void WaitCompute(int ring_id) override;
 
@@ -53,7 +60,11 @@ class GLOOParallelContext : public ParallelContext {
   void SynchronizeCompute() override;
 
  private:
-  std::unique_ptr<platform::CPUDeviceContext> device_;
+  void AllReduce(const phi::DenseTensor& src, phi::DenseTensor* dst);
+  void AllReduce(const phi::SelectedRows& src, phi::SelectedRows* dst);
+
+ private:
+  std::unique_ptr<phi::CPUContext> device_;
 };
 
 }  //  namespace imperative

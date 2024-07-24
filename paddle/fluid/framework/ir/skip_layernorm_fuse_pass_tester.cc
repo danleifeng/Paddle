@@ -12,15 +12,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/framework/ir/skip_layernorm_fuse_pass.h"
-
 #include <gtest/gtest.h>
+
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
+#include "paddle/fluid/framework/ir/skip_layernorm_fuse_pass.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 TEST(SkipLayerNormFusePass, basic) {
   // inputs                           operator            output
@@ -39,21 +37,23 @@ TEST(SkipLayerNormFusePass, basic) {
   graph->Set(kEmbEltwiseLayernormPass, new bool(true));
   graph->Set(kMultiheadMatmulPass, new bool(true));
   auto pass = PassRegistry::Instance().Get("skip_layernorm_fuse_pass");
-  int num_nodes_before = graph->Nodes().size();
+  int num_nodes_before = static_cast<int>(graph->Nodes().size());
   VLOG(3) << DebugString(graph);
 
   graph.reset(pass->Apply(graph.release()));
-  int num_nodes_after = graph->Nodes().size();
+  int num_nodes_after = static_cast<int>(graph->Nodes().size());
   int num_fused_nodes_after = GetNumOpNodes(graph, "skip_layernorm");
   VLOG(3) << DebugString(graph);
 
-  PADDLE_ENFORCE_EQ(num_nodes_before, num_nodes_after + 4,
-                    platform::errors::PreconditionNotMet(
+  PADDLE_ENFORCE_EQ(num_nodes_before,
+                    num_nodes_after + 4,
+                    phi::errors::PreconditionNotMet(
                         "The number of nodes before and after the fuse does "
                         "not meet expectations"));
   PADDLE_ENFORCE_EQ(
-      num_fused_nodes_after, 1,
-      platform::errors::PreconditionNotMet(
+      num_fused_nodes_after,
+      1,
+      phi::errors::PreconditionNotMet(
           "The number of fusion nodes does not meet expectations after fuse"));
 }
 
@@ -63,8 +63,6 @@ TEST(SkipLayerNormFusePass, pass_op_version_check) {
           .IsPassCompatible("skip_layernorm_fuse_pass"));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(skip_layernorm_fuse_pass);

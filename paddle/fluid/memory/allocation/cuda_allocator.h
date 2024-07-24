@@ -14,8 +14,9 @@
 
 #pragma once
 #include <mutex>  // NOLINT
+
 #include "paddle/fluid/memory/allocation/allocator.h"
-#include "paddle/fluid/platform/place.h"
+#include "paddle/phi/common/place.h"
 
 namespace paddle {
 namespace memory {
@@ -23,16 +24,16 @@ namespace allocation {
 
 class CUDAAllocator : public Allocator {
  public:
-  explicit CUDAAllocator(const platform::CUDAPlace& place) : place_(place) {}
+  explicit CUDAAllocator(const phi::GPUPlace& place) : place_(place) {}
 
   bool IsAllocThreadSafe() const override;
 
  protected:
-  void FreeImpl(Allocation* allocation) override;
-  Allocation* AllocateImpl(size_t size) override;
+  void FreeImpl(phi::Allocation* allocation) override;
+  phi::Allocation* AllocateImpl(size_t size) override;
 
  private:
-  platform::CUDAPlace place_;
+  phi::GPUPlace place_;
   std::once_flag once_flag_;
 };
 

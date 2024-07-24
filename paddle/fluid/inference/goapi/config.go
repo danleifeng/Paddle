@@ -157,37 +157,58 @@ func (config *Config) UseFcPadding() bool {
 /// \param deviceId the GPU card to use.
 ///
 func (config *Config) EnableUseGpu(memorySize uint64, deviceId int32) {
-	C.PD_ConfigEnableUseGpu(config.c, C.uint64_t(memorySize), C.int32_t(deviceId))
+	C.PD_ConfigEnableUseGpu(config.c, C.uint64_t(memorySize), C.int32_t(deviceId), 0)
+}
+
+///
+/// \brief Turn on ONNXRuntime.
+///
+func (config *Config) EnableONNXRuntime() {
+	C.PD_ConfigEnableONNXRuntime(config.c)
+}
+
+///
+/// \brief Turn off ONNXRuntime.
+///
+func (config *Config) DisableONNXRuntime() {
+	C.PD_ConfigDisableONNXRuntime(config.c)
+}
+
+///
+/// \brief A boolean state telling whether the ONNXRuntime is turned on.
+///
+/// \return bool Whether the ONNXRuntime is turned on.
+///
+func (config *Config) ONNXRuntimeEnabled() bool {
+	return cvtPDBoolToGo(C.PD_ConfigONNXRuntimeEnabled(config.c))
+}
+
+///
+/// \brief Turn on ONNXRuntime Optimization.
+///
+func (config *Config) EnableORTOptimization() {
+	C.PD_ConfigEnableORTOptimization(config.c)
 }
 
 ///
 /// \brief Turn on XPU.
 ///
-/// \param l3_workspace_size The size of the video memory allocated by the l3 cache, the maximum is 16M.
-/// \param locked Whether the allocated L3 cache can be locked. If false, it means that the L3 cache is not locked, and the allocated L3 cache can be shared by multiple models, and multiple models sharing the L3 cache will be executed sequentially on the card.
-/// \param autotune Whether to autotune the conv operator in the model. If true, when the conv operator of a certain dimension is executed for the first time, it will automatically search for a better algorithm to improve the performance of subsequent conv operators of the same dimension.
-/// \param autotune_file Specify the path of the autotune file. If autotune_file is specified, the algorithm specified in the file will be used and autotune will not be performed again.
-/// \param precision Calculation accuracy of multi_encoder
-/// \param adaptive_seqlen Is the input of multi_encoder variable length
+/// \param l3Size The size of the video memory allocated by the l3 cache, the maximum is 16M.
+/// \param l3Locked Whether the allocated L3 cache can be locked. If false, it means that the L3 cache is not locked, and the allocated L3 cache can be shared by multiple models, and multiple models sharing the L3 cache will be executed sequentially on the card.
+/// \param convAutotune Whether to autotune the conv operator in the model. If true, when the conv operator of a certain dimension is executed for the first time, it will automatically search for a better algorithm to improve the performance of subsequent conv operators of the same dimension.
+/// \param convAutotuneFile Specify the path of the autotune file. If autotune_file is specified, the algorithm specified in the file will be used and autotune will not be performed again.
+/// \param transformerEencoderPrecision Calculation accuracy of multi_encoder
+/// \param transformerEncoderAdaptiveSeqlen Is the input of multi_encoder variable length
+/// \param enable_multi_stream Whether to enable the multi stream of xpu
 ///
-func (config *Config) EnableXpu(l3WorkspaceSize int32, locked bool, autotune bool, autotuneFile string, precision string, adaptiveSeqlen bool) {
-	cAutotuneFile := C.CString(autotuneFile)
-	cPrecision := C.CString(precision)
+func (config *Config) EnableXpu(l3Size int32, l3Locked bool, convAutotune bool, convAutotuneFile string, transformerEencoderPrecision string, transformerEncoderAdaptiveSeqlen bool, enableMultiStream bool) {
+	cConvAutotuneFile := C.CString(convAutotuneFile)
+	cTransformerEencoderPrecision := C.CString(transformerEencoderPrecision)
 	defer func() {
-		C.free(unsafe.Pointer(cAutotuneFile))
-		C.free(unsafe.Pointer(cPrecision))
+		C.free(unsafe.Pointer(cConvAutotuneFile))
+		C.free(unsafe.Pointer(cTransformerEencoderPrecision))
 	}()
-	C.PD_ConfigEnableXpu(config.c, C.int32_t(l3WorkspaceSize), cvtGoBoolToPD(locked), cvtGoBoolToPD(autotune),
-		cAutotuneFile, cPrecision, cvtGoBoolToPD(adaptiveSeqlen))
-}
-
-///
-/// \brief Turn on NPU.
-///
-/// \param deviceId the NPU card to use.
-///
-func (config *Config) EnableNpu(deviceId int32) {
-	C.PD_ConfigEnableNpu(config.c, C.int32_t(deviceId))
+	C.PD_ConfigEnableXpu(config.c, C.int32_t(l3Size), cvtGoBoolToPD(l3Locked), cvtGoBoolToPD(convAutotune), cConvAutotuneFile, cTransformerEencoderPrecision, cvtGoBoolToPD(transformerEncoderAdaptiveSeqlen), cvtGoBoolToPD(enableMultiStream))
 }
 
 ///
@@ -209,15 +230,6 @@ func (config *Config) UseXpu() bool {
 }
 
 ///
-/// \brief A boolean state telling whether the NPU is turned on.
-///
-/// \return bool Whether the NPU is turned on.
-///
-func (config *Config) UseNpu() bool {
-	return cvtPDBoolToGo(C.PD_ConfigUseNpu(config.c))
-}
-
-///
 /// \brief Get the GPU device id.
 ///
 /// \return int32 The GPU device id.
@@ -233,15 +245,6 @@ func (config *Config) GpuDeviceId() int32 {
 ///
 func (config *Config) XpuDeviceId() int32 {
 	return int32(C.PD_ConfigXpuDeviceId(config.c))
-}
-
-///
-/// \brief Get the NPU device id.
-///
-/// \return int32 The NPU device id.
-///
-func (config *Config) NpuDeviceId() int32 {
-	return int32(C.PD_ConfigNpuDeviceId(config.c))
 }
 
 ///
@@ -302,9 +305,9 @@ func (config *Config) IrOptim() bool {
 /// \param useCalibMode Use TRT int8 calibration(post training
 /// quantization).
 ///
-func (config *Config) EnableTensorRtEngine(workspaceSize int32, maxBatchSize int32, minSubgraphSize int32,
+func (config *Config) EnableTensorRtEngine(workspaceSize int64, maxBatchSize int32, minSubgraphSize int32,
 	precision Precision, useStatic bool, useCalibMode bool) {
-	C.PD_ConfigEnableTensorRtEngine(config.c, C.int32_t(workspaceSize), C.int32_t(maxBatchSize), C.int32_t(minSubgraphSize), C.int32_t(precision), cvtGoBoolToPD(useStatic), cvtGoBoolToPD(useCalibMode))
+	C.PD_ConfigEnableTensorRtEngine(config.c, C.int64_t(workspaceSize), C.int32_t(maxBatchSize), C.int32_t(minSubgraphSize), C.int32_t(precision), cvtGoBoolToPD(useStatic), cvtGoBoolToPD(useCalibMode))
 }
 
 ///
@@ -470,8 +473,8 @@ func (config *Config) DisableTensorRtOPs(ops []string) {
 /// may be more high-performance. Libnvinfer_plugin.so greater than
 /// V7.2.1 is needed.
 ///
-func (config *Config) EnableTensorRtOSS() {
-	C.PD_ConfigEnableTensorRtOSS(config.c)
+func (config *Config) EnableVarseqlen() {
+	C.PD_ConfigEnableVarseqlen(config.c)
 }
 
 ///
@@ -502,44 +505,6 @@ func (config *Config) TensorrtDlaEnabled() bool {
 }
 
 ///
-/// \brief Turn on the usage of Lite sub-graph engine.
-///
-/// \param precision Precion used in Lite sub-graph engine.
-/// \param zeroCopy Set the zero copy mode.
-/// \param passesFilter Set the passes used in Lite sub-graph engine.
-/// \param opsFilter Operators not supported by Lite.
-///
-func (config *Config) EnableLiteEngine(precision Precision, zeroCopy bool, passesFilter []string, opsFilter []string) {
-	passesFilterNum := uint(len(passesFilter))
-	var passesFilterBuf = make([]*C.char, passesFilterNum+1)
-	for i, _ := range passesFilter {
-		char := C.CString(passesFilter[i])
-		defer C.free(unsafe.Pointer(char))
-		passesFilterBuf[i] = (*C.char)(unsafe.Pointer(char))
-	}
-
-	opsFilterNum := uint(len(opsFilter))
-	var opsFilterBuf = make([]*C.char, passesFilterNum+1)
-	for i, _ := range opsFilter {
-		char := C.CString(opsFilter[i])
-		defer C.free(unsafe.Pointer(char))
-		opsFilterBuf[i] = (*C.char)(unsafe.Pointer(char))
-	}
-
-	C.PD_ConfigEnableLiteEngine(config.c, C.int32_t(precision), cvtGoBoolToPD(zeroCopy), C.size_t(passesFilterNum), (**C.char)(unsafe.Pointer(&passesFilterBuf[0])), C.size_t(opsFilterNum), (**C.char)(unsafe.Pointer(&opsFilterBuf[0])))
-}
-
-///
-/// \brief A boolean state indicating whether the Lite sub-graph engine is
-/// used.
-///
-/// \return bool whether the Lite sub-graph engine is used.
-///
-func (config *Config) LiteEngineEnabled() bool {
-	return cvtPDBoolToGo(C.PD_ConfigLiteEngineEnabled(config.c))
-}
-
-///
 /// \brief Control whether to debug IR graph analysis phase.
 /// This will generate DOT files for visualizing the computation graph after
 /// each analysis pass applied.
@@ -551,14 +516,14 @@ func (config *Config) SwitchIrDebug(x bool) {
 }
 
 ///
-/// \brief Turn on MKLDNN.
+/// \brief Turn on OneDNN.
 ///
 func (config *Config) EnableMKLDNN() {
 	C.PD_ConfigEnableMKLDNN(config.c)
 }
 
 ///
-/// \brief Set the cache capacity of different input shapes for MKLDNN.
+/// \brief Set the cache capacity of different input shapes for OneDNN.
 /// Default value 0 means not caching any shape.
 /// Please see MKL-DNN Data Caching Design Document:
 /// https://github.com/PaddlePaddle/FluidDoc/blob/develop/doc/fluid/design/mkldnn/caching/caching.md
@@ -570,9 +535,9 @@ func (config *Config) SetMkldnnCacheCapacity(capacity int32) {
 }
 
 ///
-/// \brief A boolean state telling whether to use the MKLDNN.
+/// \brief A boolean state telling whether to use the OneDNN.
 ///
-/// \return bool Whether to use the MKLDNN.
+/// \return bool Whether to use the OneDNN.
 ///
 func (config *Config) MkldnnEnabled() bool {
 	return cvtPDBoolToGo(C.PD_ConfigMkldnnEnabled(config.c))
@@ -606,7 +571,7 @@ func (config *Config) CpuMathLibraryNumThreads() int32 {
 // NativeConfig ToNativeConfig() const;
 
 ///
-/// \brief Specify the operator type list to use MKLDNN acceleration.
+/// \brief Specify the operator type list to use OneDNN acceleration.
 ///
 /// \param opList The operator type list.
 ///
@@ -624,23 +589,23 @@ func (config *Config) SetMKLDNNOp(opList []string) {
 }
 
 ///
-/// \brief Turn on MKLDNN quantization.
+/// \brief Turn on OneDNN quantization.
 ///
 func (config *Config) EnableMkldnnQuantizer() {
 	C.PD_ConfigEnableMkldnnQuantizer(config.c)
 }
 
 ///
-/// \brief Turn on MKLDNN bfloat16.
+/// \brief Turn on OneDNN bfloat16.
 ///
 func (config *Config) EnableMkldnnBfloat16() {
 	C.PD_ConfigEnableMkldnnBfloat16(config.c)
 }
 
 ///
-/// \brief A boolean state telling whether to use the MKLDNN Bfloat16.
+/// \brief A boolean state telling whether to use the OneDNN Bfloat16.
 ///
-/// \return bool Whether to use the MKLDNN Bfloat16.
+/// \return bool Whether to use the OneDNN Bfloat16.
 ///
 func (config *Config) MkldnnBfloat16Enabled() bool {
 	return cvtPDBoolToGo(C.PD_ConfigMkldnnBfloat16Enabled(config.c))
@@ -674,9 +639,9 @@ func (config *Config) ThreadLocalStreamEnabled() bool {
 }
 
 ///
-/// \brief A boolean state telling whether the MKLDNN quantization is enabled.
+/// \brief A boolean state telling whether the OneDNN quantization is enabled.
 ///
-/// \return bool Whether the MKLDNN quantization is enabled.
+/// \return bool Whether the OneDNN quantization is enabled.
 ///
 func (config *Config) MkldnnQuantizerEnabled() bool {
 	return cvtPDBoolToGo(C.PD_ConfigMkldnnQuantizerEnabled(config.c))
@@ -833,7 +798,7 @@ func (config *Config) AllPasses() []string {
 ///
 func (config *Config) Summary() string {
 	cSummary := C.PD_ConfigSummary(config.c)
-	summary := C.GoString(cSummary)
-	C.free(unsafe.Pointer(cSummary))
+	summary := C.GoString(cSummary.data)
+	C.PD_CstrDestroy(cSummary)
 	return summary
 }

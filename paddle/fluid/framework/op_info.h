@@ -19,13 +19,14 @@ limitations under the License. */
 #include <unordered_map>
 #include <vector>
 
+#include "paddle/common/macros.h"
 #include "paddle/fluid/framework/attribute.h"
+#include "paddle/fluid/framework/attribute_checker.h"
 #include "paddle/fluid/framework/no_need_buffer_vars_inference.h"
 #include "paddle/fluid/framework/type_defs.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/macros.h"
 #include "paddle/utils/flat_hash_map.h"
-
+#include "paddle/utils/test_macros.h"
 namespace paddle {
 namespace framework {
 
@@ -42,10 +43,12 @@ class OpInfo {
  public:
   OpCreator creator_;
   GradOpMakerFN grad_op_maker_;
+  CompositeGradOpMakerFN grad_comp_op_maker_;
   proto::OpProto* proto_{nullptr};
   OpAttrChecker* checker_{nullptr};
   InferVarTypeFN infer_var_type_;
   InferShapeFN infer_shape_;
+  InferMetaFN infer_meta_;
   InferInplaceOpFN infer_inplace_;
   InferNoNeedBufferVarsFN infer_no_need_buffer_vars_;
   DygraphGradOpMakerFN dygraph_grad_op_maker_;
@@ -65,41 +68,37 @@ class OpInfo {
   const proto::OpProto& Proto() const {
     PADDLE_ENFORCE_NOT_NULL(
         proto_,
-        platform::errors::NotFound("Operator's Proto has not been registered"));
-    PADDLE_ENFORCE_EQ(proto_->IsInitialized(), true,
-                      platform::errors::InvalidArgument(
+        phi::errors::NotFound("Operator's Proto has not been registered"));
+    PADDLE_ENFORCE_EQ(proto_->IsInitialized(),
+                      true,
+                      phi::errors::InvalidArgument(
                           "Operator's Proto in op info is not initialized."));
     return *proto_;
   }
 
   const OpCreator& Creator() const {
-    PADDLE_ENFORCE_NOT_NULL(creator_,
-                            platform::errors::NotFound(
-                                "Operator's Creator has not been registered."));
+    PADDLE_ENFORCE_NOT_NULL(
+        creator_,
+        phi::errors::NotFound("Operator's Creator has not been registered."));
     return creator_;
   }
 
-  const GradOpMakerFN& GradOpMaker() const {
-    // Normally, proto_ should not be null, except some special operators, such
-    // as LeaklyReluDoubleGrad op.
-    std::string type = proto_ ? proto_->type() : "unknown";
-    PADDLE_ENFORCE_NOT_NULL(
-        grad_op_maker_,
-        platform::errors::NotFound(
-            "Operator %s's GradOpMaker has not been "
-            "registered.\nPlease check whether (%s) operator has "
-            "gradient operator.\nIf not, please set stop_gradient to be True "
-            "for its input and output variables using var.stop_gradient=True.",
-            type.c_str(), type.c_str()));
-    return grad_op_maker_;
+  const GradOpMakerFN& GradOpMaker() const { return grad_op_maker_; }
+
+  const CompositeGradOpMakerFN& CompGradOpMaker() const {
+    return grad_comp_op_maker_;
   }
 
   // some ops don't have grad_op_maker, add check before use GradOpMaker()
   bool HasGradOpMaker() const { return grad_op_maker_ != nullptr; }
 
+  bool HasCompGradOpMaker() const { return grad_comp_op_maker_ != nullptr; }
+
   bool HasNonEmptyGradOpMaker() const {
     return grad_op_maker_ != nullptr && !use_empty_grad_op_desc_maker_;
   }
+
+  bool HasEmptyGradOpMaker() const { return use_empty_grad_op_desc_maker_; }
 
   const DygraphGradOpMakerFN& DygraphGradOpMaker() const {
     // Normally, proto_ should not be null, except some special operators, such
@@ -107,12 +106,13 @@ class OpInfo {
     std::string type = proto_ ? proto_->type() : "unknown";
     PADDLE_ENFORCE_NOT_NULL(
         dygraph_grad_op_maker_,
-        platform::errors::NotFound(
+        phi::errors::NotFound(
             "Operator %s's DygraphGradOpMaker has not been "
             "registered.\nPlease check whether (%s) operator has "
             "gradient operator.\nIf not, please set stop_gradient to be True "
             "for its input and output variables using var.stop_gradient=True.",
-            type.c_str(), type.c_str()));
+            type.c_str(),
+            type.c_str()));
     return dygraph_grad_op_maker_;
   }
 
@@ -129,7 +129,7 @@ class OpInfo {
   }
 };
 
-class OpInfoMap {
+class TEST_API OpInfoMap {
  public:
   static OpInfoMap& Instance();
 
@@ -138,9 +138,10 @@ class OpInfoMap {
   }
 
   void Insert(const std::string& type, const OpInfo& info) {
-    PADDLE_ENFORCE_NE(Has(type), true,
-                      platform::errors::AlreadyExists(
-                          "Operator (%s) has been registered.", type));
+    PADDLE_ENFORCE_NE(
+        Has(type),
+        true,
+        phi::errors::AlreadyExists("Operator (%s) has been registered.", type));
     map_.insert({type, info});
   }
 
@@ -148,7 +149,7 @@ class OpInfoMap {
     auto op_info_ptr = GetNullable(type);
     PADDLE_ENFORCE_NOT_NULL(
         op_info_ptr,
-        platform::errors::NotFound("Operator (%s) is not registered.", type));
+        phi::errors::NotFound("Operator (%s) is not registered.", type));
     return *op_info_ptr;
   }
 

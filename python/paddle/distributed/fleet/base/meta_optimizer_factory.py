@@ -12,24 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ..meta_optimizers import *
+from ..meta_optimizers import *  # noqa: F403
 
 __all__ = []
 
 meta_optimizer_names = list(
-    filter(lambda name: name.endswith("Optimizer"), dir()))
+    filter(lambda name: name.endswith("Optimizer"), dir())
+)
 
-# Because HybridParallelOptimizer is dygraph optimizer, it 
+# Because HybridParallelOptimizer is dygraph optimizer, it
 # should be removed
 meta_optimizer_names.remove("HybridParallelOptimizer")
+meta_optimizer_names.remove("HeterParallelOptimizer")
+meta_optimizer_names.remove("DGCMomentumOptimizer")
 
 
-class MetaOptimizerFactory(object):
+class MetaOptimizerFactory:
     def __init__(self):
         pass
 
-    def _get_valid_meta_optimizers(self, user_defined_optimizer):
+    def _get_valid_meta_optimizers(self, user_defined_optimizer, skip_names=[]):
         opt_list = []
         for opt_name in meta_optimizer_names:
+            if opt_name in skip_names:
+                continue
             opt_list.append(globals()[opt_name](user_defined_optimizer))
         return opt_list

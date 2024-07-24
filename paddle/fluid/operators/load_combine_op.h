@@ -18,6 +18,7 @@ limitations under the License. */
 #include <string>
 #include <vector>
 
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/data_type_transform.h"
 #include "paddle/fluid/framework/op_registry.h"
@@ -27,7 +28,7 @@ limitations under the License. */
 
 namespace paddle {
 namespace operators {
-template <typename DeviceContext, typename T>
+template <typename T, typename DeviceContext>
 class LoadCombineOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
@@ -37,24 +38,27 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
     auto model_from_memory = ctx.Attr<bool>("model_from_memory");
     auto out_var_names = ctx.OutputNames("Out");
 
-    PADDLE_ENFORCE_GT(out_var_names.size(), 0UL,
-                      platform::errors::InvalidArgument(
+    PADDLE_ENFORCE_GT(out_var_names.size(),
+                      0UL,
+                      phi::errors::InvalidArgument(
                           "The number of variables to be loaded is %d, expect "
                           "it to be greater than 0.",
                           out_var_names.size()));
     if (!model_from_memory) {
       std::ifstream fin(filename, std::ios::binary);
       PADDLE_ENFORCE_EQ(
-          static_cast<bool>(fin), true,
-          platform::errors::Unavailable(
+          static_cast<bool>(fin),
+          true,
+          phi::errors::Unavailable(
               "LoadCombine operator fails to open file %s, please check "
               "whether the model file is complete or damaged.",
               filename));
       LoadParamsFromBuffer(ctx, place, &fin, load_as_fp16, out_var_names);
     } else {
       PADDLE_ENFORCE_NE(
-          filename.empty(), true,
-          platform::errors::Unavailable(
+          filename.empty(),
+          true,
+          phi::errors::Unavailable(
               "LoadCombine operator fails to open file %s, please check "
               "whether the model file is complete or damaged.",
               filename));
@@ -64,23 +68,27 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
   }
 
   void LoadParamsFromBuffer(
-      const framework::ExecutionContext &context, const platform::Place &place,
-      std::istream *buffer, bool load_as_fp16,
+      const framework::ExecutionContext &context,
+      const phi::Place &place,
+      std::istream *buffer,
+      bool load_as_fp16,
       const std::vector<std::string> &out_var_names) const {
-    platform::DeviceContextPool &pool = platform::DeviceContextPool::Instance();
+    phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
     auto &dev_ctx = *pool.Get(place);
     auto out_vars = context.MultiOutputVar("Out");
 
     for (size_t i = 0; i < out_var_names.size(); i++) {
       VLOG(4) << "loading tensor: " << out_var_names[i];
       PADDLE_ENFORCE_NOT_NULL(
-          out_vars[i], platform::errors::InvalidArgument(
-                           "The variable %s to be loaded cannot be found.",
-                           out_var_names[i]));
+          out_vars[i],
+          phi::errors::InvalidArgument(
+              "The variable %s to be loaded cannot be found.",
+              out_var_names[i]));
       // Error checking
       PADDLE_ENFORCE_EQ(
-          static_cast<bool>(*buffer), true,
-          platform::errors::Unavailable(
+          static_cast<bool>(*buffer),
+          true,
+          phi::errors::Unavailable(
               "An error occurred while loading model parameters. "
               "Please check whether the model file is complete or damaged."));
       if (out_vars[i]->IsType<framework::Vocab>()) {
@@ -93,7 +101,7 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
           framework::NFD(it->first, &tmp);
           if (tmp.empty()) {
             VLOG(0) << "The string " << it->first
-                    << " was converted to unicode failedly! "
+                    << " was converted to unicode unsuccessfully! "
                     << "Then dropped to load it.";
             continue;
           }
@@ -103,36 +111,38 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
           tensor->emplace(token, it->second);
         }
       } else {
-        auto *tensor = out_vars[i]->GetMutable<framework::LoDTensor>();
+        auto *tensor = out_vars[i]->GetMutable<phi::DenseTensor>();
 
         // Get data from fin to tensor
-        DeserializeFromStream(*buffer, tensor, dev_ctx);
+        paddle::framework::DeserializeFromStream(*buffer, tensor, dev_ctx);
 
-        auto in_dtype = tensor->type();
-        auto out_dtype =
-            load_as_fp16 ? framework::proto::VarType::FP16 : in_dtype;
+        auto in_dtype = tensor->dtype();
+        auto out_dtype = load_as_fp16 ? phi::DataType::FLOAT16 : in_dtype;
 
         if (in_dtype != out_dtype) {
           // convert to float16 tensor
-          auto in_kernel_type = framework::OpKernelType(in_dtype, place);
-          auto out_kernel_type = framework::OpKernelType(out_dtype, place);
-          framework::LoDTensor fp16_tensor;
+          auto in_kernel_type =
+              phi::KernelKey(place, phi::DataLayout::ALL_LAYOUT, in_dtype);
+          auto out_kernel_type =
+              phi::KernelKey(place, phi::DataLayout::ALL_LAYOUT, out_dtype);
+          phi::DenseTensor fp16_tensor;
           // copy LoD info to the new tensor
           fp16_tensor.set_lod(tensor->lod());
-          framework::TransDataType(in_kernel_type, out_kernel_type, *tensor,
-                                   &fp16_tensor);
+          framework::TransDataType(
+              in_kernel_type, out_kernel_type, *tensor, &fp16_tensor);
 
           // reset output tensor
           out_vars[i]->Clear();
-          tensor = out_vars[i]->GetMutable<framework::LoDTensor>();
+          tensor = out_vars[i]->GetMutable<phi::DenseTensor>();
           tensor->set_lod(fp16_tensor.lod());
           tensor->ShareDataWith(fp16_tensor);
         }
       }
     }
     buffer->peek();
-    PADDLE_ENFORCE_EQ(buffer->eof(), true,
-                      platform::errors::Unavailable(
+    PADDLE_ENFORCE_EQ(buffer->eof(),
+                      true,
+                      phi::errors::Unavailable(
                           "Not allowed to load partial data via "
                           "load_combine_op, please use load_op instead."));
   }

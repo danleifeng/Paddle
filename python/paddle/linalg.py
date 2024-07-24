@@ -12,27 +12,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .tensor.linalg import cholesky  # noqa: F401
-from .tensor.linalg import norm  # noqa: F401
-from .tensor.linalg import eig  # noqa: F401
-from .tensor.linalg import cond  # noqa: F401
-from .tensor.linalg import matrix_power  # noqa: F401
-from .tensor.linalg import solve  # noqa: F401
-from .tensor import inverse as inv  # noqa: F401
-from .tensor.linalg import eigvals  # noqa: F401
-from .tensor.linalg import multi_dot  # noqa: F401
-from .tensor.linalg import matrix_rank
-from .tensor.linalg import svd
-from .tensor.linalg import qr
-from .tensor.linalg import eigh  # noqa: F401
-from .tensor.linalg import det
-from .tensor.linalg import slogdet
-from .tensor.linalg import pinv
+from .tensor import inverse as inv
+from .tensor.linalg import (
+    cholesky,
+    cholesky_inverse,
+    cholesky_solve,
+    cond,
+    corrcoef,
+    cov,
+    det,
+    eig,
+    eigh,
+    eigvals,
+    eigvalsh,
+    fp8_fp8_half_gemm_fused,
+    householder_product,
+    lstsq,
+    lu,
+    lu_unpack,
+    matrix_exp,
+    matrix_norm,
+    matrix_power,
+    matrix_rank,
+    multi_dot,
+    norm,
+    ormqr,
+    pca_lowrank,
+    pinv,
+    qr,
+    slogdet,
+    solve,
+    svd,
+    svd_lowrank,
+    triangular_solve,
+    vector_norm,
+)
 
 __all__ = [
-    'cholesky',  #noqa
+    'cholesky',
+    'cholesky_inverse',
     'norm',
+    'matrix_norm',
+    'vector_norm',
     'cond',
+    'cov',
+    'corrcoef',
     'inv',
     'eig',
     'eigvals',
@@ -40,10 +64,22 @@ __all__ = [
     'matrix_rank',
     'svd',
     'qr',
+    'householder_product',
+    'pca_lowrank',
+    'svd_lowrank',
+    'lu',
+    'lu_unpack',
+    'matrix_exp',
     'matrix_power',
     'det',
     'slogdet',
     'eigh',
+    'eigvalsh',
     'pinv',
-    'solve'
+    'solve',
+    'cholesky_solve',
+    'triangular_solve',
+    'lstsq',
+    'ormqr',
+    'fp8_fp8_half_gemm_fused',
 ]

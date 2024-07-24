@@ -18,8 +18,10 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/fluid/eager/eager_tensor.h"
 #include "paddle/fluid/imperative/hooks.h"
 #include "paddle/fluid/imperative/layer.h"
+#include "paddle/phi/api/include/tensor.h"
 
 namespace paddle {
 namespace imperative {
@@ -29,12 +31,12 @@ class GradientAccumulator {
   explicit GradientAccumulator(VariableWrapper* var) {
     // var may be initialized, so Synchronous VariableWrapper with Variable
     if (var && var->Var().IsInitialized()) {
-      if (var->Var().IsType<framework::LoDTensor>()) {
+      if (var->Var().IsType<phi::DenseTensor>()) {
         var->SetType(framework::proto::VarType::LOD_TENSOR);
-      } else if (var->Var().IsType<framework::SelectedRows>()) {
+      } else if (var->Var().IsType<phi::SelectedRows>()) {
         var->SetType(framework::proto::VarType::SELECTED_ROWS);
       } else {
-        PADDLE_THROW(platform::errors::PermissionDenied(
+        PADDLE_THROW(phi::errors::PermissionDenied(
             "Only support LoDTensor and SelectedRows for gradient var"));
       }
     }
@@ -46,8 +48,8 @@ class GradientAccumulator {
       inner_var_->SetType(var->Type());
       inner_var_->SetDataType(var->DataType());
       inner_var_->SetForwardDataType(var->ForwardDataType());
-      inner_var_->InnerSetOverridedStopGradient(
-          var->InnerOverridedStopGradient());
+      inner_var_->InnerSetOverriddenStopGradient(
+          var->InnerOverriddenStopGradient());
       VLOG(6) << " Create inner grad var for (" << var->Name()
               << ") to store result of this Graph";
     }
@@ -57,7 +59,8 @@ class GradientAccumulator {
   }
 
   // function that Sum Gradient with this Graph
-  virtual void SumGrad(std::shared_ptr<VariableWrapper> var, size_t trace_id,
+  virtual void SumGrad(std::shared_ptr<VariableWrapper> var,
+                       size_t trace_id,
                        bool unchange_input = false) = 0;
 
   virtual ~GradientAccumulator() = default;
@@ -99,14 +102,14 @@ class GradientAccumulator {
    *
    *    There are two types of gradient accumulation:
    *    1. Gradient accumulation in same batch
-   *    2. Gradient accumulation across batchs
+   *    2. Gradient accumulation across batches
    *    The order of execution between Hooks and gradient accumulation:
 
    *      [ Gradient accumulation in same batch]
    *                        |
    *            [ leaf GradVarBase hooks ]
    *                        |
-   *      [ Gradient accumulation across batchs ]
+   *      [ Gradient accumulation across batches ]
    *                        |
    *          [ Gradient reduce / allreduce hooks ]
 
@@ -125,7 +128,7 @@ class GradientAccumulator {
 
  protected:
   VariableWrapper* var_;
-  // NOTE: only gradient accumulater of leaf tensor should hold
+  // NOTE: only gradient accumulator of leaf tensor should hold
   // inner_var_, So not hold it by other shared pointer.
   std::shared_ptr<VariableWrapper> inner_var_;
   size_t ref_cnt_{0};
@@ -136,7 +139,8 @@ class EagerGradientAccumulator : public GradientAccumulator {
  public:
   using GradientAccumulator::GradientAccumulator;
 
-  void SumGrad(std::shared_ptr<VariableWrapper> var, size_t trace_id,
+  void SumGrad(std::shared_ptr<VariableWrapper> var,
+               size_t trace_id,
                bool unchange_input) override;
 };
 
@@ -144,12 +148,14 @@ class SortedGradientAccumulator : public GradientAccumulator {
  public:
   using GradientAccumulator::GradientAccumulator;
 
-  void SumGrad(std::shared_ptr<VariableWrapper> var, size_t trace_id,
+  void SumGrad(std::shared_ptr<VariableWrapper> var,
+               size_t trace_id,
                bool unchange_input) override;
 
  private:
   struct SavedVarInfo {
-    SavedVarInfo(std::shared_ptr<VariableWrapper>&& v, size_t id,
+    SavedVarInfo(std::shared_ptr<VariableWrapper>&& v,
+                 size_t id,
                  bool enable_unchange_input)
         : var(std::move(v)),
           trace_id(id),
@@ -162,6 +168,50 @@ class SortedGradientAccumulator : public GradientAccumulator {
 
   std::vector<SavedVarInfo> tmp_grad_vars_;
 };
+
+template <typename ReturnVarType, typename VarType>
+std::shared_ptr<ReturnVarType> SelectedRowsMerge(const VarType& src1,
+                                                 const VarType& src2);
+
+template <typename VarType>
+void SelectedRowsAddToTensor(const VarType& src, VarType* dst);
+
+template <typename VarType>
+void SelectedRowsAddTensor(const VarType& src_selected_rows_var,
+                           const VarType& src_tensor_var,
+                           VarType* dst_tensor_var);
+
+template <typename VarType>
+void TensorAdd(const VarType& src, VarType* dst);
+
+inline void CheckVar(const std::shared_ptr<VariableWrapper>& pre,
+                     const std::shared_ptr<VariableWrapper>& post) {
+  if (pre->IsEmpty() && !post->IsEmpty()) {
+    PADDLE_THROW(phi::errors::PermissionDenied(
+        "The tensor(%s) in before and after hook are not consistent",
+        pre->Name()));
+  }
+  if (!pre->IsEmpty() && !post->IsEmpty()) {
+    VLOG(4) << pre->DataType() << " " << post->DataType();
+    PADDLE_ENFORCE_EQ(
+        pre->DataType(),
+        post->DataType(),
+        phi::errors::PermissionDenied(
+            "The dtype of tensor(%s) before(%s) and after(%s) hook are not "
+            "consistent",
+            pre->Name(),
+            framework::DataTypeToString(pre->DataType()),
+            framework::DataTypeToString(post->DataType())));
+    PADDLE_ENFORCE_EQ(pre->Place(),
+                      post->Place(),
+                      phi::errors::PermissionDenied(
+                          "The place of tensor(%s) before(%s) and after(%s) "
+                          "hook are not consistent",
+                          pre->Name(),
+                          pre->Place(),
+                          post->Place()));
+  }
+}
 
 }  // namespace imperative
 }  // namespace paddle

@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include <memory>
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CReduceScatterOp : public framework::OperatorWithKernel {
  public:
@@ -27,11 +26,12 @@ class CReduceScatterOp : public framework::OperatorWithKernel {
     OP_INOUT_CHECK(ctx->HasInput("X"), "Input", "X", "ReduceScatter");
     OP_INOUT_CHECK(ctx->HasOutput("Out"), "Output", "X", "ReduceScatter");
     int nranks = ctx->Attrs().Get<int>("nranks");
-    framework::DDim dim = ctx->GetInputDim("X");
+    phi::DDim dim = ctx->GetInputDim("X");
     if (dim[0] > 0 || dim[0] < -1) {
       PADDLE_ENFORCE_EQ(
-          dim[0] % nranks, 0,
-          platform::errors::InvalidArgument(
+          dim[0] % nranks,
+          0,
+          phi::errors::InvalidArgument(
               "dim[0] (%d) is not divisible by nranks(%d)", dim[0], nranks));
       dim[0] /= nranks;
     }
@@ -41,7 +41,7 @@ class CReduceScatterOp : public framework::OperatorWithKernel {
 
 class CReduceScatterOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
-  void Make() {
+  void Make() override {
     AddInput("X", "(Tensor) tensor to be allgather");
     AddOutput("Out", "(Tensor) the allgather result");
     AddAttr<int>("ring_id", "(int default 0) communication ring id.")
@@ -49,10 +49,7 @@ class CReduceScatterOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<int>("nranks",
                  "Total trainer count of the distributed training job")
         .SetDefault(1);
-#if defined(PADDLE_WITH_ASCEND_CL)
-    AddAttr<std::string>("tag", "(string default tag) tag for reduce scatter.")
-        .SetDefault("tag");
-#endif
+
     AddAttr<bool>(
         "use_calc_stream",
         "(bool default false) eject CUDA operations to calculation stream.")
@@ -65,31 +62,20 @@ Reference: https://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/docs/us
   }
 };
 
-template <typename T>
-class CReduceScatterOpGradMaker : public framework::SingleGradOpMaker<T> {
- public:
-  using framework::SingleGradOpMaker<T>::SingleGradOpMaker;
-
- protected:
-  void Apply(GradOpPtr<T> retv) const override {
-    retv->SetType("c_allgather");
-    retv->SetInput("X", this->OutputGrad("Out"));
-    retv->SetOutput("Out", this->InputGrad("X"));
-    retv->SetAttrMap(this->Attrs());
-  }
-};
-
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
-namespace plat = paddle::platform;
 
-REGISTER_OPERATOR(c_reducescatter, ops::CReduceScatterOp,
-                  ops::CReduceScatterOpMaker);
+REGISTER_OP_WITHOUT_GRADIENT(c_reducescatter,
+                             ops::CReduceScatterOp,
+                             ops::CReduceScatterOpMaker);
 
-REGISTER_OP_CPU_KERNEL(c_reducescatter, ops::CReduceScatterOpCPUKernel<float>,
-                       ops::CReduceScatterOpCPUKernel<double>,
-                       ops::CReduceScatterOpCPUKernel<int>,
-                       ops::CReduceScatterOpCPUKernel<int64_t>,
-                       ops::CReduceScatterOpCPUKernel<plat::float16>);
+PD_REGISTER_STRUCT_KERNEL(c_reducescatter,
+                          CPU,
+                          ALL_LAYOUT,
+                          ops::CReduceScatterOpCPUKernel,
+                          float,
+                          double,
+                          int,
+                          int64_t,
+                          phi::dtype::float16) {}

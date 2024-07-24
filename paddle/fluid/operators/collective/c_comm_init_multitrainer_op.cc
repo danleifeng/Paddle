@@ -14,7 +14,11 @@ limitations under the License. */
 #if defined(PADDLE_WITH_NCCL)
 #include <nccl.h>
 #endif
-#include <stdint.h>
+#if defined(PADDLE_WITH_RCCL)
+#include <rccl.h>
+#endif
+#include <cstdint>
+
 #include <ostream>
 #include <string>
 
@@ -24,9 +28,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/threadpool.h"
 // #include "paddle/fluid/operators/distributed/distributed.h"
 // #include "paddle/fluid/operators/distributed/request_handler_impl.h"
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #endif
 
 namespace paddle {
@@ -34,7 +38,7 @@ namespace operators {
 
 class CCommInitMultiTrainerInferShape : public framework::InferShapeBase {
  public:
-  ~CCommInitMultiTrainerInferShape() {}
+  ~CCommInitMultiTrainerInferShape() override = default;
   void operator()(framework::InferShapeContext* ctx) const override{};
 };
 
@@ -47,11 +51,11 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
       : OperatorBase(type, inputs, outputs, attrs) {}
 
   void RunImpl(const framework::Scope& scope,
-               const platform::Place& place) const override {
+               const phi::Place& place) const override {
     auto var = scope.FindVar(Input("X"));
     PADDLE_ENFORCE_NOT_NULL(
-        var, platform::errors::InvalidArgument("Input X must be provided."));
-#if defined(PADDLE_WITH_NCCL)
+        var, phi::errors::InvalidArgument("Input X must be provided."));
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     ncclUniqueId* nccl_id = var->GetMutable<ncclUniqueId>();
 
     int ntrainers = Attr<int>("ntrainers");
@@ -66,8 +70,8 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
     platform::NCCLCommContext::Instance().CreateNCCLCommMultiTrainer(
         devices, nccl_id, ntrainers, train_id, rid);
 #else
-    PADDLE_THROW(platform::errors::Unimplemented(
-        "PaddlePaddle should compile with GPU."));
+    PADDLE_THROW(
+        phi::errors::Unimplemented("PaddlePaddle should compile with GPU."));
 #endif
   }
 };
@@ -75,11 +79,11 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
 class CCommInitMultiTrainerOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
-    AddInput("X", "Raw variable contains a NCCL UniqueId instaces.");
+    AddInput("X", "Raw variable contains a NCCL UniqueId instances.");
     AddComment(R"DOC(
 CCommInitMultiTrainer operator
 
-Initialize collective communicatoin context within this trainer
+Initialize collective communication context within this trainer
 )DOC");
     AddAttr<int>("ntrainers",
                  "(int) The number of trainers of distributed trainers");
@@ -99,6 +103,7 @@ Initialize collective communicatoin context within this trainer
 
 namespace ops = paddle::operators;
 
-REGISTER_OPERATOR(c_comm_init_multitrainer, ops::CCommInitMultiTrainerOp,
+REGISTER_OPERATOR(c_comm_init_multitrainer,
+                  ops::CCommInitMultiTrainerOp,
                   ops::CCommInitMultiTrainerInferShape,
                   ops::CCommInitMultiTrainerOpMaker);

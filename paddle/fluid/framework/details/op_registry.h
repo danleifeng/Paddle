@@ -23,6 +23,7 @@ limitations under the License. */
 #include <unordered_set>
 #include <vector>
 
+#include "paddle/common/macros.h"
 #include "paddle/fluid/framework/grad_op_desc_maker.h"
 #include "paddle/fluid/framework/inplace_op_inference.h"
 #include "paddle/fluid/framework/no_need_buffer_vars_inference.h"
@@ -32,6 +33,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/var_type_inference.h"
 #include "paddle/fluid/imperative/dygraph_grad_maker.h"
 #include "paddle/fluid/imperative/type_defs.h"
+#include "paddle/fluid/prim/utils/static/composite_grad_desc_maker.h"
 
 namespace paddle {
 namespace framework {
@@ -46,6 +48,7 @@ enum OpInfoFillType {
   kInplaceOpInference = 5,
   kNoNeedBufferVarsInference = 6,
   kGradOpBaseMaker = 7,
+  kGradCompOpDescMaker = 8,
   kUnknown = -1
 };
 
@@ -61,6 +64,7 @@ using OpRegistryClasses = std::tuple<                                // NOLINT
     TypePair<OpProtoAndCheckerMaker, kOpProtoAndCheckerMaker>,       // NOLINT
     TypePair<GradOpDescMakerBase, kGradOpDescMaker>,                 // NOLINT
     TypePair<imperative::GradOpBaseMakerBase, kGradOpBaseMaker>,     // NOLINT
+    TypePair<prim::CompositeGradOpMakerBase, kGradCompOpDescMaker>,  // NOLINT
     TypePair<VarTypeInference, kVarTypeInference>,                   // NOLINT
     TypePair<InferShapeBase, kShapeInference>,                       // NOLINT
     TypePair<InplaceOpInference, kInplaceOpInference>,               // NOLINT
@@ -84,8 +88,10 @@ struct IsMatchedBaseTypeImpl<T, kPos, false> {
 
 template <typename T, int kPos>
 static inline constexpr bool IsMatchedBaseType() {
-  return IsMatchedBaseTypeImpl<
-      T, kPos, (kPos >= 0 && kPos < kOpRegistryClassNumber)>::kValue;
+  return IsMatchedBaseTypeImpl<T,
+                               kPos,
+                               (kPos >= 0 &&
+                                kPos < kOpRegistryClassNumber)>::kValue;
 }
 
 template <typename T, int kStart, int kEnd, bool kIsEnd, bool kIsMatched>
@@ -103,7 +109,10 @@ struct OpInfoFillTypeGetterImpl<T, kStart, kEnd, true, false> {
 template <typename T, int kStart, int kEnd>
 struct OpInfoFillTypeGetterImpl<T, kStart, kEnd, false, false> {
   static constexpr OpInfoFillType kType =
-      OpInfoFillTypeGetterImpl<T, kStart + 1, kEnd, kStart + 1 == kEnd,
+      OpInfoFillTypeGetterImpl<T,
+                               kStart + 1,
+                               kEnd,
+                               kStart + 1 == kEnd,
                                IsMatchedBaseType<T, kStart + 1>()>::kType;
 };
 
@@ -115,7 +124,9 @@ struct OpInfoFillTypeGetterImpl<T, kStart, kEnd, false, true> {
 
 template <typename T>
 using OpInfoFillTypeGetter =
-    OpInfoFillTypeGetterImpl<T, 0, kOpRegistryClassNumber,
+    OpInfoFillTypeGetterImpl<T,
+                             0,
+                             kOpRegistryClassNumber,
                              kOpRegistryClassNumber == 0,
                              IsMatchedBaseType<T, 0>()>;
 
@@ -151,16 +162,18 @@ class OperatorRegistrarRecursive<I, false, ARGS...> {
 template <size_t I, typename... ARGS>
 class OperatorRegistrarRecursive<I, true, ARGS...> {
  public:
-  OperatorRegistrarRecursive(const char* op_type, OpInfo* info) {}
+  OperatorRegistrarRecursive(const char* op_type UNUSED, OpInfo* info UNUSED) {}
 };
 
 template <typename T>
 struct OpInfoFiller<T, kOperator> {
   void operator()(const char* op_type, OpInfo* info) const {
-    PADDLE_ENFORCE_EQ(info->creator_, nullptr,
-                      platform::errors::AlreadyExists(
+    PADDLE_ENFORCE_EQ(info->creator_,
+                      nullptr,
+                      phi::errors::AlreadyExists(
                           "OpCreator of %s has been registered", op_type));
-    info->creator_ = [](const std::string& type, const VariableNameMap& inputs,
+    info->creator_ = [](const std::string& type,
+                        const VariableNameMap& inputs,
                         const VariableNameMap& outputs,
                         const AttributeMap& attrs) {
       return new T(type, inputs, outputs, attrs);
@@ -168,14 +181,15 @@ struct OpInfoFiller<T, kOperator> {
 
     if (std::is_base_of<OperatorWithKernel, T>::value) {
       PADDLE_ENFORCE_EQ(
-          info->infer_shape_, nullptr,
-          platform::errors::AlreadyExists(
+          info->infer_shape_,
+          nullptr,
+          phi::errors::AlreadyExists(
               "Duplicate InferShapeFN of %s has been registered", op_type));
 
       OperatorWithKernel* op = dynamic_cast<OperatorWithKernel*>(info->creator_(
           std::string{}, VariableNameMap{}, VariableNameMap{}, AttributeMap{}));
-      PADDLE_ENFORCE_NOT_NULL(op, platform::errors::InvalidArgument(
-                                      "%s should have kernels", op_type));
+      PADDLE_ENFORCE_NOT_NULL(
+          op, phi::errors::InvalidArgument("%s should have kernels", op_type));
       info->infer_shape_ = [op](InferShapeContext* ctx) {
         op->InferShape(ctx);
       };
@@ -186,22 +200,26 @@ struct OpInfoFiller<T, kOperator> {
 template <typename T>
 struct OpInfoFiller<T, kOpProtoAndCheckerMaker> {
   void operator()(const char* op_type, OpInfo* info) const {
-    PADDLE_ENFORCE_EQ(info->proto_, nullptr,
-                      platform::errors::AlreadyExists(
+    PADDLE_ENFORCE_EQ(info->proto_,
+                      nullptr,
+                      phi::errors::AlreadyExists(
                           "OpProto of %s has been registered.", op_type));
-    PADDLE_ENFORCE_EQ(info->checker_, nullptr,
-                      platform::errors::AlreadyExists(
+    PADDLE_ENFORCE_EQ(info->checker_,
+                      nullptr,
+                      phi::errors::AlreadyExists(
                           "OpAttrChecker of %s has been registered.", op_type));
     info->proto_ = new proto::OpProto;
     info->checker_ = new OpAttrChecker();
+    info->proto_->set_type(op_type);
     T maker;
     maker(info->proto_, info->checker_);
-    info->proto_->set_type(op_type);
     PADDLE_ENFORCE_EQ(
-        info->proto_->IsInitialized(), true,
-        platform::errors::PreconditionNotMet(
+        info->proto_->IsInitialized(),
+        true,
+        phi::errors::PreconditionNotMet(
             "Fail to initialize %s's OpProto, because %s is not initialized.",
-            op_type, info->proto_->InitializationErrorString()));
+            op_type,
+            info->proto_->InitializationErrorString()));
   }
 };
 
@@ -209,18 +227,19 @@ template <typename T>
 struct OpInfoFiller<T, kGradOpDescMaker> {
   void operator()(const char* op_type, OpInfo* info) const {
     PADDLE_ENFORCE_EQ(
-        info->grad_op_maker_, nullptr,
-        platform::errors::AlreadyExists(
-            "GradOpDescMaker of %s has been registered", op_type));
+        info->grad_op_maker_,
+        nullptr,
+        phi::errors::AlreadyExists("GradOpDescMaker of %s has been registered",
+                                   op_type));
 
-    info->grad_op_maker_ = [](
-        const OpDesc& fwd_op,
-        const std::unordered_set<std::string>& no_grad_set,
-        std::unordered_map<std::string, std::string>* grad_to_var,
-        const std::vector<BlockDesc*>& grad_block) {
-      T maker(fwd_op, no_grad_set, grad_to_var, grad_block);
-      return maker();
-    };
+    info->grad_op_maker_ =
+        [](const OpDesc& fwd_op,
+           const std::unordered_set<std::string>& no_grad_set,
+           std::unordered_map<std::string, std::string>* grad_to_var,
+           const std::vector<BlockDesc*>& grad_block) {
+          T maker(fwd_op, no_grad_set, grad_to_var, grad_block);
+          return maker();
+        };
 
     info->use_default_grad_op_desc_maker_ =
         std::is_base_of<DefaultGradOpMaker<OpDesc, true>, T>::value ||
@@ -237,24 +256,49 @@ struct OpInfoFiller<T, kGradOpDescMaker> {
 };
 
 template <typename T>
+struct OpInfoFiller<T, kGradCompOpDescMaker> {
+  void operator()(const char* op_type, OpInfo* info) const {
+    PADDLE_ENFORCE_EQ(
+        info->grad_comp_op_maker_,
+        nullptr,
+        phi::errors::AlreadyExists(
+            "CompositeGradOpMakerBase of %s has been registered", op_type));
+
+    info->grad_comp_op_maker_ =
+        [](const OpDesc& fwd_op,
+           const std::unordered_set<std::string>& no_grad_set,
+           std::unordered_map<std::string, std::string>* grad_to_var,
+           const BlockDesc* current_block,
+           const std::vector<BlockDesc*>& grad_block) {
+          T maker(fwd_op, no_grad_set, grad_to_var, current_block, grad_block);
+          return maker();
+        };
+    // TODO(jiabin): Support this later or just not.
+    info->use_default_grad_op_desc_maker_ = false;
+    info->use_empty_grad_op_desc_maker_ = false;
+  }
+};
+
+template <typename T>
 struct OpInfoFiller<T, kGradOpBaseMaker> {
   void operator()(const char* op_type, OpInfo* info) const {
     PADDLE_ENFORCE_EQ(
-        info->dygraph_grad_op_maker_, nullptr,
-        platform::errors::AlreadyExists(
-            "GradOpBaseMaker of %s has been registered", op_type));
+        info->dygraph_grad_op_maker_,
+        nullptr,
+        phi::errors::AlreadyExists("GradOpBaseMaker of %s has been registered",
+                                   op_type));
 
-    info->dygraph_grad_op_maker_ = [](
-        const std::string& type,
-        const imperative::NameVarBaseMap& var_base_map_in,
-        const imperative::NameVarBaseMap& var_base_map_out,
-        const framework::AttributeMap& attrs,
-        const framework::AttributeMap& default_attrs,
-        const std::map<std::string, std::string>& inplace_map) {
-      T maker(type, var_base_map_in, var_base_map_out, attrs, inplace_map);
-      maker.SetDygraphDefaultAttrsMap(default_attrs);
-      return maker();
-    };
+    info->dygraph_grad_op_maker_ =
+        [](const std::string& type,
+           const imperative::NameVarBaseMap& var_base_map_in,
+           const imperative::NameVarBaseMap& var_base_map_out,
+           const framework::AttributeMap& attrs,
+           const framework::AttributeMap& default_attrs,
+           const std::map<std::string, std::string>& inplace_map) {
+          T maker(type, var_base_map_in, var_base_map_out, attrs, inplace_map);
+          maker.SetDygraphDefaultAttrsMap(default_attrs);
+          return maker();
+        };
   }
 };
 
@@ -262,9 +306,10 @@ template <typename T>
 struct OpInfoFiller<T, kVarTypeInference> {
   void operator()(const char* op_type, OpInfo* info) const {
     PADDLE_ENFORCE_EQ(
-        info->infer_var_type_, nullptr,
-        platform::errors::AlreadyExists(
-            "VarTypeInference of %s has been registered", op_type));
+        info->infer_var_type_,
+        nullptr,
+        phi::errors::AlreadyExists("VarTypeInference of %s has been registered",
+                                   op_type));
     info->infer_var_type_ = [](InferVarTypeContext* context) {
       T inference;
       inference(context);
@@ -272,13 +317,9 @@ struct OpInfoFiller<T, kVarTypeInference> {
   }
 };
 
-template <typename T>
-struct OpInfoFiller<T, kShapeInference> {
-  void operator()(const char* op_type, OpInfo* info) const {
-    PADDLE_ENFORCE_EQ(
-        info->infer_shape_, nullptr,
-        platform::errors::AlreadyExists(
-            "Duplicate InferShapeFN of %s has been registered", op_type));
+template <typename T, typename = void>
+struct InferMetaTrait {
+  static void call(const char* op_type UNUSED, OpInfo* info) {
     info->infer_shape_ = [](InferShapeContext* ctx) {
       T inference;
       inference(ctx);
@@ -287,11 +328,37 @@ struct OpInfoFiller<T, kShapeInference> {
 };
 
 template <typename T>
+struct InferMetaTrait<T,
+                      decltype(std::declval<T>().infer_meta_(
+                          std::declval<phi::InferMetaContext*>()))> {
+  static void call(const char* op_type UNUSED, OpInfo* info) {
+    info->infer_shape_ = [](InferShapeContext* ctx) {
+      T inference;
+      inference(ctx);
+    };
+    info->infer_meta_ = [](phi::InferMetaContext* ctx) {
+      T inference;
+      inference.infer_meta_(ctx);
+    };
+  }
+};
+
+template <typename T>
+struct OpInfoFiller<T, kShapeInference> {
+  void operator()(const char* op_type UNUSED, OpInfo* info) const {
+    // Note: if fill InferShapeFN by this Filler, the infershape here
+    // will overwrite the op->InferShape func registered in kOperator Filler
+    InferMetaTrait<T>::call(op_type, info);
+  }
+};
+
+template <typename T>
 struct OpInfoFiller<T, kInplaceOpInference> {
   void operator()(const char* op_type, OpInfo* info) const {
     PADDLE_ENFORCE_EQ(
-        info->infer_inplace_, nullptr,
-        platform::errors::AlreadyExists(
+        info->infer_inplace_,
+        nullptr,
+        phi::errors::AlreadyExists(
             "InplaceOpInference of %s has been registered", op_type));
     info->infer_inplace_ = [](bool use_cuda) {
       T infer;
@@ -304,8 +371,9 @@ template <typename T>
 struct OpInfoFiller<T, kNoNeedBufferVarsInference> {
   void operator()(const char* op_type, OpInfo* info) const {
     PADDLE_ENFORCE_EQ(
-        info->infer_no_need_buffer_vars_, nullptr,
-        platform::errors::AlreadyExists(
+        info->infer_no_need_buffer_vars_,
+        nullptr,
+        phi::errors::AlreadyExists(
             "NoNeedBufferVarsInference of %s has been registered", op_type));
     info->infer_no_need_buffer_vars_.Reset(std::make_shared<T>());
   }
@@ -314,7 +382,7 @@ struct OpInfoFiller<T, kNoNeedBufferVarsInference> {
 // A fake OpInfoFiller of void
 template <>
 struct OpInfoFiller<void, kUnknown> {
-  void operator()(const char* op_type, OpInfo* info) const {}
+  void operator()(const char* op_type UNUSED, OpInfo* info UNUSED) const {}
 };
 
 }  // namespace details
