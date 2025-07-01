@@ -25,7 +25,7 @@ namespace phi {
 void FusedMultiTransformerInferMeta(
     const MetaTensor& x,
     const std::vector<const MetaTensor*>& ln_scales,
-    const std::vector<const MetaTensor*>& ln_biases,
+    const paddle::optional<std::vector<const MetaTensor*>>& ln_biases,
     const std::vector<const MetaTensor*>& qkv_weights,
     const paddle::optional<std::vector<const MetaTensor*>>& qkv_biases,
     const paddle::optional<std::vector<const MetaTensor*>>& cache_kvs,
@@ -38,7 +38,7 @@ void FusedMultiTransformerInferMeta(
     const std::vector<const MetaTensor*>& out_linear_weights,
     const paddle::optional<std::vector<const MetaTensor*>>& out_linear_biases,
     const std::vector<const MetaTensor*>& ffn_ln_scales,
-    const std::vector<const MetaTensor*>& ffn_ln_biases,
+    const paddle::optional<std::vector<const MetaTensor*>>& ffn_ln_biases,
     const std::vector<const MetaTensor*>& ffn1_weights,
     const paddle::optional<std::vector<const MetaTensor*>>& ffn1_biases,
     const std::vector<const MetaTensor*>& ffn2_weights,
@@ -79,6 +79,13 @@ void GroupNormalizeSiluXPUInferMeta(const MetaTensor& x,
                                     const MetaTensor& scale,
                                     const MetaTensor& bias,
                                     int groups,
+                                    float epsilon,
+                                    MetaTensor* out);
+
+void LayerNormalizeReluXPUInferMeta(const MetaTensor& x,
+                                    const MetaTensor& scale,
+                                    const MetaTensor& bias,
+                                    int begin_norm_axis,
                                     float epsilon,
                                     MetaTensor* out);
 
@@ -123,6 +130,7 @@ void BlockMultiheadAttentionInferMeta(const MetaTensor& qkv,
                                       const float quant_min_bound,
                                       const float out_scale,
                                       const std::string& compute_dtype,
+                                      const float rope_theta,
                                       MetaTensor* fmha_out,
                                       MetaTensor* qkv_out,
                                       MetaTensor* key_cache_out,
@@ -166,6 +174,7 @@ void BlockMultiheadAttentionInferXPUMeta(
     const float quant_min_bound,
     const float out_scale,
     const std::string& compute_dtype,
+    const float rope_theta,
     MetaTensor* fmha_out,
     MetaTensor* qkv_out,
     MetaTensor* key_cache_out,
@@ -286,6 +295,10 @@ void MultiEncoderXPUInferMeta(
     MetaTensor* out,
     MetaTensor* x_fp16,
     MetaTensor* out_fp16);
+
+void FusedActDequantInferMeta(const MetaTensor& x,
+                              const MetaTensor& x_scale,
+                              MetaTensor* out);
 
 void FusedAttentionInferMeta(const MetaTensor& x,
                              const MetaTensor& ln_scale,
@@ -516,7 +529,8 @@ void FusedGemmEpilogueInferMeta(const MetaTensor& x,
                                 bool trans_y,
                                 const std::string& activation,
                                 MetaTensor* out,
-                                MetaTensor* reserve_space);
+                                MetaTensor* reserve_space,
+                                MetaConfig config = MetaConfig());
 
 void FusedGemmEpilogueGradInferMeta(const MetaTensor& x,
                                     const MetaTensor& y,
@@ -610,6 +624,61 @@ void FusedMultiTransformerInt8XpuInferMeta(
     int gather_axis,
     MetaTensor* out,
     std::vector<MetaTensor*> cache_kv_out);
+
+void FusedMultiTransformerInt8InferMeta(
+    const MetaTensor& x,
+    const std::vector<const MetaTensor*>& ln_scale,
+    const std::vector<const MetaTensor*>& ln_bias,
+    const std::vector<const MetaTensor*>& qkv_w,
+    const paddle::optional<std::vector<const MetaTensor*>>& qkv_bias,
+    const paddle::optional<std::vector<const MetaTensor*>>& cache_kv,
+    const MetaTensor& time_step,
+    const MetaTensor& src_mask,
+    const std::vector<const MetaTensor*>& out_linear_w,
+    const paddle::optional<std::vector<const MetaTensor*>>& out_linear_bias,
+    const std::vector<const MetaTensor*>& ffn_ln_scale,
+    const std::vector<const MetaTensor*>& ffn_ln_bias,
+    const std::vector<const MetaTensor*>& ffn1_weight,
+    const paddle::optional<std::vector<const MetaTensor*>>& ffn1_bias,
+    const std::vector<const MetaTensor*>& ffn2_weight,
+    const paddle::optional<std::vector<const MetaTensor*>>& ffn2_bias,
+    const paddle::optional<std::vector<const MetaTensor*>>& qkv_out_scale,
+    const paddle::optional<std::vector<const MetaTensor*>>&
+        out_linear_out_scale,
+    const paddle::optional<std::vector<const MetaTensor*>>& ffn1_out_scale,
+    const paddle::optional<std::vector<const MetaTensor*>>& ffn2_out_scale,
+    bool pre_layer_norm,
+    float epsilon,
+    float dropout_rate,
+    bool is_test,
+    const std::string& dropout_implementation,
+    const std::string& act_method,
+    bool trans_qkvw,
+    int ring_id,
+    int num_head,
+    int dim_head,
+    int dim_ffn,
+    const std::vector<float>& qkv_in_scale,
+    const std::vector<float>& out_linear_in_scale,
+    const std::vector<float>& ffn1_in_scale,
+    const std::vector<float>& ffn2_in_scale,
+    int quant_round_type,
+    float quant_max_bound,
+    float quant_min_bound,
+    std::vector<MetaTensor*> cache_kv_out,
+    MetaTensor* out);
+
+void FusedTransposeSplitQuantInferMeta(const MetaTensor& x,
+                                       const IntArray& tokens_per_expert,
+                                       bool pow_2_scales,
+                                       std::vector<MetaTensor*> outs,
+                                       std::vector<MetaTensor*> scales);
+
+void FusedTransposeWLCHSplitQuantInferMeta(const MetaTensor& x,
+                                           const IntArray& tokens_per_expert,
+                                           bool pow_2_scales,
+                                           std::vector<MetaTensor*> outs,
+                                           std::vector<MetaTensor*> scales);
 
 void YoloBoxXPUInferMeta(const MetaTensor& x,
                          const MetaTensor& x_max,
@@ -851,6 +920,14 @@ void FusionSeqExpandConcatFCInferMeta(const std::vector<const MetaTensor*>& x,
                                       MetaTensor* out,
                                       MetaTensor* fc_out);
 
+void FusedStackTransposeQuantInferMeta(const std::vector<const MetaTensor*>& x,
+                                       MetaTensor* out,
+                                       MetaTensor* scale);
+
+void FusedStackQuantInferMeta(const std::vector<const MetaTensor*>& x,
+                              MetaTensor* out,
+                              MetaTensor* scale);
+
 void FusedBiasDropoutResidualLnInferMeta(
     const MetaTensor& x,
     const MetaTensor& residual,
@@ -929,6 +1006,15 @@ void FCInferMeta(const MetaTensor& input,
                  const std::string& activation_type,
                  const bool padding_weights,
                  MetaTensor* out);
+
+void FCOneDNNInferMeta(const MetaTensor& input,
+                       const MetaTensor& w,
+                       const MetaTensor& bias,
+                       const int in_num_col_dims,
+                       const std::string& activation_type,
+                       const bool padding_weights,
+                       const std::vector<int>& fused_reshape2_shape,
+                       MetaTensor* out);
 
 void VariableLengthMemoryEfficientAttentionInferMeta(
     const MetaTensor& query,
@@ -1109,11 +1195,45 @@ void FusedEmbeddingFcLstmInferMeta(const MetaTensor& ids,
                                    MetaTensor* reordered_h0,
                                    MetaTensor* reordered_c0);
 
+void FusedSeqpoolCvmInferMeta(const std::vector<const MetaTensor*>& x,
+                              const MetaTensor& cvm,
+                              const std::string& pooltype,
+                              float pad_value,
+                              bool use_cvm,
+                              int cvm_offset,
+                              std::vector<MetaTensor*> out,
+                              MetaConfig config = MetaConfig());
+
+void FusedSeqpoolCvmGradInferMeta(
+    const std::vector<const MetaTensor*>& x,
+    const MetaTensor& cvm,
+    const std::vector<const MetaTensor*>& out_grad,
+    const std::string& pooltype,
+    float pad_value,
+    bool use_cvm,
+    int cvm_offset,
+    std::vector<MetaTensor*> x_grad,
+    MetaTensor* cvm_grad,
+    MetaConfig config = MetaConfig());
+
 void FusionSeqpoolConcatInferMeta(const std::vector<const MetaTensor*>& x,
                                   const std::string& pooltype,
                                   int axis,
                                   MetaTensor* out,
                                   MetaConfig config = MetaConfig());
+
+void FusedSwigluWeightedBwdInferMeta(const MetaTensor& o1,
+                                     const MetaTensor& do2_s,
+                                     const MetaTensor& unzipped_probs,
+                                     MetaTensor* do1,
+                                     MetaTensor* probs_grad,
+                                     MetaTensor* o2_s);
+
+void FusedWeightedSwigluActQuantInferMeta(const MetaTensor& x,
+                                          const MetaTensor& prob,
+                                          bool using_pow2_scaling,
+                                          MetaTensor* out,
+                                          MetaTensor* scale);
 
 void ResnetUnitInferMeta(const MetaTensor& x,
                          const MetaTensor& filter_x,
@@ -1193,6 +1313,69 @@ void ResnetUnitGradInferMeta(const MetaTensor& x,
                              MetaTensor* filter_z_grad,
                              MetaTensor* scale_z_grad,
                              MetaTensor* bias_z_grad);
+
+void FusedGateAttentionInferMeta(const MetaTensor& query,
+                                 const MetaTensor& key,
+                                 const MetaTensor& query_weight,
+                                 const MetaTensor& key_weight,
+                                 const MetaTensor& value_weight,
+                                 const MetaTensor& qkv_weight,
+                                 const MetaTensor& nonbatched_bias,
+                                 const MetaTensor& src_mask,
+                                 const MetaTensor& gate_weight,
+                                 const MetaTensor& gate_bias,
+                                 const MetaTensor& out_linear_weight,
+                                 const MetaTensor& out_linear_bias,
+                                 bool has_gating,
+                                 bool merge_qkv,
+                                 bool use_flash_attn,
+                                 MetaTensor* query_transpose_out,
+                                 MetaTensor* key_transpose_out,
+                                 MetaTensor* value_transpose_out,
+                                 MetaTensor* qkv_transpose_out,
+                                 MetaTensor* softmax_out,
+                                 MetaTensor* softmax_lse,
+                                 MetaTensor* fmha_out,
+                                 MetaTensor* gate_out,
+                                 MetaTensor* out,
+                                 MetaConfig config = MetaConfig());
+
+void FusedGateAttentionGradInferMeta(const MetaTensor& query,
+                                     const MetaTensor& key,
+                                     const MetaTensor& query_weight,
+                                     const MetaTensor& key_weight,
+                                     const MetaTensor& value_weight,
+                                     const MetaTensor& qkv_weight,
+                                     const MetaTensor& nonbatched_bias,
+                                     const MetaTensor& src_mask,
+                                     const MetaTensor& gate_weight,
+                                     const MetaTensor& gate_bias,
+                                     const MetaTensor& out_linear_weight,
+                                     const MetaTensor& out_linear_bias,
+                                     const MetaTensor& query_transpose_out,
+                                     const MetaTensor& key_transpose_out,
+                                     const MetaTensor& value_transpose_out,
+                                     const MetaTensor& qkv_transpose_out,
+                                     const MetaTensor& softmax_out,
+                                     const MetaTensor& softmax_lse,
+                                     const MetaTensor& fmha_out,
+                                     const MetaTensor& gate_out,
+                                     const MetaTensor& out_grad,
+                                     bool has_gating,
+                                     bool merge_qkv,
+                                     bool use_flash_attn,
+                                     MetaTensor* query_grad,
+                                     MetaTensor* key_grad,
+                                     MetaTensor* query_weight_grad,
+                                     MetaTensor* key_weight_grad,
+                                     MetaTensor* value_weight_grad,
+                                     MetaTensor* qkv_weight_grad,
+                                     MetaTensor* nonbatched_bias_grad,
+                                     MetaTensor* gate_weight_grad,
+                                     MetaTensor* gate_bias_grad,
+                                     MetaTensor* out_linear_weight_grad,
+                                     MetaTensor* out_linear_bias_grad,
+                                     MetaConfig config = MetaConfig());
 
 void ResnetBasicBlockInferMeta(const MetaTensor& x,
                                const MetaTensor& filter1,

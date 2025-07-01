@@ -32,7 +32,7 @@ class MyLayer(paddle.nn.Layer):
         return x
 
 
-class MyLayerDuplicatedParamters(paddle.nn.Layer):
+class MyLayerDuplicatedParameters(paddle.nn.Layer):
     def __init__(self):
         super().__init__()
         self.fc = paddle.nn.Linear(1, 1)
@@ -84,7 +84,7 @@ class TestImperativeNamedSubLayers(unittest.TestCase):
 
             self.assertListEqual(
                 [l for _, l in list(model.named_sublayers(include_self=True))],
-                [model] + expected_sublayers,
+                [model, *expected_sublayers],
             )
 
 
@@ -189,7 +189,7 @@ class TestImperativeNamedParameters(unittest.TestCase):
 class TestImperativeNamedParametersDuplicated(unittest.TestCase):
     def test_not_remove_duplicate(self):
         with base.dygraph.guard():
-            model = MyLayerDuplicatedParamters()
+            model = MyLayerDuplicatedParameters()
 
             named_parameters = list(
                 model.named_parameters(remove_duplicate=False)
@@ -198,7 +198,7 @@ class TestImperativeNamedParametersDuplicated(unittest.TestCase):
 
     def test_remove_duplicate(self):
         with base.dygraph.guard():
-            model = MyLayerDuplicatedParamters()
+            model = MyLayerDuplicatedParameters()
 
             named_parameters = list(
                 model.named_parameters(remove_duplicate=True)

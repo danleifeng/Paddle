@@ -26,7 +26,6 @@ from paddle import base
 from paddle.base import core, framework
 from paddle.framework import in_pir_mode
 from paddle.optimizer import Adam
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -69,7 +68,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                     low=-self._init_scale, high=self._init_scale
                 ),
             )
-            self.weight_1_arr.append(self.add_parameter('w_%d' % i, weight_1))
+            self.weight_1_arr.append(self.add_parameter(f'w_{i}', weight_1))
             bias_1 = self.create_parameter(
                 attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Uniform(
@@ -80,7 +79,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                 dtype="float32",
                 default_initializer=paddle.nn.initializer.Constant(0.0),
             )
-            self.bias_arr.append(self.add_parameter('b_%d' % i, bias_1))
+            self.bias_arr.append(self.add_parameter(f'b_{i}', bias_1))
 
     def forward(self, input_embedding, init_hidden=None, init_cell=None):
         self.cell_array = []
@@ -255,7 +254,6 @@ class TestSaveLoadBase(unittest.TestCase):
             else base.CUDAPlace(0)
         )
 
-    @test_with_pir_api
     def test_ptb_rnn_cpu_float32(self):
         seed = 90
         hidden_size = 10
@@ -401,7 +399,6 @@ class TestSaveLoadPartial(unittest.TestCase):
             else base.CUDAPlace(0)
         )
 
-    @test_with_pir_api
     def test_ptb_rnn_cpu_float32(self):
         seed = 90
         hidden_size = 10
@@ -559,7 +556,6 @@ class TestSaveLoadSetStateDict(unittest.TestCase):
             else base.CUDAPlace(0)
         )
 
-    @test_with_pir_api
     def test_ptb_rnn_cpu_float32(self):
         seed = 90
         hidden_size = 10
@@ -704,7 +700,6 @@ class TestProgramStatePartial(unittest.TestCase):
             else base.CUDAPlace(0)
         )
 
-    @test_with_pir_api
     def test_ptb_rnn_cpu_float32(self):
         seed = 90
         hidden_size = 10
@@ -968,7 +963,6 @@ class TestVariableInit(unittest.TestCase):
             else base.CUDAPlace(0)
         )
 
-    @test_with_pir_api
     def test_variable_init(self):
         x = paddle.static.data(name="x", shape=[10, 10], dtype='float32')
         y = paddle.static.nn.fc(x, 10)
@@ -1078,7 +1072,7 @@ class TestVariableInit(unittest.TestCase):
 
 
 class TestStaticSaveLoadPickle(unittest.TestCase):
-    @test_with_pir_api
+
     def test_pickle_protocol(self):
         # enable static graph mode
         paddle.enable_static()
@@ -1167,7 +1161,6 @@ class TestSaveLoadInferenceModel(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    @test_with_pir_api
     def test_no_params(self):
         main_program = paddle.static.Program()
         with paddle.static.program_guard(main_program):
@@ -1196,17 +1189,13 @@ class TestSaveLoadInferenceModel(unittest.TestCase):
                     [
                         'pd_op.data',
                         'pd_op.add',
-                        'pd_op.full',
-                        'pd_op.scale',
                         'pd_op.fetch',
                     ],
                 )
             else:
                 self.assertEqual(fetch_targets[0].shape, (10, 10))
                 ops = [op.type for op in inference_program.block(0).ops]
-                self.assertEqual(
-                    ops, ['feed', 'elementwise_add', 'scale', 'fetch']
-                )
+                self.assertEqual(ops, ['feed', 'elementwise_add', 'fetch'])
 
 
 if __name__ == '__main__':

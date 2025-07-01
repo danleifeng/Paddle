@@ -12,21 +12,21 @@ if(WITH_NV_JETSON)
   set(paddle_known_gpu_archs11 "53 62 72 87")
   set(paddle_known_gpu_archs12 "53 62 72 87 90")
 elseif(NEW_RELEASE_ALL)
-  message("Using New Release Strategy - All Arches Packge")
+  message("Using New Release Strategy - All Arches Package")
   add_definitions(-DNEW_RELEASE_ALL)
   set(paddle_known_gpu_archs "50 52 60 61 70 75 80 86 90")
   set(paddle_known_gpu_archs10 "50 52 60 61 70 75")
   set(paddle_known_gpu_archs11 "50 60 61 70 75 80")
   set(paddle_known_gpu_archs12 "50 60 61 70 75 80 90")
 elseif(NEW_RELEASE_PYPI)
-  message("Using New Release Strategy - Cubin Packge")
+  message("Using New Release Strategy - Cubin Package")
   add_definitions(-DNEW_RELEASE_PYPI)
   set(paddle_known_gpu_archs "50 52 60 61 70 75 80 86 90")
   set(paddle_known_gpu_archs10 "")
   set(paddle_known_gpu_archs11 "61 70 75 80")
   set(paddle_known_gpu_archs12 "61 70 75 80 90")
 elseif(NEW_RELEASE_JIT)
-  message("Using New Release Strategy - JIT Packge")
+  message("Using New Release Strategy - JIT Package")
   add_definitions(-DNEW_RELEASE_JIT)
   set(paddle_known_gpu_archs "50 52 60 61 70 75 80 86 90")
   set(paddle_known_gpu_archs10 "50 60 70 75")
@@ -115,6 +115,7 @@ function(select_nvcc_arch_flags out_variable out_arch_bin)
       "Ampere"
       "Hopper"
       "All"
+      "Ada Lovelace"
       "Manual")
   set(archs_name_default "Auto")
   list(APPEND archs_names "Auto")
@@ -241,9 +242,15 @@ function(select_nvcc_arch_flags out_variable out_arch_bin)
     string(APPEND nvcc_archs_readable " compute_${arch}")
   endforeach()
 
+  string(APPEND nvcc_flags " -Xfatbin -compress-all")
   string(REPLACE ";" " " nvcc_archs_readable "${nvcc_archs_readable}")
   string(REGEX MATCHALL "[0-9()]+" nvcc_archs_bin_list "${nvcc_archs_bin_list}")
   string(JOIN "," nvcc_real_archs ${nvcc_archs_bin_list})
+
+  set(COMPILED_CUDA_ARCHS
+      "${nvcc_real_archs}"
+      CACHE STRING "Specify compiled cuda archs.")
+
   set(${out_variable}
       ${nvcc_flags}
       PARENT_SCOPE)
@@ -282,7 +289,7 @@ elseif(${CMAKE_CUDA_COMPILER_VERSION} LESS 13.0) # CUDA 12.0+
 endif()
 
 if(NOT ${CMAKE_CUDA_COMPILER_VERSION} LESS 10.0)
-  add_definitions("-DTRT_PLUGIN_FP16_AVALIABLE")
+  add_definitions("-DTRT_PLUGIN_FP16_AVAILABLE")
 endif()
 
 add_definitions("-DCUDA_VERSION_MAJOR=\"${CUDA_VERSION_MAJOR}\"")

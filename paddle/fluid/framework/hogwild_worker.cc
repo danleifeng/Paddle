@@ -23,14 +23,14 @@ limitations under the License. */
 #include "paddle/fluid/framework/new_executor/interpreter/dependency_builder.h"
 #include "paddle/fluid/operators/controlflow/conditional_block_op_helper.h"
 #include "paddle/fluid/operators/isfinite_op.h"
-#include "paddle/fluid/platform/cpu_helper.h"
-#include "paddle/fluid/platform/lodtensor_printer.h"
+#include "paddle/fluid/platform/densetensor_printer.h"
+#include "paddle/phi/common/reduce_type.h"
 #include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/phi/core/distributed/nccl_comm_context.h"
-COMMON_DECLARE_bool(dynamic_static_unified_comm);
 #endif
 
 #if defined PADDLE_WITH_PSCORE
@@ -72,8 +72,7 @@ PHI_DEFINE_EXPORTED_bool(gpugraph_enable_print_op_debug,
                          false,
                          "enable print op debug ,default false");
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::atomic<bool> HogwildWorker::quit_flag_(false);
 Barrier g_barrier;
@@ -178,14 +177,14 @@ void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope *root,
       PADDLE_ENFORCE_NE(
           src_var,
           nullptr,
-          phi::errors::NotFound("root scope not found var name=%s",
-                                obj.second.c_str()));
+          common::errors::NotFound("root scope not found var name=%s",
+                                   obj.second.c_str()));
       auto &src_tensor = src_var->Get<phi::DenseTensor>();
       auto dest_var = scope->FindLocalVar(obj.first);
-      PADDLE_ENFORCE_NE(
-          dest_var,
-          nullptr,
-          phi::errors::NotFound("dest name=%s is nullptr", obj.first.c_str()));
+      PADDLE_ENFORCE_NE(dest_var,
+                        nullptr,
+                        common::errors::NotFound("dest name=%s is nullptr",
+                                                 obj.first.c_str()));
       auto *dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
       auto dtype = framework::TransToProtoVarType(dest_tensor->dtype());
       framework::TransDataType(src_tensor, dtype, dest_tensor);
@@ -199,14 +198,14 @@ void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope *root,
     auto src_var = root->FindLocalVar(name);
     PADDLE_ENFORCE_NE(src_var,
                       nullptr,
-                      phi::errors::NotFound("root scope not found var name=%s",
-                                            name.c_str()));
+                      common::errors::NotFound(
+                          "root scope not found var name=%s", name.c_str()));
     auto &src_tensor = src_var->Get<phi::DenseTensor>();
     auto dest_var = scope->FindLocalVar(name);
     PADDLE_ENFORCE_NE(
         dest_var,
         nullptr,
-        phi::errors::NotFound("dest name=%s is nullptr", name.c_str()));
+        common::errors::NotFound("dest name=%s is nullptr", name.c_str()));
     auto *dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
     copyer->Copy(src_tensor, place, dest_tensor);
   }
@@ -564,8 +563,8 @@ size_t HogwildWorker::AdjustOffloadOps(const ProgramDesc &program) {
         auto dest_var = thread_scope_->Var(name);  // init local var
         PADDLE_ENFORCE_NE(dest_var,
                           nullptr,
-                          phi::errors::InvalidArgument("init var error name=%s",
-                                                       name.c_str()));
+                          common::errors::InvalidArgument(
+                              "init var error name=%s", name.c_str()));
         offload_vars_[op.get()].copy_vars.push_back(name);
         // nccl broadcast param
         if (is_offload_communication_) {
@@ -786,8 +785,13 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
     op_names_.push_back(op_name);
     ops_.emplace_back(OpRegistry::CreateOp(*op_desc));
     // change to device stream
-    if (op_name == "c_broadcast" || op_name == "c_reduce_sum" ||
-        op_name == "c_allreduce_sum") {
+    if (op_name == "c_broadcast" || op_name == "c_allreduce_sum" ||
+        (op_name == "all_reduce" &&
+         op_desc->GetAttrIfExists<int>("reduce_type") ==
+             static_cast<int>(phi::ReduceType::kRedSum)) ||
+        (op_name == "reduce" &&
+         op_desc->GetAttrIfExists<int>("reduce_type") ==
+             static_cast<int>(phi::ReduceType::kRedSum))) {
       ops_[op_index]->SetAttr("use_calc_stream", true);
     }
     op_index++;
@@ -903,7 +907,7 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
       // add offload
       auto itx = offload_vars_.find(op.get());
       if (itx != offload_vars_.end()) {
-        str_os << ", offload copys: [";
+        str_os << ", offload copies: [";
         for (auto &name : itx->second.copy_vars) {
           str_os << name << ",";
         }
@@ -964,7 +968,7 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
 
   PADDLE_ENFORCE_NOT_NULL(
       root_scope_,
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "Root scope should be set before creating thread scope."));
 
   thread_scope_ = &root_scope_->NewScope();
@@ -991,7 +995,10 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
       ++persist_total;
       if (stat_var_name_map_.find(name) != stat_var_name_map_.end()) {
         Variable *root_var = root_scope_->FindVar(name);
-        CHECK(root_var != nullptr);
+        PADDLE_ENFORCE_NOT_NULL(
+            root_var,
+            common::errors::NotFound("Root scope should contain variable."));
+
         auto root_tensor = root_var->Get<phi::DenseTensor>();
         if (root_tensor.place() == place_) {
           continue;
@@ -1060,12 +1067,18 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
                            holder->ptr(),
                            holder->size(),
                            stream);
-              CHECK(phi::is_gpu_place(root_tensor->place()));
+              PADDLE_ENFORCE_EQ(phi::is_gpu_place(root_tensor->place()),
+                                true,
+                                common::errors::InvalidArgument(
+                                    "The place of root tensor should be GPU."));
               ++persist_reset;
             }
           } else {
             auto *ptr = thread_scope_->Var(name);
-            CHECK(proto::VarType::LOD_TENSOR == var->GetType());
+            PADDLE_ENFORCE_EQ(proto::VarType::DENSE_TENSOR,
+                              var->GetType(),
+                              common::errors::InvalidArgument(
+                                  "The type of var should be DENSE_TENSOR."));
             InitializeVariable(ptr, var->GetType());
             phi::DenseTensor *thread_tensor =
                 ptr->GetMutable<phi::DenseTensor>();
@@ -1192,54 +1205,35 @@ bool HogwildWorker::CheckBatchNum(int flag) {
     //  g_barrier.wait();
     float *stat_ptr = sync_stat_.data<float>();
     int ring_id = 0;
-    platform::NCCLComm *comm = nullptr;
     const auto &comm_context_manager =
         phi::distributed::CommContextManager::GetInstance();
     phi::distributed::NCCLCommContext *comm_ctx = nullptr;
-    if (FLAGS_dynamic_static_unified_comm) {
-      PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(ring_id)),
-                        true,
-                        phi::errors::InvalidArgument(
-                            "You choose to use new communication library by "
-                            "setting environment "
-                            "variable FLAGS_dynamic_static_unified_comm True. "
-                            "But ring_id(%d) is "
-                            "not found in comm_context_manager.",
-                            std::to_string(ring_id)));
-      comm_ctx = static_cast<phi::distributed::NCCLCommContext *>(
-          comm_context_manager.Get(std::to_string(ring_id)));
-      PADDLE_ENFORCE_NE(comm_ctx,
-                        nullptr,
-                        phi::errors::Unavailable(
-                            "NCCLCommContext is nullptr, collective op should "
-                            "has ring_id attr."));
-    } else {
-      comm = platform::NCCLCommContext::Instance().Get(ring_id,
-                                                       place_.GetDeviceId());
-    }
+    PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(ring_id)),
+                      true,
+                      common::errors::InvalidArgument(
+                          "You choose to use new communication library. "
+                          "But ring_id(%d) is "
+                          "not found in comm_context_manager.",
+                          std::to_string(ring_id)));
+    comm_ctx = static_cast<phi::distributed::NCCLCommContext *>(
+        comm_context_manager.Get(std::to_string(ring_id)));
+    PADDLE_ENFORCE_NE(comm_ctx,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "NCCLCommContext is nullptr, collective op should "
+                          "has ring_id attr."));
 
     auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
-    if (comm_ctx) {
-      // comm_ctx->AllReduce only support allreduce on the whole tensor,
-      // single element is not supported now.
-      PADDLE_ENFORCE_GPU_SUCCESS(
-          phi::dynload::ncclAllReduce(&stat_ptr[flag],
-                                      &stat_ptr[2],
-                                      1,
-                                      ncclFloat32,
-                                      ncclProd,
-                                      comm_ctx->GetNcclComm(),
-                                      stream));
-
-    } else {
-      PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclAllReduce(&stat_ptr[flag],
-                                                             &stat_ptr[2],
-                                                             1,
-                                                             ncclFloat32,
-                                                             ncclProd,
-                                                             comm->comm(),
-                                                             stream));
-    }
+    // comm_ctx->AllReduce only support allreduce on the whole tensor,
+    // single element is not supported now.
+    PADDLE_ENFORCE_GPU_SUCCESS(
+        phi::dynload::ncclAllReduce(&stat_ptr[flag],
+                                    &stat_ptr[2],
+                                    1,
+                                    ncclFloat32,
+                                    ncclProd,
+                                    comm_ctx->GetNcclComm(),
+                                    stream));
 
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&ret,  // output
                                                &stat_ptr[2],
@@ -1764,5 +1758,4 @@ void HogwildWorker::PrintFetchVars() {
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework

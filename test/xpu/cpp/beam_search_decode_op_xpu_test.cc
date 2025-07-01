@@ -12,22 +12,23 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/beam_search_decode_op_xpu.h"
 #include "paddle/phi/backends/xpu/xpu_info.h"
+#include "paddle/phi/common/memory_utils.h"
+#include "paddle/phi/kernels/funcs/beam_search_decode_xpu.h"
 
 #include "gtest/gtest.h"
 
 using CPUPlace = phi::CPUPlace;
 using XPUPlace = phi::XPUPlace;
-using LoD = paddle::framework::LoD;
-using LoDTensorArray = paddle::framework::LoDTensorArray;
+using LegacyLoD = phi::LegacyLoD;
+using DenseTensorArray = phi::TensorArray;
 
 template <typename T>
-using BeamSearchDecoder = paddle::operators::BeamSearchDecoder<T>;
+using BeamSearchDecoder = phi::funcs::BeamSearchDecoder<T>;
 template <typename T>
-using Sentence = paddle::operators::Sentence<T>;
+using Sentence = phi::funcs::Sentence<T>;
 template <typename T>
-using SentenceVector = paddle::operators::SentenceVector<T>;
+using SentenceVector = phi::funcs::SentenceVector<T>;
 
 namespace paddle {
 namespace test {
@@ -36,19 +37,19 @@ template <typename T>
 void GenerateXPUExample(const std::vector<size_t>& level_0,
                         const std::vector<size_t>& level_1,
                         const std::vector<int>& data,
-                        LoDTensorArray* ids,
-                        LoDTensorArray* scores) {
+                        DenseTensorArray* ids,
+                        DenseTensorArray* scores) {
   PADDLE_ENFORCE_EQ(level_0.back(),
                     level_1.size() - 1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "source level is used to describe candidate set"
-                        ", so it's element should less than levle_1 length. "
+                        ", so it's element should less than level_1 length. "
                         "And the value of source"
                         "level is %d. ",
                         level_1.size() - 1));
   PADDLE_ENFORCE_EQ(level_1.back(),
                     data.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "the lowest level is used to describe data"
                         ", so it's last element should be data length %d. ",
                         data.size()));
@@ -58,7 +59,7 @@ void GenerateXPUExample(const std::vector<size_t>& level_0,
 
   XPUPlace xpu_place(XPU_PlaceNo);
 
-  LoD lod;
+  LegacyLoD lod;
   lod.push_back(level_0);
   lod.push_back(level_1);
 
@@ -79,11 +80,11 @@ void GenerateXPUExample(const std::vector<size_t>& level_0,
   tensor_id.set_lod(lod);
 
   int64_t* id_ptr = tensor_id.mutable_data<int64_t>(xpu_place);
-  paddle::memory::Copy(phi::XPUPlace(XPU_PlaceNo),
-                       id_ptr,
-                       phi::CPUPlace(),
-                       id_cpu_ptr,
-                       tensor_id_cpu.numel() * sizeof(int64_t));
+  phi::memory_utils::Copy(phi::XPUPlace(XPU_PlaceNo),
+                          id_ptr,
+                          phi::CPUPlace(),
+                          id_cpu_ptr,
+                          tensor_id_cpu.numel() * sizeof(int64_t));
 
   // Scores
   phi::DenseTensor tensor_score_cpu;
@@ -123,11 +124,11 @@ void GenerateXPUExample(const std::vector<size_t>& level_0,
 
   T* score_ptr = tensor_score.mutable_data<T>(xpu_place);
 
-  paddle::memory::Copy(phi::XPUPlace(XPU_PlaceNo),
-                       score_ptr,
-                       phi::CPUPlace(),
-                       score_cpu_ptr,
-                       tensor_score_cpu.numel() * sizeof(T));
+  phi::memory_utils::Copy(phi::XPUPlace(XPU_PlaceNo),
+                          score_ptr,
+                          phi::CPUPlace(),
+                          score_cpu_ptr,
+                          tensor_score_cpu.numel() * sizeof(T));
 
   ids->push_back(tensor_id);
   scores->push_back(tensor_score);
@@ -140,8 +141,8 @@ void BeamSearchDecodeTestByXPUFrame() {
   // Construct sample data with 5 steps and 2 source sentences
   // beam_size = 2, start_id = 0, end_id = 1
 
-  LoDTensorArray ids;
-  LoDTensorArray scores;
+  DenseTensorArray ids;
+  DenseTensorArray scores;
 
   GenerateXPUExample<T>(std::vector<size_t>{0, 1, 2},
                         std::vector<size_t>{0, 1, 2},
@@ -165,7 +166,7 @@ void BeamSearchDecodeTestByXPUFrame() {
                         &scores);
   GenerateXPUExample<T>(
       std::vector<size_t>{0, 2, 4},
-      std::vector<size_t>{0, 0, 0, 2, 2},  // the branchs of the first source
+      std::vector<size_t>{0, 0, 0, 2, 2},  // the branches of the first source
                                            // sentence are pruned since finished
       std::vector<int>{5, 1},
       &ids,
@@ -177,11 +178,11 @@ void BeamSearchDecodeTestByXPUFrame() {
   phi::DenseTensor id_tensor_cpu;
   phi::DenseTensor score_tensor_cpu;
 
-  paddle::operators::BeamSearchDecodeXPUFunctor bs_xpu(
+  phi::funcs::BeamSearchDecodeXPUFunctor bs_xpu(
       ids, scores, &id_tensor_cpu, &score_tensor_cpu, 2, 1);
   bs_xpu.apply_xpu<T>();
 
-  LoD lod = id_tensor_cpu.lod();
+  LegacyLoD lod = id_tensor_cpu.lod();
   std::vector<size_t> expect_source_lod = {0, 2, 4};
   ASSERT_EQ(lod[0], expect_source_lod);
 

@@ -30,6 +30,28 @@ class CodeGenC;
 namespace ir {
 
 /**
+ * Content of a module.
+ */
+struct _Module_ : public IrNode {
+  std::string name;
+  Target target;
+  std::vector<Expr> buffers;
+  std::vector<LoweredFunc> functions;
+  std::vector<Module> submodules;
+  std::vector<Expr> predicates;
+  std::vector<int> priorities;
+  LoweredFunc infer_shape_func;
+
+  static ir::Module Make(const std::string& name, Target target);
+
+  void Verify() const override {}
+
+  IrNodeTy node_type() const override { return _node_type_; }
+
+  static const IrNodeTy _node_type_ = IrNodeTy::Module;
+};
+
+/**
  * Module represents IR containing lowered function definitions and buffers.
  */
 class Module : public ir::IrNodeRef {
@@ -46,7 +68,7 @@ class Module : public ir::IrNodeRef {
     void AddBuffer(ir::Buffer buffer);
     void AddPredicate(ir::Expr predicate);
     void AddPriority(int priority);
-    void SetInferShapeFunc(ir::Expr infer_shape_func);
+    void SetInferShapeFunc(ir::LoweredFunc infer_shape_func);
     void Clear();
     common::Arch GetTargetArch();
 
@@ -65,8 +87,8 @@ class Module : public ir::IrNodeRef {
   //! The members in the module.
   // @{
   std::vector<ir::Buffer> buffers() const;
-  std::vector<ir::LoweredFunc> functions() const;
-  std::vector<Module> submodules() const;
+  const std::vector<ir::LoweredFunc>& functions() const;
+  const std::vector<Module>& submodules() const;
   // @}
 
   //! Compile a module to some outputs.
@@ -77,8 +99,6 @@ class Module : public ir::IrNodeRef {
 
   ir::_Module_* operator->() { return self(); }
   const ir::_Module_* operator->() const { return self(); }
-
-  operator Expr() const;
 
  protected:
   Module(const std::string& name, const Target& target);

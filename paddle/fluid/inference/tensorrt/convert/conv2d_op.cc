@@ -16,26 +16,22 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/engine.h"
 #include "paddle/phi/common/data_type.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
 
-namespace proto {
+}  // namespace paddle::framework
+namespace paddle::framework::proto {
 class OpDesc;
-}  // namespace proto
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::proto
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
-template <typename RegistFunc, typename SetDilationFunc>
+template <typename RegisterFunc, typename SetDilationFunc>
 void ConvertConv2d(TensorRTEngine* engine,
                    const framework::proto::OpDesc& op,
                    const framework::Scope& scope,
                    bool test_mode,
-                   RegistFunc fadd_layer,
+                   RegisterFunc fadd_layer,
                    SetDilationFunc fset_dilation,
                    const std::string& name) {
   VLOG(3) << "convert a " << name << " op to tensorrt layer without bias";
@@ -56,7 +52,7 @@ void ConvertConv2d(TensorRTEngine* engine,
     PADDLE_ENFORCE_EQ(
         Y_t->dims().size(),
         4UL,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The conv2d filter's dims size should be 4, but got %d",
             Y_t->dims().size()));
     n_output = Y_t->dims()[0];
@@ -68,7 +64,7 @@ void ConvertConv2d(TensorRTEngine* engine,
     PADDLE_ENFORCE_EQ(
         filter->getDimensions().nbDims,
         4UL,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The conv2d filter's dims size should be 4, but got %d",
             filter->getDimensions().nbDims));
     n_output = filter->getDimensions().d[0];
@@ -156,8 +152,8 @@ void ConvertConv2d(TensorRTEngine* engine,
 
   PADDLE_ENFORCE_NOT_NULL(
       layer,
-      phi::errors::Fatal("TensorRT create conv2d/conv2d_transpose"
-                         " layer failed."));
+      common::errors::Fatal("TensorRT create conv2d/conv2d_transpose"
+                            " layer failed."));
   layer->setStrideNd(nv_strides);
 
   layer->setPrePadding(nv_pre_paddings);
@@ -169,7 +165,7 @@ void ConvertConv2d(TensorRTEngine* engine,
     nv_post_paddings.d[1] -= output_padding[1];
   }
   if (nv_post_paddings.d[0] < 0 || nv_post_paddings.d[1] < 0) {
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The value in conv2d_transpose's PostPadding should be >= 0."));
   }
   layer->setPostPadding(nv_post_paddings);
@@ -260,9 +256,7 @@ class Deconv2dOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(conv2d, Conv2dOpConverter);
 REGISTER_TRT_OP_CONVERTER(fused_conv2d_add_act, Conv2dOpConverter);

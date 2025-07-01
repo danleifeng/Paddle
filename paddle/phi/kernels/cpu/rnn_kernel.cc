@@ -217,7 +217,7 @@ struct Layer {
                   const std::string& mode,
                   bool is_test,
                   DenseTensor* cache_input) {
-    // crate the temp input for the X * W_ih^T + Bias_ih
+    // create the temp input for the X * W_ih^T + Bias_ih
     const int& hidden_size = weight.dims()[0];  // NOLINT
     cache_input->Resize(
         common::make_ddim({input.dims()[0], input.dims()[1], hidden_size}));
@@ -272,7 +272,7 @@ struct Layer {
                    DenseTensor* last_c,
                    const DenseTensor& mask_tensor,
                    const std::string& mode) {
-    // in the output, if mask flag is 0, we will retun the zero data
+    // in the output, if mask flag is 0, we will return the zero data
     auto& place = *dev_ctx.eigen_device();
     auto out = EigenMatrix<T>::Reshape(*output, output->dims().size() - 1);
     auto mask = EigenMatrix<T>::From(
@@ -425,7 +425,7 @@ struct Layer {
           }
           has_allocate_mem_c = true;
         }
-        SwapPoniter(&init_c_holder, &last_c_holder);
+        SwapPointer(&init_c_holder, &last_c_holder);
         init_c_temp_holder = init_c_holder;
       }
       cell_(&dev_ctx,
@@ -459,7 +459,7 @@ struct Layer {
         } else {
           init_h_holder = &(output_tensors[i + 1]);
         }
-        SwapPoniter(&init_h_holder, &last_h_holder);
+        SwapPointer(&init_h_holder, &last_h_holder);
       }
     }
     if (has_sequence_length) {
@@ -658,7 +658,7 @@ struct Layer {
         } else {
           init_h_holder = &(output_tensors[i + 1]);
         }
-        SwapPoniter(&init_h_holder, &last_h_holder);
+        SwapPointer(&init_h_holder, &last_h_holder);
       }
     }
     if (has_sequence_length) {

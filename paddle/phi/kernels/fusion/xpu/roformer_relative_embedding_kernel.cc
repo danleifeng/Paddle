@@ -19,7 +19,7 @@ namespace phi {
 namespace fusion {
 
 template <typename T, typename Context>
-void RoformerRelativePosXPUKernel(const Context& ctx,
+void RoformerRelativePosXPUKernel(const Context& dev_ctx,
                                   const DenseTensor& x,
                                   const DenseTensor& sin_emb,
                                   const DenseTensor& cos_emb,
@@ -30,15 +30,15 @@ void RoformerRelativePosXPUKernel(const Context& ctx,
   auto* x_data = reinterpret_cast<const XPUType*>(x.data<T>());
   auto* sin_emb_data = sin_emb.data<float>();
   auto* cos_emb_data = cos_emb.data<float>();
-  auto* out_data = reinterpret_cast<XPUType*>(ctx.template Alloc<T>(out));
-  xpu::ctx_guard RAII_GUARD(ctx.x_context());
+  auto* out_data = reinterpret_cast<XPUType*>(dev_ctx.template Alloc<T>(out));
+  xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
   auto x_dims = x.dims();
   int batch = x_dims[0];
   int head_num = x_dims[1];
   int seqlen = x_dims[2];
   int head_dim = x_dims[3];
   if (seqlen > max_pos_len) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The input sequence length should be less than or equal to the "
         "maximum position length. But received seqlen: %d, max_pos_len: %d",
         seqlen,
@@ -50,7 +50,7 @@ void RoformerRelativePosXPUKernel(const Context& ctx,
     lod[i] = i * seqlen;
   }
   int r =
-      xpu::rope<XPUType>(ctx.x_context(),
+      xpu::rope<XPUType>(dev_ctx.x_context(),
                          x_data,
                          out_data,
                          cos_emb_data,

@@ -28,6 +28,11 @@ from paddle.distribution.binomial import Binomial
     (parameterize.TEST_CASE_NAME, 'total_count', 'probs'),
     [
         (
+            'zero-dim',
+            np.array(1000),
+            np.array(0.6),
+        ),
+        (
             'one-dim',
             1000,
             np.array([0.4]).astype('float32'),
@@ -127,7 +132,7 @@ class TestBinomial(unittest.TestCase):
 class TestBinomialProbs(unittest.TestCase):
     def setUp(self):
         self._dist = Binomial(
-            total_count=self.total_count,
+            total_count=paddle.to_tensor(self.total_count),
             probs=paddle.to_tensor(self.probs),
         )
 

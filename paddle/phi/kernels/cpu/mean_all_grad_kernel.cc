@@ -24,9 +24,14 @@ void MeanAllGradKernel(const Context& dev_ctx,
                        const DenseTensor& x UNUSED,
                        const DenseTensor& out_grad,
                        DenseTensor* x_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    return;
+  }
+
   PADDLE_ENFORCE_EQ(out_grad.numel(),
                     1UL,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Mean Gradient should be scalar. But received "
                         "Out@Grad's elements num is %d.",
                         out_grad.numel()));

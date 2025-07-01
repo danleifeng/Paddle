@@ -17,7 +17,7 @@ import numbers
 import os
 import time
 import warnings
-from typing import TYPE_CHECKING, Any, Iterator, Literal, Sequence, TypedDict
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -27,6 +27,9 @@ from paddle.utils import try_import
 from .progressbar import ProgressBar
 
 if TYPE_CHECKING:
+    from typing import Any, Literal, TypedDict
+
+    from collection.abc import Iterator, Sequence
     from typing_extensions import TypeAlias
 
     from .model import Model
@@ -67,16 +70,16 @@ def config_callbacks(
         _cbks if isinstance(_cbks, (list, tuple)) else [_cbks]
     )
     if not any(isinstance(k, ProgBarLogger) for k in cbks) and verbose:
-        cbks = [ProgBarLogger(log_freq, verbose=verbose)] + cbks
+        cbks = [ProgBarLogger(log_freq, verbose=verbose), *cbks]
 
     if not any(isinstance(k, ModelCheckpoint) for k in cbks):
-        cbks = cbks + [ModelCheckpoint(save_freq, save_dir)]
+        cbks = [*cbks, ModelCheckpoint(save_freq, save_dir)]
 
     for k in cbks:
         if isinstance(k, EarlyStopping):
             k.save_dir = save_dir
     if not any(isinstance(k, LRScheduler) for k in cbks):
-        cbks = cbks + [LRScheduler()]
+        cbks = [*cbks, LRScheduler()]
 
     cbk_list = CallbackList(cbks)
     cbk_list.set_model(model)
@@ -443,7 +446,7 @@ class ProgBarLogger(Callback):
         self.epoch = epoch
         self.train_step = 0
         if self.epochs and self._is_print():
-            print('Epoch %d/%d' % (epoch + 1, self.epochs))
+            print(f'Epoch {epoch + 1}/{self.epochs}')
         self.train_progbar = ProgressBar(num=self.steps, verbose=self.verbose)
 
         self._train_timer['batch_start_time'] = time.time()
@@ -621,14 +624,14 @@ class ProgBarLogger(Callback):
         logs = logs or {}
         if self._is_print() and (self.eval_steps is not None):
             self._updates(logs, 'eval')
-            print('Eval samples: %d' % (self.evaled_samples))
+            print(f'Eval samples: {self.evaled_samples}')
 
     def on_predict_end(self, logs: _CallbackLogs | None = None) -> None:
         logs = logs or {}
         if self._is_print():
             if self.test_step % self.log_freq != 0 or self.verbose == 1:
                 self._updates(logs, 'test')
-            print('Predict samples: %d' % (self.tested_samples))
+            print(f'Predict samples: {self.tested_samples}')
 
 
 class ModelCheckpoint(Callback):
@@ -959,7 +962,7 @@ class EarlyStopping(Callback):
         if self.wait_epoch >= self.patience:
             self.model.stop_training = True
             if self.verbose > 0:
-                print('Epoch %d: Early stopping.' % (self.stopped_epoch + 1))
+                print(f'Epoch {self.stopped_epoch + 1}: Early stopping.')
                 if self.save_best_model and self.save_dir is not None:
                     print(
                         'Best checkpoint has been saved at {}'.format(
@@ -1445,8 +1448,8 @@ class ReduceLROnPlateau(Callback):
                         and paddle.distributed.ParallelEnv().local_rank == 0
                     ):
                         print(
-                            '\nEpoch %d: ReduceLROnPlateau reducing learning '
-                            'rate to %s.' % (self.epoch + 1, new_lr)
+                            f'\nEpoch {self.epoch + 1}: ReduceLROnPlateau reducing learning '
+                            f'rate to {new_lr}.'
                         )
                     self.cooldown_counter = self.cooldown
                     self.wait = 0

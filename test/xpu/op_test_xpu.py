@@ -256,7 +256,7 @@ class XPUOpTest(OpTest):
             a3,
             inputs_to_check,
             max_relative_error,
-            "Gradient Check On cpu & xpu",
+            "Gradient Check On xpu & cpu",
         )
 
     def get_grad_with_place(
@@ -292,7 +292,7 @@ class XPUOpTest(OpTest):
 
             # oneDNN numeric gradient should use CPU kernel
             use_onednn = False
-            if "use_mkldnn" in op_attrs and op_attrs["use_mkldnn"]:
+            if op_attrs.get("use_mkldnn"):
                 op_attrs["use_mkldnn"] = False
                 use_onednn = True
 

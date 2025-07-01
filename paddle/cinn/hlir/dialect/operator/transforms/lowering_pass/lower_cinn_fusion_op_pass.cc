@@ -19,48 +19,16 @@
 #include "paddle/cinn/hlir/dialect/operator/ir/manual_op.h"
 #include "paddle/cinn/hlir/dialect/operator/ir/op_attribute.h"
 #include "paddle/cinn/hlir/dialect/operator/ir/op_dialect.h"
-#include "paddle/cinn/hlir/dialect/operator/transforms/lowering_pass/broadcast_with_cf.h"
 #include "paddle/cinn/hlir/dialect/operator/transforms/lowering_pass/pre_analysis.h"
 #include "paddle/cinn/hlir/dialect/operator/transforms/lowering_pass/utils.h"
 #include "paddle/cinn/hlir/dialect/operator/transforms/refresh_combine_pattern.h"
 #include "paddle/cinn/hlir/dialect/runtime/ir/jit_kernel_op.h"
 #include "paddle/cinn/hlir/dialect/runtime/ir/runtime_dialect.h"
+#include "paddle/cinn/hlir/framework/pir/utils.h"
 #include "paddle/pir/include/core/builtin_type.h"
 #include "paddle/pir/include/pass/pass_registry.h"
 
 namespace cinn::dialect::ir::details {
-
-pir::Operation* ProcessDyShapeGroup(const OpLoweringGroupPtr& group,
-                                    pir::PatternRewriter& rewriter) {  // NOLINT
-  const auto& group_inputs = GetBlockOutsideInput(group->ops());
-  const auto& optional_broadcast_tree = GetBroadcastTreeForOptimize(group);
-  if (optional_broadcast_tree.has_value()) {
-    const std::shared_ptr<BroadcastTree> broadcast_tree =
-        optional_broadcast_tree.value();
-    const auto& value_to_dim_expr_idx =
-        GetGroupDimExprInfo(group).value_to_dim_expr_idx;
-    std::vector<pir::Type> output_types;
-    auto group_output_values = group->GetGroupOutputValues();
-    for (size_t i = 0; i < group_output_values.size(); ++i) {
-      output_types.push_back(group_output_values[i].type());
-    }
-    return CompileBroadcastTreeToConditionBlock(group,
-                                                *broadcast_tree,
-                                                value_to_dim_expr_idx,
-                                                group_inputs,
-                                                output_types,
-                                                rewriter);
-  } else {  // no condition block
-    // compile group to jit_kernel_op
-    std::vector<pir::Type> output_types;
-    for (const auto& value : group->output_values()) {
-      output_types.push_back(value.type());
-    }
-    auto jit_kernel_op = rewriter.Build<cinn::dialect::JitKernelOp>(
-        group_inputs, GetJitKernelAttr(group), output_types);
-    return jit_kernel_op;
-  }
-}
 class FusionOpPattern : public pir::OpRewritePattern<cinn::dialect::FusionOp> {
  public:
   FusionOpPattern(::pir::IrContext* context, const GroupInfoMap& group_infos)
@@ -72,8 +40,6 @@ class FusionOpPattern : public pir::OpRewritePattern<cinn::dialect::FusionOp> {
     ::pir::IrContext* ctx = ::pir::IrContext::Instance();
     auto* program = fusion_op->GetParentProgram();
     auto& shape_analysis = pir::ShapeAnalysisManager::Instance().Get(program);
-    VLOG(4) << "Program before lowering: \n"
-            << pir::CustomPrintHelper(*program, shape_analysis.PrintHook());
 
     // TODO(zhangyuqin1998): Replace pir::Group with a new structure
     OpLoweringGroupPtr group = GetGroup(fusion_op);
@@ -97,7 +63,8 @@ class FusionOpPattern : public pir::OpRewritePattern<cinn::dialect::FusionOp> {
   virtual pir::Operation* ProcessGroup(
       const OpLoweringGroupPtr& group,
       pir::PatternRewriter& rewriter) const {  // NOLINT
-    auto group_inputs = GetBlockOutsideInput(group->ops());
+    auto group_inputs =
+        cinn::hlir::framework::pir::GetBlockOutsideInput(group->ops());
     // compile group to jit_kernel_op
     std::vector<pir::Type> output_types;
     const auto& group_output_values = group->output_values();
@@ -140,18 +107,6 @@ class LowerCinnFusionOpPass : public pir::PatternRewritePass {
   mutable GroupInfoMap group_infos_;
 };
 
-class DyShapeFusionOpPattern : public FusionOpPattern {
- public:
-  using FusionOpPattern::FusionOpPattern;
-
- protected:
-  virtual pir::Operation* ProcessGroup(
-      const OpLoweringGroupPtr& group,
-      pir::PatternRewriter& rewriter) const {  // NOLINT
-    return ProcessDyShapeGroup(group, rewriter);
-  }
-};
-
 class LowerCinnDyShapeFusionOpPass : public pir::PatternRewritePass {
  public:
   LowerCinnDyShapeFusionOpPass()
@@ -162,7 +117,7 @@ class LowerCinnDyShapeFusionOpPass : public pir::PatternRewritePass {
     context->GetOrRegisterDialect<cinn::dialect::OperatorDialect>();
 
     pir::RewritePatternSet ps(context);
-    ps.Add<DyShapeFusionOpPattern>(context, group_infos_);
+    ps.Add<FusionOpPattern>(context, group_infos_);
     ps.Add<RefreshCombineOpPattern>(context);
 
     return ps;

@@ -42,8 +42,9 @@ class RmsNormFusePattern : public paddle::drr::DrrPatternBase {
   void operator()(paddle::drr::DrrPatternContext *ctx) const override {
     paddle::drr::SourcePattern pat = ctx->SourcePattern();
     const auto &pow = pat.Op(paddle::dialect::PowOp::name());
-    const auto &mean =
-        pat.Op(paddle::dialect::MeanOp::name(), {{"axis", pat.Attr("axis")}});
+    const auto &full_int_array = pat.Op(paddle::dialect::FullIntArrayOp::name(),
+                                        {{"value", pat.Attr("value")}});
+    const auto &mean = pat.Op(paddle::dialect::MeanOp::name());
     const auto &full = pat.Op(paddle::dialect::FullOp::name());
     const auto &scale =
         pat.Op(paddle::dialect::ScaleOp::name(), {{"bias", pat.Attr("bias")}});
@@ -55,7 +56,9 @@ class RmsNormFusePattern : public paddle::drr::DrrPatternBase {
                                  {{"dtype", pat.Attr("cast_type_1")}});
       pat.Tensor("cast_1_out") = cast1(pat.Tensor("x"));
       pat.Tensor("pow_out") = pow(pat.Tensor("cast_1_out"));
-      pat.Tensor("mean_out") = mean(pat.Tensor("pow_out"));
+      pat.Tensor("full_int_array_out") = full_int_array();
+      pat.Tensor("mean_out") =
+          mean(pat.Tensor("pow_out"), pat.Tensor("full_int_array_out"));
       pat.Tensor("scale_out") = scale(pat.Tensor("mean_out"), full());
       pat.Tensor("rsqrt_out") = rsqrt(pat.Tensor("scale_out"));
       pat.Tensor("multiply_out1") =
@@ -67,7 +70,9 @@ class RmsNormFusePattern : public paddle::drr::DrrPatternBase {
           multiply2(pat.Tensor("cast_2_out"), pat.Tensor("w"));
     } else {
       pat.Tensor("pow_out") = pow(pat.Tensor("x"));
-      pat.Tensor("mean_out") = mean(pat.Tensor("pow_out"));
+      pat.Tensor("full_int_array_out") = full_int_array();
+      pat.Tensor("mean_out") =
+          mean(pat.Tensor("pow_out"), pat.Tensor("full_int_array_out"));
       pat.Tensor("scale_out") = scale(pat.Tensor("mean_out"), full());
       pat.Tensor("rsqrt_out") = rsqrt(pat.Tensor("scale_out"));
       pat.Tensor("multiply_out1") =
@@ -76,7 +81,7 @@ class RmsNormFusePattern : public paddle::drr::DrrPatternBase {
           multiply2(pat.Tensor("multiply_out1"), pat.Tensor("w"));
     }
     pat.AddConstraint([this](const paddle::drr::MatchContext &match_ctx) {
-      auto axis = match_ctx.Attr<std::vector<int64_t>>("axis");
+      auto axis = match_ctx.Attr<std::vector<int64_t>>("value");
       if (axis.size() > 1) {
         return false;
       }
@@ -107,7 +112,7 @@ class RmsNormFusePattern : public paddle::drr::DrrPatternBase {
     paddle::drr::ResultPattern res = pat.ResultPattern();
     const auto &begin_norm_axis =
         res.ComputeAttr([](const paddle::drr::MatchContext &match_ctx) -> int {
-          const auto &axis = match_ctx.Attr<std::vector<int64_t>>("axis");
+          const auto &axis = match_ctx.Attr<std::vector<int64_t>>("value");
           auto pow_out_shape =
               pir::GetShapeFromValue(match_ctx.Tensor("pow_out"));
           return axis[0] == -1 ? static_cast<int>(pow_out_shape.size()) - 1
@@ -256,8 +261,6 @@ class AddLayerNormFusePattern : public paddle::drr::DrrPatternBase {
         });
     const auto cast_1_op =
         res.Op(paddle::dialect::CastOp::name(), {{"dtype", cast_op_dtype}});
-    const auto cast_2_op =
-        res.Op(paddle::dialect::CastOp::name(), {{"dtype", cast_op_dtype}});
     const auto &fuse_layer_norm =
         res.Op(paddle::dialect::FusedBiasResidualLayernormOp::name(),
                {{"epsilon", pat.Attr("epsilon")},
@@ -288,10 +291,15 @@ class AddGroupNormFusePattern : public paddle::drr::DrrPatternBase {
  private:
   const bool extra_add_;
   const bool trans_extra_add_;
+  const bool enable_gpu_mixed_;
 
  public:
-  AddGroupNormFusePattern(bool extra_add, bool trans_extra_add)
-      : extra_add_(extra_add), trans_extra_add_{trans_extra_add} {}
+  AddGroupNormFusePattern(bool extra_add,
+                          bool trans_extra_add,
+                          bool enable_gpu_mixed)
+      : extra_add_(extra_add),
+        trans_extra_add_{trans_extra_add},
+        enable_gpu_mixed_(enable_gpu_mixed) {}
 
   uint32_t benefit() const override { return extra_add_ ? 4 : 3; }
   std::string name() const override { return "AddGroupNormFusePattern"; }
@@ -318,9 +326,9 @@ class AddGroupNormFusePattern : public paddle::drr::DrrPatternBase {
               ? add1(pat.Tensor("any_tensor"), pat.Tensor("add_out"))
               : add1(pat.Tensor("add_out"), pat.Tensor("any_tensor"));
     }
-    pat.AddConstraint([](const paddle::drr::MatchContext &match_ctx) {
+    pat.AddConstraint([this](const paddle::drr::MatchContext &match_ctx) {
       auto x_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("x"));
-      if (!x_dtype.isa<pir::Float16Type>() &&
+      if (!this->enable_gpu_mixed_ && !x_dtype.isa<pir::Float16Type>() &&
           !x_dtype.isa<pir::BFloat16Type>()) {
         return false;
       }
@@ -346,7 +354,13 @@ class AddGroupNormFusePattern : public paddle::drr::DrrPatternBase {
 };
 
 class AddGroupNormWithActPattern : public paddle::drr::DrrPatternBase {
+ private:
+  const bool enable_gpu_mixed_;
+
  public:
+  explicit AddGroupNormWithActPattern(bool enable_gpu_mixed)
+      : enable_gpu_mixed_(enable_gpu_mixed) {}
+
   uint32_t benefit() const override { return 2; }
   std::string name() const override { return "AddGroupNormWithActPattern"; }
 
@@ -368,9 +382,9 @@ class AddGroupNormWithActPattern : public paddle::drr::DrrPatternBase {
                             &pat.Tensor("mean_out_0"),
                             &pat.Tensor("variance_out_0")});
     pat.Tensor("silu_out") = silu(pat.Tensor("group_out"));
-    pat.AddConstraint([](const paddle::drr::MatchContext &match_ctx) {
+    pat.AddConstraint([this](const paddle::drr::MatchContext &match_ctx) {
       auto x_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("x"));
-      if (!x_dtype.isa<pir::Float16Type>() &&
+      if (!this->enable_gpu_mixed_ && !x_dtype.isa<pir::Float16Type>() &&
           !x_dtype.isa<pir::BFloat16Type>()) {
         return false;
       }
@@ -404,6 +418,12 @@ class AddNormFusePass : public pir::PatternRewritePass {
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);
+
+    bool enable_gpu_mixed = false;
+    if (Has("enable_gpu_mixed")) {
+      enable_gpu_mixed = Get<bool>("enable_gpu_mixed");
+    }
+
     // x-pow-mean-scale->rsqrt-
     //                          mul--
     // x-----------------------
@@ -437,14 +457,15 @@ class AddNormFusePass : public pir::PatternRewritePass {
     //           add-group_norm ----> add_group_norm_silu
     // residual-
     ps.Add(paddle::drr::Create<AddGroupNormFusePattern>(
-        context, !extra_add, true));
-    ps.Add(
-        paddle::drr::Create<AddGroupNormFusePattern>(context, extra_add, true));
+        context, !extra_add, true, enable_gpu_mixed));
     ps.Add(paddle::drr::Create<AddGroupNormFusePattern>(
-        context, extra_add, false));
+        context, extra_add, true, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<AddGroupNormFusePattern>(
+        context, extra_add, false, enable_gpu_mixed));
 
     // add_group_norm_silu-silu --->add_group_norm_silu
-    ps.Add(paddle::drr::Create<AddGroupNormWithActPattern>(context));
+    ps.Add(paddle::drr::Create<AddGroupNormWithActPattern>(context,
+                                                           enable_gpu_mixed));
     // group-silu->add_group_norm_silu moved to group_norm_silu_fuse_pass
     return ps;
   }

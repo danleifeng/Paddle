@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -26,6 +26,8 @@ from paddle.distribution import exponential_family
 from paddle.framework import in_dynamic_mode
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor, dtype
 
 
@@ -105,7 +107,7 @@ class Exponential(exponential_family.ExponentialFamily):
         """
         return self.rate.pow(-2)
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate samples of the specified shape.
 
         Args:
@@ -117,7 +119,7 @@ class Exponential(exponential_family.ExponentialFamily):
         with paddle.no_grad():
             return self.rsample(shape)
 
-    def rsample(self, shape: Sequence[int] = ()) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate reparameterized samples of the specified shape.
 
         Args:

@@ -16,7 +16,7 @@
 
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/ir_base.h"
-#include "paddle/cinn/poly/stage.h"
+#include "paddle/cinn/ir/lowered_func.h"
 #include "paddle/cinn/runtime/cinn_runtime.h"
 #include "paddle/common/enforce.h"
 namespace cinn {
@@ -43,7 +43,8 @@ __m(char *, 20);  // start from a larger number to avoid duplicate id with
 __m(char const *, 21);
 __m(ir::Expr, 22);
 __m(ir::Var, 23);
-__m(CINNValuePack, 24);
+__m(ir::LoweredFunc, 24);
+__m(CINNValuePack, 25);
 __m(std::string, 26);
 #undef __m
 //@}
@@ -114,41 +115,41 @@ bool CINNValue::is_var() const { return type_code_ == TypeCode<ir::Var>(); }
 
 bool CINNValue::is_expr() const {
   return type_code_ == TypeCode<ir::Expr>() &&
-         !absl::any_cast<Expr>(shared_).as_tensor();
+         !std::any_cast<Expr>(shared_).as_tensor();
 }
 
 bool CINNValue::is_tensor() const {
   return type_code_ == TypeCode<ir::Expr>() &&
-         absl::any_cast<Expr>(shared_).as_tensor();
+         std::any_cast<Expr>(shared_).as_tensor();
 }
 
 CINNValue::operator std::string() const {
   PADDLE_ENFORCE_EQ(
       type_code_,
       TypeCode<std::string>(),
-      phi::errors::InvalidArgument("The type_code is not std::string."));
-  return absl::any_cast<std::string>(shared_);
+      ::common::errors::InvalidArgument("The type_code is not std::string."));
+  return std::any_cast<std::string>(shared_);
 }
 CINNValue::operator ir::Var() const {
   PADDLE_ENFORCE_EQ(
       type_code_,
       TypeCode<ir::Var>(),
-      phi::errors::InvalidArgument("The type_code is not ir::Var."));
-  return absl::any_cast<ir::Var>(shared_);
+      ::common::errors::InvalidArgument("The type_code is not ir::Var."));
+  return std::any_cast<ir::Var>(shared_);
 }
 CINNValue::operator ir::Expr() const {
   PADDLE_ENFORCE_EQ(
       type_code_,
       TypeCode<ir::Expr>(),
-      phi::errors::InvalidArgument("The type_code is not ir::Expr."));
-  return absl::any_cast<Expr>(shared_);
+      ::common::errors::InvalidArgument("The type_code is not ir::Expr."));
+  return std::any_cast<Expr>(shared_);
 }
 CINNValue::operator CINNValuePack() const {
   PADDLE_ENFORCE_EQ(
       type_code_,
       TypeCode<CINNValuePack>(),
-      phi::errors::InvalidArgument("The type_code is not CINNValuePack."));
-  return absl::any_cast<CINNValuePack>(shared_);
+      ::common::errors::InvalidArgument("The type_code is not CINNValuePack."));
+  return std::any_cast<CINNValuePack>(shared_);
 }
 
 CINNValue::CINNValue(char *value)
@@ -160,17 +161,36 @@ CINNValue::CINNValue(const std::string &value)
 }
 CINNValue::CINNValue(const Var &value)
     : cinn_pod_value_t(cinn_value_t(), TypeCode<Var>()) {
-  CHECK(value.defined());
+  PADDLE_ENFORCE_EQ(
+      value.defined(),
+      true,
+      ::common::errors::InvalidArgument("The input of Var is not defined."));
   shared_ = value;
 }
 CINNValue::CINNValue(const Expr &value)
     : cinn_pod_value_t(cinn_value_t(), TypeCode<Expr>()) {
-  CHECK(value.defined());
+  PADDLE_ENFORCE_EQ(
+      value.defined(),
+      true,
+      ::common::errors::InvalidArgument("The input of Expr is not defined."));
   shared_ = value;
 }
+
+CINNValue::CINNValue(const ir::LoweredFunc &value)
+    : cinn_pod_value_t(cinn_value_t(), TypeCode<ir::LoweredFunc>()) {
+  PADDLE_ENFORCE_EQ(value.defined(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The input of LoweredFunc is not defined."));
+  shared_ = value;
+}
+
 CINNValue::CINNValue(const CINNValuePack &value)
     : cinn_pod_value_t(cinn_value_t(), TypeCode<CINNValuePack>()) {
-  CHECK(value.defined());
+  PADDLE_ENFORCE_EQ(value.defined(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The input of CINNValuePack is not defined."));
   shared_ = value;
 }
 
@@ -183,18 +203,22 @@ CINNValue &_CINNValuePack_::operator[](int offset) {
   PADDLE_ENFORCE_LT(
       offset,
       size(),
-      phi::errors::InvalidArgument("The offset is out of range."));
+      ::common::errors::InvalidArgument("The offset is out of range."));
   return values_[offset];
 }
 const CINNValue &_CINNValuePack_::operator[](int offset) const {
   PADDLE_ENFORCE_LT(
       offset,
       size(),
-      phi::errors::InvalidArgument("The offset is out of range."));
+      ::common::errors::InvalidArgument("The offset is out of range."));
   return values_[offset];
 }
 void _CINNValuePack_::AddValue(const CINNValue &value) {
-  CHECK(value.defined());
+  PADDLE_ENFORCE_EQ(
+      value.defined(),
+      true,
+      ::common::errors::InvalidArgument("The CINNValue is not defined. Which "
+                                        "can't be added to CINNValuePack."));
   values_.push_back(value);
 }
 void _CINNValuePack_::Clear() { values_.clear(); }

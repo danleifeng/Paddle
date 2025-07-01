@@ -16,14 +16,14 @@
 #include "paddle/fluid/framework/data_layout_transform.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/fluid/inference/api/paddle_inference_api.h"
 #include "paddle/fluid/inference/api/paddle_tensor.h"
-#include "paddle/fluid/memory/memcpy.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/core/allocator.h"
+#include "paddle/phi/core/memory/memcpy.h"
+#include "paddle/phi/core/vocab/string_array.h"
 #ifdef PADDLE_WITH_ONNXRUNTIME
 #include "onnxruntime_c_api.h"    // NOLINT
 #include "onnxruntime_cxx_api.h"  // NOLINT
@@ -45,18 +45,18 @@ void Tensor::Reshape(const std::vector<int> &shape) {
   PADDLE_ENFORCE_EQ(
       name_.empty(),
       false,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Need to SetName first, so that the corresponding tensor can "
           "be retrieved."));
   PADDLE_ENFORCE_EQ(input_or_output_,
                     true,
-                    phi::errors::PermissionDenied(
+                    common::errors::PermissionDenied(
                         "Can't reshape the output tensor, it is readonly"));
   auto *scope = static_cast<paddle::framework::Scope *>(scope_);
   auto *var = scope->FindVar(name_);
   PADDLE_ENFORCE_NOT_NULL(
       var,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "No tensor called [%s] in the runtime scope", name_));
   auto *tensor = var->GetMutable<phi::DenseTensor>();
   tensor->Resize(common::make_ddim(shape));
@@ -66,21 +66,20 @@ void Tensor::ReshapeStrings(const size_t &shape) {
   PADDLE_ENFORCE_EQ(
       name_.empty(),
       false,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Need to SetName first, so that the corresponding tensor can "
           "be retrieved."));
   PADDLE_ENFORCE_EQ(input_or_output_,
                     true,
-                    phi::errors::PermissionDenied(
+                    common::errors::PermissionDenied(
                         "Can't reshape the output tensor, it is readonly"));
   auto *scope = static_cast<paddle::framework::Scope *>(scope_);
   auto *var = scope->FindVar(name_);
   PADDLE_ENFORCE_NOT_NULL(
       var,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "No tensor called [%s] in the runtime scope", name_));
-  paddle::framework::Strings *tensor =
-      var->GetMutable<paddle::framework::Strings>();
+  phi::Strings *tensor = var->GetMutable<phi::Strings>();
   tensor->resize(shape);
 }
 
@@ -101,7 +100,7 @@ T *Tensor::mutable_data(PlaceType place) {
   PADDLE_ENFORCE_GT(
       tensor->numel(),
       0,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "You should call Tensor::Reshape(const std::vector<int> "
           "&shape)"
           "function before retrieving mutable_data from input tensor."));
@@ -130,7 +129,7 @@ T *Tensor::mutable_data(PlaceType place) {
       return tensor->mutable_data<T>(phi::CustomPlace(device_type_, device_));
     }
     default:
-      PADDLE_THROW(phi::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "Only CPU / CUDA / XPU places is supported. The place `%d` is "
           "not supported.",
           static_cast<int>(place)));
@@ -197,7 +196,7 @@ void Tensor::CopyFromCpu(const T *data) {
   EAGER_GET_TENSOR(phi::DenseTensor);
   PADDLE_ENFORCE_GE(tensor->numel(),
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "You should call Tensor::Reshape(const "
                         "std::vector<int> &shape)"
                         "function before copying data from cpu."));
@@ -225,7 +224,7 @@ void Tensor::CopyFromCpu(const T *data) {
                          ele_size,
                          dev_ctx->stream());
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with CUDA place because paddle is not compiled "
         "with CUDA."));
 #endif
@@ -239,7 +238,7 @@ void Tensor::CopyFromCpu(const T *data) {
                          data,
                          ele_size);
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with XPU place because paddle is not compiled "
         "with XPU."));
 #endif
@@ -248,8 +247,8 @@ void Tensor::CopyFromCpu(const T *data) {
     phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
     phi::CustomPlace custom_place(device_type_, device_);
     auto *t_data = tensor->mutable_data<T>(custom_place);
-    auto *dev_ctx = static_cast<const paddle::platform::CustomDeviceContext *>(
-        pool.Get(custom_place));
+    auto *dev_ctx =
+        static_cast<const phi::CustomContext *>(pool.Get(custom_place));
     paddle::memory::Copy(custom_place,
                          static_cast<void *>(t_data),
                          phi::CPUPlace(),
@@ -257,13 +256,13 @@ void Tensor::CopyFromCpu(const T *data) {
                          ele_size,
                          dev_ctx->stream());
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with Custom place because paddle is not "
         "compiled "
         "with XPU."));
 #endif
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The analysis predictor supports CPU, GPU, XPU and CUSTOM_DEVICE "
         "now."));
   }
@@ -321,7 +320,7 @@ phi::DataLayout LayoutConvert(DataLayout layout) {
   PADDLE_ENFORCE_EQ(
       layout,
       DataLayout::kNCHW,
-      phi::errors::InvalidArgument("Only NCHW is supported now."));
+      common::errors::InvalidArgument("Only NCHW is supported now."));
   return phi::DataLayout::NCHW;
 }
 
@@ -361,17 +360,17 @@ void Tensor::ShareExternalData(const T *data,
                              meta);
     *tensor = std::move(dtensor);
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "PlaceType must be one of [PlaceType::kCPU, PlaceType::kGPU, "
         "PlaceType::kXPU]."));
   }
 }
 
 void Tensor::CopyStringsFromCpu(const paddle_infer::Strings *data) {
-  EAGER_GET_TENSOR(paddle::framework::Strings);
+  EAGER_GET_TENSOR(phi::Strings);
   PADDLE_ENFORCE_GE(tensor->size(),
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "You should call Tensor::Reshape(const "
                         "std::size_t &shape)function before copying"
                         "the string data from cpu."));
@@ -413,7 +412,7 @@ void Tensor::CopyToCpuImpl(T *data,
 #ifdef PADDLE_WITH_IPU
     std::memcpy(static_cast<void *>(data), t_data, ele_num * sizeof(T));
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with IPU place because paddle is not compiled "
         "with IPU."));
 #endif
@@ -447,7 +446,7 @@ void Tensor::CopyToCpuImpl(T *data,
     }
 #endif
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with CUDA place because paddle is not compiled "
         "with CUDA."));
 #endif
@@ -460,7 +459,7 @@ void Tensor::CopyToCpuImpl(T *data,
                          t_data,
                          ele_num * sizeof(T));
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with XPU place because paddle is not compiled "
         "with XPU."));
 #endif
@@ -468,8 +467,8 @@ void Tensor::CopyToCpuImpl(T *data,
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
     phi::DeviceContextPool &pool = phi::DeviceContextPool::Instance();
     auto custom_place = t_place;
-    auto *dev_ctx = static_cast<const paddle::platform::CustomDeviceContext *>(
-        pool.Get(custom_place));
+    auto *dev_ctx =
+        static_cast<const phi::CustomContext *>(pool.Get(custom_place));
     paddle::memory::Copy(phi::CPUPlace(),
                          static_cast<void *>(data),
                          custom_place,
@@ -478,7 +477,7 @@ void Tensor::CopyToCpuImpl(T *data,
                          dev_ctx->stream());
     dev_ctx->GetStream()->Synchronize();
 #else
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The analysis predictor supports CPU, GPU and XPU now."));
 #endif
   }
@@ -677,14 +676,14 @@ void *Tensor::FindTensor() const {
   PADDLE_ENFORCE_EQ(
       name_.empty(),
       false,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Need to SetName first, so that the corresponding tensor can "
           "be retrieved."));
   auto *scope = static_cast<paddle::framework::Scope *>(scope_);
   auto *var = scope->FindVar(name_);
   PADDLE_ENFORCE_NOT_NULL(
       var,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "No tensor called [%s] in the runtime scope", name_));
   auto *tensor = var->GetMutable<T>();
   return tensor;
@@ -700,7 +699,7 @@ std::vector<int> Tensor::shape() const {
     } else {  // output handle
       auto binding = binding_.lock();
       PADDLE_ENFORCE_NOT_NULL(binding,
-                              phi::errors::PreconditionNotMet(
+                              common::errors::PreconditionNotMet(
                                   "output tensor [%s] no binding ptr", name_));
       std::vector<Ort::Value> outputs = binding->GetOutputValues();
       Ort::Value &value = outputs[idx_];
@@ -714,8 +713,8 @@ std::vector<int> Tensor::shape() const {
   EAGER_GET_TENSOR(phi::DenseTensor);
   PADDLE_ENFORCE_NOT_NULL(
       tensor_,
-      phi::errors::PreconditionNotMet("Not found tensor called %s in the scope",
-                                      name_));
+      common::errors::PreconditionNotMet(
+          "Not found tensor called %s in the scope", name_));
 // oneDNN may does layout transform internally, so need to reorder before
 // return
 #ifdef PADDLE_WITH_DNNL
@@ -748,7 +747,7 @@ std::vector<int> Tensor::shape() const {
 
 void Tensor::SetLoD(const std::vector<std::vector<size_t>> &x) {
   EAGER_GET_TENSOR(phi::DenseTensor);
-  paddle::framework::LoD lod;
+  phi::LegacyLoD lod;
   for (auto &level : x) {
     lod.emplace_back(level);
   }
@@ -787,7 +786,7 @@ template <typename T>
 T *Tensor::ORTGetMutableData() {
   auto binding = binding_.lock();
   PADDLE_ENFORCE_NOT_NULL(binding,
-                          phi::errors::PreconditionNotMet(
+                          common::errors::PreconditionNotMet(
                               "output tensor [%s] no binding ptr", name_));
   std::vector<Ort::Value> outputs = binding->GetOutputValues();
   Ort::Value &value = outputs[idx_];
@@ -798,7 +797,7 @@ template <typename T>
 void Tensor::ORTCopyToCpu(T *data) const {
   auto binding = binding_.lock();
   PADDLE_ENFORCE_NOT_NULL(binding,
-                          phi::errors::PreconditionNotMet(
+                          common::errors::PreconditionNotMet(
                               "output tensor [%s] no binding ptr", name_));
   std::vector<Ort::Value> outputs = binding->GetOutputValues();
   Ort::Value &value = outputs[idx_];
@@ -808,7 +807,7 @@ void Tensor::ORTCopyToCpu(T *data) const {
   if (place_ == PlaceType::kCPU) {
     std::memcpy(static_cast<void *>(data), value.GetTensorData<void *>(), size);
   } else {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "CopyToCpu error.The current ONNXRuntime backend doesn't support "
         "GPU."));
   }
@@ -831,14 +830,14 @@ void InternalUtils::CopyFromCpuWithIoStream(paddle_infer::Tensor *t,
     PADDLE_ENFORCE_EQ(
         t->name_.empty(),
         false,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "Need to SetName first, so that the corresponding tensor can "
             "be retrieved."));
     auto *scope = static_cast<paddle::framework::Scope *>(t->scope_);
     auto *var = scope->FindVar(t->name_);
     PADDLE_ENFORCE_NOT_NULL(
         var,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "No tensor called [%s] in the runtime scope", t->name_));
     auto *tensor = var->GetMutable<phi::DenseTensor>();
     t->tensor_ = tensor;
@@ -847,7 +846,7 @@ void InternalUtils::CopyFromCpuWithIoStream(paddle_infer::Tensor *t,
   auto *tensor = static_cast<phi::DenseTensor *>(t->tensor_);
   PADDLE_ENFORCE_GE(tensor->numel(),
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "You should call Tensor::Reshape(const "
                         "std::vector<int> &shape)"
                         "function before copying data from cpu."));
@@ -866,12 +865,12 @@ void InternalUtils::CopyFromCpuWithIoStream(paddle_infer::Tensor *t,
                          ele_size,
                          stream);
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with CUDA place because paddle is not compiled "
         "with CUDA."));
 #endif
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "CopyFromCpuWithIoStream only supports CPU and GPU now."));
   }
 }
@@ -884,14 +883,14 @@ void InternalUtils::CopyToCpuWithIoStream(paddle_infer::Tensor *t,
     PADDLE_ENFORCE_EQ(
         t->name_.empty(),
         false,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "Need to SetName first, so that the corresponding tensor can "
             "be retrieved."));
     auto *scope = static_cast<paddle::framework::Scope *>(t->scope_);
     auto *var = scope->FindVar(t->name_);
     PADDLE_ENFORCE_NOT_NULL(
         var,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "No tensor called [%s] in the runtime scope", t->name_));
     auto *tensor = var->GetMutable<phi::DenseTensor>();
     t->tensor_ = tensor;
@@ -932,12 +931,12 @@ void InternalUtils::CopyToCpuWithIoStream(paddle_infer::Tensor *t,
                          ele_num * sizeof(T),
                          stream);
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Can not create tensor with CUDA place because paddle is not compiled "
         "with CUDA."));
 #endif
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "CopyToCpuWithIoStream only supports CPU and GPU now."));
   }
 }

@@ -17,17 +17,20 @@
 
 namespace phi {
 template <typename T, typename Context>
-void WeightOnlyLinearKernel(const Context& dev_ctx,
-                            const DenseTensor& x,
-                            const DenseTensor& weight,
-                            const paddle::optional<DenseTensor>& bias,
-                            const DenseTensor& weight_scale,
-                            const std::string& weight_dtype,
-                            const int32_t arch,
-                            const int32_t group_size,
-                            DenseTensor* out) {
-  PD_CHECK(weight_dtype == "int8",
-           "WeightOnlyLinearKernel xpu just support int8 weight only");
+void WeightOnlyLinearXpuKernel(const Context& dev_ctx,
+                               const DenseTensor& x,
+                               const DenseTensor& weight,
+                               const paddle::optional<DenseTensor>& bias,
+                               const DenseTensor& weight_scale,
+                               const std::string& weight_dtype,
+                               const int32_t arch,
+                               const int32_t group_size,
+                               DenseTensor* out) {
+  PADDLE_ENFORCE_EQ(
+      weight_dtype,
+      "int8",
+      common::errors::Fatal(
+          "WeightOnlyLinearXpuKernel xpu just support int8 weight only"));
   phi::XPUPlace place(phi::backends::xpu::GetXPUCurrentDeviceId());
   auto xpu_ctx = static_cast<const phi::XPUContext*>(&dev_ctx);
   dev_ctx.template Alloc<T>(out);
@@ -55,14 +58,14 @@ void WeightOnlyLinearKernel(const Context& dev_ctx,
             false,
             weight_dtype == "int8" ? 127.f : 7.f,
             0.f);
-        PD_CHECK(r == 0, "scale failed");
-        r = baidu::xpu::api::cast_v2<XPUType, float>(
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "scale");
+        r = baidu::xpu::api::cast<XPUType, float>(
             xpu_ctx->x_context(),
             reinterpret_cast<const XPUType*>(
                 max_value_fp16.data<phi::dtype::float16>()),
             max_value.data<float>(),
             max_value.numel());
-        PD_CHECK(r == 0, "cast_v2 failed");
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
       } else if (weight_scale.dtype() == phi::DataType::FLOAT32) {
         r = baidu::xpu::api::scale(xpu_ctx->x_context(),
                                    weight_scale.data<float>(),
@@ -71,9 +74,9 @@ void WeightOnlyLinearKernel(const Context& dev_ctx,
                                    false,
                                    weight_dtype == "int8" ? 127.f : 7.f,
                                    0.f);
-        PD_CHECK(r == 0, "scale failed");
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "scale");
       } else {
-        PADDLE_THROW(phi::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "Only support that weight scale as type float32 ot float16."));
       }
 
@@ -82,12 +85,13 @@ void WeightOnlyLinearKernel(const Context& dev_ctx,
           bias.get().dtype() == phi::DataType::FLOAT16) {
         bias_fp32.Resize(bias.get().dims());
         dev_ctx.template Alloc<float>(&bias_fp32);
-        r = baidu::xpu::api::cast_v2<XPUType, float>(
+        r = baidu::xpu::api::cast<XPUType, float>(
             xpu_ctx->x_context(),
             reinterpret_cast<const XPUType*>(
                 bias.get().data<phi::dtype::float16>()),
             bias_fp32.data<float>(),
             n);
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
       }
       if (weight_dtype == "int8") {
         r = baidu::xpu::api::gpt_fc_fusion<XPUType, int8_t, XPUType, int8_wo_t>(
@@ -115,7 +119,7 @@ void WeightOnlyLinearKernel(const Context& dev_ctx,
                 : nullptr,
             baidu::xpu::api::Activation_t::LINEAR,
             max_value.data<float>());
-        PD_CHECK(r == 0, "baidu::xpu::api::gpt_fc_fusion failed.");
+        PADDLE_ENFORCE_XDNN_SUCCESS(r, "gpt_fc_fusion");
       } else if (weight_dtype == "int4") {
         PD_THROW("only support int8 weight only now");
       }
@@ -130,6 +134,6 @@ void WeightOnlyLinearKernel(const Context& dev_ctx,
 PD_REGISTER_KERNEL(weight_only_linear_xpu,
                    XPU,
                    ALL_LAYOUT,
-                   phi::WeightOnlyLinearKernel,
+                   phi::WeightOnlyLinearXpuKernel,
                    phi::dtype::float16,
                    phi::dtype::bfloat16) {}

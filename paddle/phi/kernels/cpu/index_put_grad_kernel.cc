@@ -182,10 +182,22 @@ void IndexPutGradKernel(const Context& dev_ctx,
                         bool accumulate,
                         DenseTensor* x_grad,
                         DenseTensor* value_grad) {
+  if (out_grad.numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    // Fill value_grad with 0.
+    if (value_grad) {
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(value_grad->dims())),
+          0,
+          value_grad);
+    }
+    return;
+  }
   PADDLE_ENFORCE_EQ(
       x.dtype(),
       value.dtype(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The data type of tensor value must be same to the data type "
           "of tensor x."));
   std::vector<DenseTensor> tmp_args;

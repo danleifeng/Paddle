@@ -17,13 +17,12 @@ from .backport import EllipsisType as EllipsisType
 
 # Basic
 from .basic import (
-    IntSequence as IntSequence,
     NestedList as NestedList,
-    NestedNumbericSequence as NestedNumbericSequence,
+    NestedNumericSequence as NestedNumericSequence,
     NestedSequence as NestedSequence,
     NestedStructure as NestedStructure,
-    Numberic as Numberic,
-    NumbericSequence as NumbericSequence,
+    Numeric as Numeric,
+    NumericSequence as NumericSequence,
     ParamAttrLike as ParamAttrLike,
     TensorIndex as TensorIndex,
     TensorLike as TensorLike,

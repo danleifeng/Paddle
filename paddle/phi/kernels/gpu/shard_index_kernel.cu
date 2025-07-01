@@ -31,7 +31,7 @@ __global__ void ShardIndexInner(const T* in_data,
                                 const int shard_id,
                                 const int ignore_value) {
   int shard_size = (index_num + nshards - 1) / nshards;
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (idx < numel) {
     PADDLE_ENFORCE(in_data[idx] >= 0,
                    "The input_index for Op(shard_index) must be "
@@ -61,27 +61,27 @@ void ShardIndexKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_GT(
       index_num,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The value 'index_num' for Op(shard_index) must be greater than 0, "
           "but the value given is %d.",
           index_num));
   PADDLE_ENFORCE_GT(nshards,
                     0,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The value 'nshard' for Op(shard_index) must be "
                         "greater than 0, but the value given is %d.",
                         nshards));
   PADDLE_ENFORCE_GE(
       shard_id,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The value 'shard_id' for Op(shard_index) must be greater or "
           "equal to 0, but the value given is %d.",
           shard_id));
   PADDLE_ENFORCE_LT(
       shard_id,
       nshards,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The value 'shard_id' for Op(shard_index) must be less than "
           "nshards (%d), but the value given is %d.",
           nshards,

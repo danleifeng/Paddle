@@ -12,9 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, ClassVar, Literal
+
 import paddle
 from paddle import framework
 from paddle.distributed.communication import stream
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
+
+    from paddle import Tensor
+    from paddle.base.core import task
+    from paddle.distributed.communication.group import Group
+
+    _ReduceOp: TypeAlias = Literal[0, 1, 2, 3, 4]
 
 
 class ReduceOp:
@@ -48,45 +61,39 @@ class ReduceOp:
             >>> # [[5, 7, 9], [5, 7, 9]] (2 GPUs)
     """
 
-    SUM = 0
-    MAX = 1
-    MIN = 2
-    PROD = 3
-    AVG = 4
+    SUM: ClassVar[Literal[0]] = 0
+    MAX: ClassVar[Literal[1]] = 1
+    MIN: ClassVar[Literal[2]] = 2
+    PROD: ClassVar[Literal[3]] = 3
+    AVG: ClassVar[Literal[4]] = 4
 
 
-def _get_reduce_op(reduce_op, func_name):
-    if framework.in_dynamic_mode():
-        if reduce_op == ReduceOp.SUM:
-            return framework.core.ReduceOp.SUM
-        elif reduce_op == ReduceOp.MAX:
-            return framework.core.ReduceOp.MAX
-        elif reduce_op == ReduceOp.MIN:
-            return framework.core.ReduceOp.MIN
-        elif reduce_op == ReduceOp.PROD:
-            return framework.core.ReduceOp.PRODUCT
-        elif reduce_op == ReduceOp.AVG:
-            return framework.core.ReduceOp.AVG
-    else:
-        if reduce_op == ReduceOp.SUM:
-            return f'c_{func_name}_sum'
-        elif reduce_op == ReduceOp.MAX:
-            return f'c_{func_name}_max'
-        elif reduce_op == ReduceOp.MIN:
-            return f'c_{func_name}_min'
-        elif reduce_op == ReduceOp.PROD:
-            return f'c_{func_name}_prod'
-        else:
-            return f'c_{func_name}'
+def _get_reduce_op(reduce_op):
+    if reduce_op == ReduceOp.SUM:
+        return framework.core.ReduceOp.SUM
+    elif reduce_op == ReduceOp.MAX:
+        return framework.core.ReduceOp.MAX
+    elif reduce_op == ReduceOp.MIN:
+        return framework.core.ReduceOp.MIN
+    elif reduce_op == ReduceOp.PROD:
+        return framework.core.ReduceOp.PRODUCT
+    elif reduce_op == ReduceOp.AVG:
+        return framework.core.ReduceOp.AVG
 
-    raise ValueError(f"Unknown reduce_op type for {func_name}.")
+    raise ValueError(f"Unknown reduce_op type for {reduce_op}.")
 
 
 def _to_inplace_op(op_name):
     return f"{op_name}_"
 
 
-def reduce(tensor, dst, op=ReduceOp.SUM, group=None, sync_op=True):
+def reduce(
+    tensor: Tensor,
+    dst: int,
+    op: _ReduceOp = ReduceOp.SUM,
+    group: Group | None = None,
+    sync_op: bool = True,
+) -> task:
     """
 
     Reduce a tensor to the destination from all others. As shown below, one process is started with a GPU and the data of this process is represented
@@ -103,7 +110,7 @@ def reduce(tensor, dst, op=ReduceOp.SUM, group=None, sync_op=True):
             should be float16, float32, float64, int32, int64, int8, uint8, bool or bfloat16.
         dst (int): The destination rank id.
         op (ReduceOp.SUM|ReduceOp.MAX|ReduceOp.MIN|ReduceOp.PROD|ReduceOp.AVG, optional): The operation used. Default value is ReduceOp.SUM.
-        group (Group, optional): The group instance return by new_group or None for global default group.
+        group (Group|None, optional): The group instance return by new_group or None for global default group.
         sync_op (bool, optional): Whether this op is a sync op. The default value is True.
 
     Returns:
@@ -159,55 +166,28 @@ def reduce(tensor, dst, op=ReduceOp.SUM, group=None, sync_op=True):
     gdst = dst if group is None else group.get_group_rank(dst)
     assert gdst >= 0, "dst rank out of group, need global rank"
 
-    if op == ReduceOp.SUM:
-        return paddle._legacy_C_ops.c_reduce_sum(
+    if (
+        op == ReduceOp.SUM
+        or op == ReduceOp.MAX
+        or op == ReduceOp.MIN
+        or op == ReduceOp.PROD
+        or op == ReduceOp.AVG
+    ):
+        return paddle._C_ops.reduce(
             tensor,
             tensor,
-            'use_calc_stream',
-            use_calc_stream,
             'ring_id',
             ring_id,
             'root_id',
             gdst,
-        )
-    elif op == ReduceOp.MAX:
-        return paddle._legacy_C_ops.c_reduce_max(
-            tensor,
-            tensor,
-            'use_calc_stream',
-            use_calc_stream,
-            'ring_id',
-            ring_id,
-            'root_id',
-            gdst,
-        )
-    elif op == ReduceOp.MIN:
-        return paddle._legacy_C_ops.c_reduce_min(
-            tensor,
-            tensor,
-            'use_calc_stream',
-            use_calc_stream,
-            'ring_id',
-            ring_id,
-            'root_id',
-            gdst,
-        )
-    elif op == ReduceOp.PROD:
-        return paddle._legacy_C_ops.c_reduce_prod(
-            tensor,
-            tensor,
-            'use_calc_stream',
-            use_calc_stream,
-            'ring_id',
-            ring_id,
-            'root_id',
-            gdst,
+            'reduce_type',
+            op,
         )
     else:
         raise ValueError(f"Unknown parameter: {op}.")
 
 
-def is_avg_reduce_op_supported():
+def is_avg_reduce_op_supported() -> bool:
     if paddle.is_compiled_with_cuda():
         return paddle.base.core.nccl_version() >= 21000
     else:

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import itertools
 import unittest
-from typing import Optional
 
 import numpy as np
 from op_test import OpTest, convert_float_to_uint16, convert_uint16_to_float
@@ -22,17 +23,16 @@ from op_test import OpTest, convert_float_to_uint16, convert_uint16_to_float
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
-def np_naive_logcumsumexp(x: np.ndarray, axis: Optional[int] = None):
+def np_naive_logcumsumexp(x: np.ndarray, axis: int | None = None):
     return np.log(np.cumsum(np.exp(x), axis=axis))
 
 
 def np_logcumsumexp(
     x: np.ndarray,
-    axis: Optional[int] = None,
-    flatten: Optional[bool] = None,
+    axis: int | None = None,
+    flatten: bool | None = None,
     reverse: bool = False,
     exclusive: bool = False,
 ):
@@ -71,8 +71,8 @@ def np_logcumsumexp(
 def np_logcumsumexp_grad(
     x: np.ndarray,
     dout: np.ndarray,
-    axis: Optional[int] = None,
-    flatten: Optional[bool] = None,
+    axis: int | None = None,
+    flatten: bool | None = None,
     reverse: bool = False,
     exclusive: bool = False,
 ):
@@ -181,7 +181,6 @@ class TestLogcumsumexp(unittest.TestCase):
             z = np_logcumsumexp(data_np, axis=-2)
             np.testing.assert_allclose(z, out[4], rtol=1e-05)
 
-    @test_with_pir_api
     def test_cpu(self):
         paddle.disable_static(paddle.base.CPUPlace())
         self.run_imperative()
@@ -189,7 +188,6 @@ class TestLogcumsumexp(unittest.TestCase):
 
         self.run_static()
 
-    @test_with_pir_api
     def test_gpu(self):
         if not base.core.is_compiled_with_cuda():
             return
@@ -201,26 +199,29 @@ class TestLogcumsumexp(unittest.TestCase):
 
     def test_name(self):
         paddle.enable_static()
-        with paddle.pir_utils.OldIrGuard():
-            with base.program_guard(base.Program()):
-                x = paddle.static.data('x', [3, 4])
-                y = paddle.logcumsumexp(x, name='out')
-                self.assertTrue('out' in y.name)
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            base.program_guard(base.Program()),
+        ):
+            x = paddle.static.data('x', [3, 4])
+            y = paddle.logcumsumexp(x, name='out')
+            self.assertTrue('out' in y.name)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_type_error(self):
         main = paddle.static.Program()
         startup = paddle.static.Program()
-        with paddle.static.program_guard(main, startup):
-            with self.assertRaises(TypeError):
-                data_np = np.random.random((100, 100), dtype=np.int32)
-                x = paddle.static.data('X', [100, 100], dtype='int32')
-                y = paddle.logcumsumexp(x)
+        with (
+            paddle.static.program_guard(main, startup),
+            self.assertRaises(TypeError),
+        ):
+            data_np = np.random.random((100, 100), dtype=np.int32)
+            x = paddle.static.data('X', [100, 100], dtype='int32')
+            y = paddle.logcumsumexp(x)
 
-                place = base.CUDAPlace(0)
-                exe = base.Executor(place)
-                out = exe.run(main, feed={'X': data_np}, fetch_list=[y])
+            place = base.CUDAPlace(0)
+            exe = base.Executor(place)
+            out = exe.run(main, feed={'X': data_np}, fetch_list=[y])
 
 
 def logcumsumexp_wrapper(
@@ -233,7 +234,9 @@ class BaseTestCases:
     class BaseOpTest(OpTest):
         def setUp(self):
             self.op_type = "logcumsumexp"
+            self.prim_op_type = "prim"
             self.python_api = logcumsumexp_wrapper
+            self.public_python_api = logcumsumexp_wrapper
             input, attrs = self.input_and_attrs()
             self.inputs = {'X': input}
             self.attrs = attrs
@@ -252,14 +255,15 @@ class BaseTestCases:
                     np_logcumsumexp_grad(
                         self.inputs['X'],
                         1 / self.inputs['X'].size,
-                        **self.attrs
+                        **self.attrs,
                     )
                 ],
                 check_pir=True,
+                check_prim_pir=True,
             )
 
         def input_and_attrs(self):
-            raise NotImplementedError()
+            raise NotImplementedError
 
 
 class TestLogcumsumexpOp1(BaseTestCases.BaseOpTest):
@@ -306,7 +310,6 @@ class TestLogcumsumexpFP16(unittest.TestCase):
         paddle.enable_static()
         return y_np, x_g_np
 
-    @test_with_pir_api
     def test_main(self):
         if not paddle.is_compiled_with_cuda():
             return
@@ -333,8 +336,10 @@ class TestLogcumsumexpFP16(unittest.TestCase):
 class TestLogcumsumexpBF16Op(OpTest):
     def setUp(self):
         self.op_type = 'logcumsumexp'
+        self.prim_op_type = 'prim'
         self.dtype = np.uint16
         self.python_api = logcumsumexp_wrapper
+        self.public_python_api = logcumsumexp_wrapper
         x = np.arange(100, dtype=np.float64).reshape(10, 10)
         output = np_logcumsumexp(x)
         self.inputs = {'X': convert_float_to_uint16(x)}
@@ -370,8 +375,44 @@ class TestLogcumsumexpBF16Op(OpTest):
             numeric_grad_delta=0.5,
             max_relative_error=0.5,
             check_pir=True,
+            check_prim_pir=True,
         )
 
+
+def create_test_class(op_type, dtype, shape, axis):
+    class Cls(unittest.TestCase):
+        def test_zero_size(self):
+            paddle.disable_static()
+            numpy_tensor_1 = np.random.rand(*shape).astype(dtype)
+            paddle_x = paddle.to_tensor(numpy_tensor_1)
+            paddle_x.stop_gradient = False
+
+            paddle_api = eval(f"paddle.{op_type}")
+            paddle_out = paddle_api(paddle_x, axis=axis)
+            numpy_out = np.log(
+                np.cumsum(np.exp(numpy_tensor_1), axis=axis)
+            )  # Numpy does not have logcumsumexp
+
+            np.testing.assert_allclose(
+                paddle_out.numpy(),
+                numpy_out,
+                1e-2,
+                1e-2,
+            )
+            np.testing.assert_allclose(
+                paddle_out.shape,
+                numpy_out.shape,
+            )
+
+    cls_name = f"{op_type}{dtype}_0SizeTest"
+    Cls.__name__ = cls_name
+    globals()[cls_name] = Cls
+
+
+create_test_class("logcumsumexp", "float32", [3, 4, 0], 0)
+create_test_class("logcumsumexp", "float64", [3, 4, 0, 3, 4], -2)
+create_test_class("logcumsumexp", "int32", [3, 4, 0], 0)
+create_test_class("logcumsumexp", "int64", [3, 4, 0, 3, 4], -1)
 
 if __name__ == '__main__':
     unittest.main()

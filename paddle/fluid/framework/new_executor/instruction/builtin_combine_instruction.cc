@@ -13,10 +13,12 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/new_executor/instruction/builtin_combine_instruction.h"
+#include "paddle/fluid/framework/new_executor/instruction/instruction_util.h"
 #include "paddle/fluid/framework/new_executor/new_executor_defs.h"
 
-namespace paddle {
-namespace framework {
+COMMON_DECLARE_bool(check_cuda_error);
+
+namespace paddle::framework {
 
 BuiltinCombineInstruction::BuiltinCombineInstruction(
     size_t id,
@@ -26,6 +28,8 @@ BuiltinCombineInstruction::BuiltinCombineInstruction(
     : InstructionBase(id, place) {
   op_ = op;
 
+  SetKernelType(AnalyseOpFuncType(op, place));
+
   InitInputsOutputsIds(op, *value_exe_info);
 
   SetArtificial(true);
@@ -33,5 +37,4 @@ BuiltinCombineInstruction::BuiltinCombineInstruction(
 
 void BuiltinCombineInstruction::Run() {}
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -20,7 +21,6 @@ from op_test import OpTest
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -164,6 +164,20 @@ class TestFoldshape(TestFoldOp):
         self.x = np.random.rand(*input_shape).astype(np.float64)
 
 
+class TestFoldshape1d(TestFoldOp):
+    def init_data(self):
+        self.batch_size = 8
+        self.input_channels = 3 * 3 * 3
+        self.length = 3
+        self.kernel_sizes = [1, 3]
+        self.strides = [1, 1]
+        self.paddings = [0, 0, 0, 0]
+        self.dilations = [1, 1]
+        self.output_sizes = [1, 5]
+        input_shape = [self.batch_size, self.input_channels, self.length]
+        self.x = np.random.rand(*input_shape).astype(np.float64)
+
+
 class TestFoldAPI(TestFoldOp):
     # This is for test on paddle.nn.Fold
 
@@ -171,7 +185,13 @@ class TestFoldAPI(TestFoldOp):
         self.op_type = 'fold'
         self.python_api = paddle.nn.functional.fold
         self.set_data()
-        self.places = [base.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(base.CUDAPlace(0))
 
@@ -191,7 +211,7 @@ class TestFoldAPI(TestFoldOp):
 
 
 class TestFoldOpError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         from paddle.base.framework import Program, program_guard
         from paddle.nn.functional import fold

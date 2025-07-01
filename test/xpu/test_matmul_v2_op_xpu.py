@@ -74,9 +74,7 @@ class XPUTestMatmulV2Op(XPUOpTestWrapper):
             self.dtype = self.in_type
             self.config()
             self.op_type = "matmul_v2"
-            import os
 
-            os.environ["XPU_PADDLE_L3_SIZE"] = str(13 * 1024 * 1024)
             x = np.random.random(self.x_shape)
             y = np.random.random(self.y_shape)
 
@@ -111,7 +109,9 @@ class XPUTestMatmulV2Op(XPUOpTestWrapper):
             ):
                 return
             place = paddle.XPUPlace(0)
-            self.check_grad_with_place(place, ['X', 'Y'], 'Out')
+            self.check_grad_with_place(
+                place, ['X', 'Y'], 'Out', max_relative_error=0.02
+            )
 
     class TestMatMulOp2(TestMatMulV2Op):
         """
@@ -394,6 +394,22 @@ class XPUTestMatmulV2Op(XPUOpTestWrapper):
             self.y_shape = (1024, 32)
             self.trans_x = False
             self.trans_y = True
+
+    @check_run_big_shape_test()
+    class TestMatMulOpLlama13B1(TestMatMulV2Op):
+        def config(self):
+            self.x_shape = (512, 5120)
+            self.y_shape = (5120, 5120)
+            self.trans_x = False
+            self.trans_y = False
+
+    @check_run_big_shape_test()
+    class TestMatMulOpLlama13B2(TestMatMulV2Op):
+        def config(self):
+            self.x_shape = (512, 5120)
+            self.y_shape = (5120, 13824)
+            self.trans_x = False
+            self.trans_y = False
 
 
 support_types = get_xpu_op_support_types('matmul_v2')

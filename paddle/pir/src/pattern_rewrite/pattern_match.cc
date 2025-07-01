@@ -93,7 +93,7 @@ void RewriterBase::ReplaceOpWithIf(
     const std::function<bool(OpOperand)>& functor) {
   PADDLE_ENFORCE_EQ(op->num_results(),
                     new_values.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "incorrect number of values to replace operation"));
   NotifyRootReplaced(op, new_values);
 
@@ -124,28 +124,34 @@ void RewriterBase::ReplaceOp(Operation* op,
   PADDLE_ENFORCE_EQ(
       op->num_results(),
       new_values.size(),
-      phi::errors::InvalidArgument("incorrect # of replacement values"));
+      common::errors::InvalidArgument("incorrect # of replacement values"));
   op->ReplaceAllUsesWith(new_values);
+  for (uint32_t i = 0; i < op->num_results(); ++i) {
+    NotifyValueReplaced(op->result(i), new_values[i]);
+  }
 
   NotifyOperationRemoved(op);
   op->Erase();
 }
 
 void RewriterBase::EraseOp(Operation* op) {
-  PADDLE_ENFORCE_EQ(
-      op->use_empty(),
-      true,
-      phi::errors::InvalidArgument("Erase op failed. op(%s) is used, the "
-                                   "expectation is that it is not used",
-                                   op->name()));
+  PADDLE_ENFORCE_EQ(op->use_empty(),
+                    true,
+                    common::errors::InvalidArgument(
+                        "Erase op failed. op(%s)[id:%d] is used, the "
+                        "expectation is that it is not used",
+                        op->name(),
+                        op->id()));
   NotifyOperationRemoved(op);
   op->Erase();
 }
 
 // Find uses of `from` and replace it with `to`.
 void RewriterBase::ReplaceAllUsesWith(Value from, Value to) {
-  for (auto it = from.use_begin(); it != from.use_end();)
+  for (auto it = from.use_begin(); it != from.use_end();) {
     UpdateRootInplace(it.owner(), [&]() { (it++)->set_source(to); });
+  }
+  NotifyValueReplaced(from, to);
 }
 
 // Find uses of `from` and replace them with `to` if the `functor` returns true.
@@ -155,9 +161,15 @@ void RewriterBase::ReplaceUseIf(Value from,
   // Use post-increment operator for iterator since set_source() will change
   // `it`.
   // TODO(zhangbopd): Add unit test for this.
+  bool replaced = false;
   for (auto it = from.use_begin(); it != from.use_end();) {
-    if (functor(*it))
+    if (functor(*it)) {
       UpdateRootInplace(it.owner(), [&]() { (it++)->set_source(to); });
+      replaced = true;
+    }
+  }
+  if (replaced) {
+    NotifyValueReplaced(from, to);
   }
 }
 
@@ -167,7 +179,7 @@ void RewriterBase::ReplaceOpWithResultsOfAnotherOp(Operation* op,
                                                    Operation* new_op) {
   PADDLE_ENFORCE_EQ(op->num_results(),
                     new_op->num_results(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "replacement op doesn't match results of original op"));
   // TODO(zhangbopd): Add unit test for this.
   if (op->num_results() == 1) {

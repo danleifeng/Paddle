@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/collective/c_allreduce_op.h"
 
 namespace paddle::framework {
 class OpDesc;
@@ -40,10 +40,6 @@ class MpAllReduceSumOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<int>("ring_id", "(int default 0) communication ring id.")
         .SetDefault(0);
 
-    AddAttr<bool>(
-        "use_calc_stream",
-        "(bool default false) eject CUDA operations to calculation stream.")
-        .SetDefault(false);
     AddComment(string::Sprintf(R"DOC(
 MpAllReduceSum Operator
 
@@ -70,8 +66,6 @@ class MpAllReduceSumOpGradMaker : public framework::SingleGradOpMaker<T> {
 
 DECLARE_INPLACE_OP_INFERER(MpAllReduceSumInplaceInferer, {"X", "Out"});
 
-DEFINE_C_ALLREDUCE_CPU_KERNEL(MpAllReduceSum, kRedSum);
-
 }  // namespace paddle::operators
 
 namespace ops = paddle::operators;
@@ -82,13 +76,3 @@ REGISTER_OPERATOR(mp_allreduce_sum,
                   ops::MpAllReduceSumOpGradMaker<paddle::imperative::OpBase>,
                   ops::MpAllReduceSumOpMaker,
                   ops::MpAllReduceSumInplaceInferer);
-
-PD_REGISTER_STRUCT_KERNEL(mp_allreduce_sum,
-                          CPU,
-                          ALL_LAYOUT,
-                          ops::MpAllReduceSumCPUKernel,
-                          float,
-                          double,
-                          int,
-                          int64_t,
-                          phi::dtype::float16) {}

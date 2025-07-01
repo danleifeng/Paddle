@@ -28,7 +28,7 @@ limitations under the License. */
 #if (defined PADDLE_WITH_CUDA || defined PADDLE_WITH_XPU) && \
     (defined PADDLE_WITH_PSLIB) && (!defined(PADDLE_WITH_HETERPS))
 #ifdef PADDLE_WITH_CUDA
-#include "paddle/fluid/platform/cuda_device_guard.h"
+#include "paddle/phi/core/platform/cuda_device_guard.h"
 #endif
 namespace paddle {
 namespace framework {
@@ -135,7 +135,7 @@ void HeterXpuTrainer::CreateThreadParam(const ProgramDesc& program, int num) {
       Variable* root_var = root_scope_->FindVar(name);
       phi::DenseTensor* root_tensor = root_var->GetMutable<phi::DenseTensor>();
       auto* ptr = scope->Var(name);
-      InitializeVariable(ptr, proto::VarType::LOD_TENSOR);
+      InitializeVariable(ptr, proto::VarType::DENSE_TENSOR);
       phi::DenseTensor* thread_tensor = ptr->GetMutable<phi::DenseTensor>();
 
 #define HeterMemcpyFunc(cpp_type, proto_type)                                 \
@@ -289,7 +289,7 @@ void HeterXpuTrainer::InitOtherEnv(const ProgramDesc& main_program) {
       for (auto& v : dense_grad_names_) {
         for (auto& name : v.second) {
           auto* ptr = context->scope_->Var(name + "pin");
-          InitializeVariable(ptr, proto::VarType::LOD_TENSOR);
+          InitializeVariable(ptr, proto::VarType::DENSE_TENSOR);
         }
       }
       for (auto& op_desc : block.AllOps()) {
@@ -364,8 +364,8 @@ int HeterXpuTrainer::EndPass(const HeterRequest* request,
         phi::backends::xpu::XPUDeviceGuard guard(dev_id);
         phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
         phi::DeviceContext* dev_ctx = pool.Get(place);
-        const platform::XPUDeviceContext* xpu_ctx =
-            reinterpret_cast<const platform::XPUDeviceContext*>(dev_ctx);
+        const phi::XPUContext* xpu_ctx =
+            reinterpret_cast<const phi::XPUContext*>(dev_ctx);
         xpu::memset(
             xpu_ctx->x_context(),
             thread_tensor->data(),
@@ -400,8 +400,8 @@ int HeterXpuTrainer::EndPass(const HeterRequest* request,
       phi::backends::xpu::XPUDeviceGuard guard(dev_id);
       phi::DeviceContextPool& pool = phi::DeviceContextPool::Instance();
       phi::DeviceContext* dev_ctx = pool.Get(place);
-      const platform::XPUDeviceContext* xpu_ctx =
-          reinterpret_cast<const platform::XPUDeviceContext*>(dev_ctx);
+      const phi::XPUContext* xpu_ctx =
+          reinterpret_cast<const phi::XPUContext*>(dev_ctx);
       xpu::memset(
           xpu_ctx->x_context(),
           root_tensor->data(),
@@ -462,7 +462,7 @@ int HeterXpuTrainer::RunTask(const HeterRequest* request,
     for (auto& v : dense_grad_names_) {
       for (auto& name : v.second) {
         auto* ptr = context->scope_->Var(name + "pin");
-        InitializeVariable(ptr, proto::VarType::LOD_TENSOR);
+        InitializeVariable(ptr, proto::VarType::DENSE_TENSOR);
       }
     }
     for (auto& op_desc : block.AllOps()) {

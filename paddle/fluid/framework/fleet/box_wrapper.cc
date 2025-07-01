@@ -21,10 +21,9 @@
 #include <numeric>
 
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::shared_ptr<BoxWrapper> BoxWrapper::s_instance_ = nullptr;
 gpuStream_t BoxWrapper::stream_list_[8];
@@ -65,13 +64,13 @@ void BoxWrapper::CheckEmbedSizeIsValid(int embedx_dim, int expand_embed_dim) {
   PADDLE_ENFORCE_EQ(
       embedx_dim_,
       embedx_dim,
-      phi::errors::InvalidArgument("SetInstance(): invalid embedx_dim. "
-                                   "When embedx_dim = %d, but got %d.",
-                                   embedx_dim_,
-                                   embedx_dim));
+      common::errors::InvalidArgument("SetInstance(): invalid embedx_dim. "
+                                      "When embedx_dim = %d, but got %d.",
+                                      embedx_dim_,
+                                      embedx_dim));
   PADDLE_ENFORCE_EQ(expand_embed_dim_,
                     expand_embed_dim,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "SetInstance(): invalid expand_embed_dim. When "
                         "expand_embed_dim = %d, but got %d.",
                         expand_embed_dim_,
@@ -84,15 +83,15 @@ void BoxWrapper::PullSparse(const phi::Place& place,
                             const std::vector<int64_t>& slot_lengths,
                             const int hidden_size,
                             const int expand_embed_dim) {
-#define EMBEDX_CASE(i, ...)                                                  \
-  case i: {                                                                  \
-    constexpr size_t EmbedxDim = i;                                          \
-    switch (expand_embed_dim) {                                              \
-      __VA_ARGS__                                                            \
-      default:                                                               \
-        PADDLE_THROW(phi::errors::InvalidArgument(                           \
-            "Unsupport this expand embedding size [%d]", expand_embed_dim)); \
-    }                                                                        \
+#define EMBEDX_CASE(i, ...)                                                    \
+  case i: {                                                                    \
+    constexpr size_t EmbedxDim = i;                                            \
+    switch (expand_embed_dim) {                                                \
+      __VA_ARGS__                                                              \
+      default:                                                                 \
+        PADDLE_THROW(common::errors::InvalidArgument(                          \
+            "Unsupported this expand embedding size [%d]", expand_embed_dim)); \
+    }                                                                          \
   } break
 
 #define PULLSPARSE_CASE(i, ...)                                            \
@@ -108,8 +107,8 @@ void BoxWrapper::PullSparse(const phi::Place& place,
                 PULLSPARSE_CASE(64););
     EMBEDX_CASE(16, PULLSPARSE_CASE(0););
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
-          "Unsupport this embedding size [%d]", hidden_size - 3));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "Unsupported this embedding size [%d]", hidden_size - 3));
   }
 #undef PULLSPARSE_CASE
 #undef EMBEDX_CASE
@@ -122,15 +121,15 @@ void BoxWrapper::PushSparseGrad(const phi::Place& place,
                                 const int hidden_size,
                                 const int expand_embed_dim,
                                 const int batch_size) {
-#define EMBEDX_CASE(i, ...)                                                  \
-  case i: {                                                                  \
-    constexpr size_t EmbedxDim = i;                                          \
-    switch (expand_embed_dim) {                                              \
-      __VA_ARGS__                                                            \
-      default:                                                               \
-        PADDLE_THROW(phi::errors::InvalidArgument(                           \
-            "Unsupport this expand embedding size [%d]", expand_embed_dim)); \
-    }                                                                        \
+#define EMBEDX_CASE(i, ...)                                                    \
+  case i: {                                                                    \
+    constexpr size_t EmbedxDim = i;                                            \
+    switch (expand_embed_dim) {                                                \
+      __VA_ARGS__                                                              \
+      default:                                                                 \
+        PADDLE_THROW(common::errors::InvalidArgument(                          \
+            "Unsupported this expand embedding size [%d]", expand_embed_dim)); \
+    }                                                                          \
   } break
 
 #define PUSHSPARSE_CASE(i, ...)                                \
@@ -151,8 +150,8 @@ void BoxWrapper::PushSparseGrad(const phi::Place& place,
                 PUSHSPARSE_CASE(64););
     EMBEDX_CASE(16, PUSHSPARSE_CASE(0););
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
-          "Unsupport this embedding size [%d]", hidden_size - 3));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "Unsupported this embedding size [%d]", hidden_size - 3));
   }
 #undef PUSHSPARSE_CASE
 #undef EMBEDX_CASE
@@ -198,7 +197,7 @@ void BoxWrapper::FeedPass(int date,
                           const std::vector<uint64_t>& feasign_to_box) const {
   int ret = boxps_ptr_->FeedPass(date, feasign_to_box);
   PADDLE_ENFORCE_EQ(
-      ret, 0, phi::errors::PreconditionNotMet("FeedPass failed in BoxPS."));
+      ret, 0, common::errors::PreconditionNotMet("FeedPass failed in BoxPS."));
 }
 
 void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) const {
@@ -206,19 +205,21 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) const {
   PADDLE_ENFORCE_EQ(
       ret,
       0,
-      phi::errors::PreconditionNotMet("BeginFeedPass failed in BoxPS."));
+      common::errors::PreconditionNotMet("BeginFeedPass failed in BoxPS."));
 }
 
 void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) const {
   int ret = boxps_ptr_->EndFeedPass(agent);
   PADDLE_ENFORCE_EQ(
-      ret, 0, phi::errors::PreconditionNotMet("EndFeedPass failed in BoxPS."));
+      ret,
+      0,
+      common::errors::PreconditionNotMet("EndFeedPass failed in BoxPS."));
 }
 
 void BoxWrapper::BeginPass() const {
   int ret = boxps_ptr_->BeginPass();
   PADDLE_ENFORCE_EQ(
-      ret, 0, phi::errors::PreconditionNotMet("BeginPass failed in BoxPS."));
+      ret, 0, common::errors::PreconditionNotMet("BeginPass failed in BoxPS."));
 }
 
 void BoxWrapper::SetTestMode(bool is_test) const {
@@ -228,7 +229,7 @@ void BoxWrapper::SetTestMode(bool is_test) const {
 void BoxWrapper::EndPass(bool need_save_delta) const {
   int ret = boxps_ptr_->EndPass(need_save_delta);
   PADDLE_ENFORCE_EQ(
-      ret, 0, phi::errors::PreconditionNotMet("EndPass failed in BoxPS."));
+      ret, 0, common::errors::PreconditionNotMet("EndPass failed in BoxPS."));
 }
 
 void BoxWrapper::GetRandomReplace(const std::vector<Record>& pass_data) {
@@ -339,6 +340,5 @@ void BoxWrapper::AddReplaceFeasign(boxps::PSAgentBase* p_agent,
   VLOG(0) << "End AddReplaceFeasign";
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

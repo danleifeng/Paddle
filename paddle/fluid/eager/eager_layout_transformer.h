@@ -204,7 +204,7 @@ class EagerHeavilyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
   }
 
   paddle::Tensor TransInTensor(const std::string& in_name,
-                               const paddle::Tensor& in) {
+                               const paddle::Tensor& in) override {
     if (heavily_input_.count(in_name) != 0 && in.layout() != desired_layout_) {
       auto out_tensor = EagerTraceTransposeOp(desired_layout_, in);
       return out_tensor;
@@ -212,7 +212,8 @@ class EagerHeavilyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
     return in;
   }
 
-  void SetOutTensorLayout(paddle::Tensor* out_tensor) {
+  using EagerLayoutTransformer::SetOutTensorLayout;
+  void SetOutTensorLayout(paddle::Tensor* out_tensor) override {
     UpdateLayout(out_tensor, desired_layout_);
   }
 
@@ -222,7 +223,7 @@ class EagerHeavilyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
     }
   }
 
-  void SetOutTensorLayout(std::vector<paddle::Tensor>* out_tensor) {
+  void SetOutTensorLayout(std::vector<paddle::Tensor>* out_tensor) override {
     for (size_t i = 0; i < out_tensor->size(); i++) {
       if ((*out_tensor)[i].layout() != desired_layout_) {
         VLOG(4) << "Update out_tensor's layout from "
@@ -252,7 +253,7 @@ class EagerLightlyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
 
   // transpose from desired to default
   paddle::Tensor TransInTensor(const std::string& in_name UNUSED,
-                               const paddle::Tensor& in) {
+                               const paddle::Tensor& in) override {
     std::string input_layout = common::DataLayoutToString(in.layout());
     auto default_layout = DefaultLayout();
     if (final_layout_ == input_layout && in.shape().size() == 4) {
@@ -265,9 +266,9 @@ class EagerLightlyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
     return in;
   }
 
-  virtual std::vector<paddle::Tensor> TransInTensors(
+  std::vector<paddle::Tensor> TransInTensors(
       const std::string& in_name UNUSED,
-      const std::vector<paddle::Tensor>& in) {
+      const std::vector<paddle::Tensor>& in) override {
     std::vector<paddle::Tensor> result;
     auto desired_layout = DesiredLayout();
     auto default_layout = DefaultLayout();
@@ -287,7 +288,8 @@ class EagerLightlyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
     return result;
   }
 
-  void SetOutTensorLayout(paddle::Tensor* out_tensor) {
+  using EagerLayoutTransformer::SetOutTensorLayout;
+  void SetOutTensorLayout(paddle::Tensor* out_tensor) override {
     UpdateLayout(out_tensor, DefaultLayout());
   }
 
@@ -297,7 +299,7 @@ class EagerLightlyLayoutSensitiveOpTransformer : public EagerLayoutTransformer {
     }
   }
 
-  void SetOutTensorLayout(std::vector<paddle::Tensor>* out_tensor) {
+  void SetOutTensorLayout(std::vector<paddle::Tensor>* out_tensor) override {
     auto default_layout = DefaultLayout();
     for (size_t i = 0; i < out_tensor->size(); i++) {
       phi::DenseTensorUtils::GetMutableMeta(
@@ -330,11 +332,11 @@ class EagerTransposeOpTransformer
   }
 
   paddle::Tensor TransInTensor(const std::string& in_name UNUSED,
-                               const paddle::Tensor& in) {
+                               const paddle::Tensor& in) override {
     return in;
   }
 
-  void SetOutTensorLayout(paddle::Tensor* out_tensor) {
+  void SetOutTensorLayout(paddle::Tensor* out_tensor) override {
     UpdateLayout(out_tensor, DefaultLayout());
   }
 };
@@ -355,7 +357,7 @@ class EagerArgmaxOpTransformer
     (*axis) = static_cast<paddle::experimental::Scalar>(perm[axes]);
   }
 
-  void SetOutTensorLayout(paddle::Tensor* out_tensor) {
+  void SetOutTensorLayout(paddle::Tensor* out_tensor) override {
     UpdateLayout(out_tensor, DesiredLayout());
   }
 };
@@ -370,11 +372,11 @@ class EagerFlattenOpTransformer
 
   // transpose from NHWC to NCHW
   paddle::Tensor TransInTensor(const std::string& in_name UNUSED,
-                               const paddle::Tensor& in) {
+                               const paddle::Tensor& in) override {
     return in;
   }
 
-  void SetOutTensorLayout(paddle::Tensor* out_tensor) {
+  void SetOutTensorLayout(paddle::Tensor* out_tensor) override {
     UpdateLayout(out_tensor, DefaultLayout());
   }
 };
@@ -396,13 +398,13 @@ class EagerConcatOpTransformer
     (*axis) = static_cast<paddle::experimental::Scalar>(perm[axes]);
   }
 
-  virtual std::vector<paddle::Tensor> TransInTensors(
+  std::vector<paddle::Tensor> TransInTensors(
       const std::string& in_name UNUSED,
-      const std::vector<paddle::Tensor>& in) {
+      const std::vector<paddle::Tensor>& in) override {
     return in;
   }
 
-  void SetOutTensorLayout(paddle::Tensor* out_tensor) {
+  void SetOutTensorLayout(paddle::Tensor* out_tensor) override {
     UpdateLayout(out_tensor, DesiredLayout());
   }
 };

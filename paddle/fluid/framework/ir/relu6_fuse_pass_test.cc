@@ -18,9 +18,7 @@
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 template <typename T = float>
 void AddVarToScope(Scope* param_scope,
@@ -59,12 +57,10 @@ TEST(Relu6FusePass, basic) {
   auto clip_num = GetNumOpNodes(graph, "clip");
   PADDLE_ENFORCE_EQ(clip_num,
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "clip should be mapped to relu6 after pass."));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(relu6_fuse_pass);

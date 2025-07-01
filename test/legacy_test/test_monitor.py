@@ -54,16 +54,14 @@ class TestDatasetWithStat(unittest.TestCase):
         slots = ["slot1", "slot2", "slot3", "slot4"]
         slots_vars = []
         for slot in slots:
-            var = paddle.static.data(
-                name=slot, shape=[-1, 1], dtype="int64", lod_level=1
-            )
+            var = paddle.static.data(name=slot, shape=[-1, 1], dtype="int64")
             slots_vars.append(var)
 
         embs = []
         for x in slots_vars:
-            emb = paddle.static.nn.embedding(
-                x, is_sparse=True, size=[100001, 4]
-            )
+            emb = paddle.nn.Embedding(
+                num_embeddings=100001, embedding_dim=4, sparse=True
+            )(x)
             embs.append(emb)
 
         dataset = paddle.distributed.InMemoryDataset()

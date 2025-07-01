@@ -32,13 +32,13 @@ std::string GetBroadcastAxes(const int64_t& tensor_ndim,
   PADDLE_ENFORCE_GE(
       alphabet.size(),
       broadcast_ndim,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of alphabet [%d] is less than broadcast ndim [%d]",
           alphabet.size(),
           broadcast_ndim));
   PADDLE_ENFORCE_GE(broadcast_ndim,
                     tensor_ndim,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The broadcast ndim [%d] is less than tensor ndim [%d]",
                         broadcast_ndim,
                         tensor_ndim));
@@ -48,7 +48,7 @@ std::string GetBroadcastAxes(const int64_t& tensor_ndim,
   return alphabet.substr(broadcast_ndim - tensor_ndim, tensor_ndim);
 }
 
-// Rule1: A repicated dimension could be merged by any sharded dimension.
+// Rule1: A replicated dimension could be merged by any sharded dimension.
 // Rule2: A tensor axis could at most be sharded by one mesh dimension.
 // (TODO trigger heuristics cost model and reshard to handle axis sharded by
 // multiple dimension case.)
@@ -62,12 +62,12 @@ int64_t ShardingMergeForAxis(const std::string& axis,
       return mesh_dim1;
     } else {
       // (TODO) local cost model here.
-      PADDLE_THROW(
-          phi::errors::Unimplemented("Tensor Axis[%s] is Sharded by two "
-                                     "different mesh dimension [%d] and [%d].",
-                                     axis,
-                                     mesh_dim1,
-                                     mesh_dim2));
+      PADDLE_THROW(common::errors::Unimplemented(
+          "Tensor Axis[%s] is Sharded by two "
+          "different mesh dimension [%d] and [%d].",
+          axis,
+          mesh_dim1,
+          mesh_dim2));
     }
 
   } else {
@@ -106,7 +106,7 @@ std::unordered_map<std::string, int64_t> ShardingMergeForTensors(
     }
   }
 
-  // Resolute "mesh_dim shard by more than one axis" confict.
+  // Resolute "mesh_dim shard by more than one axis" conflict.
   // Now we just naive pick the first axis naively.
   // (TODO) use local cost model to pick the axis with lowest cost(in concern of
   // memory or communication or computation).
@@ -120,7 +120,7 @@ std::unordered_map<std::string, int64_t> ShardingMergeForTensors(
           axis_to_dim_map[it.second.substr(i, 1)] = -1;
         }
       } else {
-        PADDLE_THROW(phi::errors::PreconditionNotMet(
+        PADDLE_THROW(common::errors::PreconditionNotMet(
             "Multiple Tensor Axes [%s] is sharded by same mesh dimension [%d].",
             str_join(it.second),
             it.first));
@@ -215,6 +215,22 @@ bool PlacementEqual(const std::shared_ptr<PlacementStatus>& a,
   return a_shard->get_axis() == b_shard->get_axis();
 }
 
+bool IsPartialLegal(const TensorDistAttr& dist_attr) {
+  if (dist_attr.is_partial()) {
+    const std::vector<int64_t> dims_mapping = dist_attr.dims_mapping();
+    const std::set<int64_t> partial_on_dims = dist_attr.partial_dims();
+    for (const int64_t& dim : dims_mapping) {
+      if (dim != -1 && partial_on_dims.count(dim) != 0) {
+        VLOG(4) << "Partial on dim [" << dim << "] but this dim is sharded";
+        return false;
+      }
+    }
+    return true;
+  } else {
+    return true;
+  }
+}
+
 void AlignDimsSharding(std::vector<TensorDistAttr>* input_attrs_ptr,
                        const std::vector<std::vector<int64_t>>& tensor_shapes,
                        const std::vector<std::string>& axis_names,
@@ -225,20 +241,20 @@ void AlignDimsSharding(std::vector<TensorDistAttr>* input_attrs_ptr,
   size_t n_inputs = input_attrs.size();
   PADDLE_ENFORCE_EQ(n_inputs,
                     tensor_shapes.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "n_inputs[%d] and tensor_shapes size [%d] not equal",
                         n_inputs,
                         tensor_shapes.size()));
   PADDLE_ENFORCE_EQ(n_inputs,
                     axis_names.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "n_inputs[%d] and axis_names size [%d] not equal",
                         n_inputs,
                         axis_names.size()));
 
   PADDLE_ENFORCE_EQ(align_axis.empty(),
                     false,
-                    phi::errors::InvalidArgument("align_axis is empty"));
+                    common::errors::InvalidArgument("align_axis is empty"));
 
   std::map<std::pair<int64_t, char>, int64_t> axis_name_to_dim;
 
@@ -246,7 +262,7 @@ void AlignDimsSharding(std::vector<TensorDistAttr>* input_attrs_ptr,
     // 1、check all inputs have the align_axis
     for (char axi : align_axis) {
       if (axis_names[i].find(axi) == std::string::npos) {
-        PADDLE_THROW(phi::errors::PreconditionNotMet(
+        PADDLE_THROW(common::errors::PreconditionNotMet(
             "[%s] some axis not in  input [%d],[%s]",
             align_axis,
             i,
@@ -299,7 +315,7 @@ void AlignDimsSharding(std::vector<TensorDistAttr>* input_attrs_ptr,
     return false;
   };
 
-  // a dim can not be sharded twice along diffrent mesh_dim
+  // a dim can not be sharded twice along different mesh_dim
   std::set<char> sharded_axis;
   std::map<int32_t, ReduceType> partial_dim_to_type;
   std::map<int32_t, char> mesh_dim_to_axis;
@@ -494,7 +510,7 @@ std::vector<int64_t> GetDimsMappingForAxes(
         if (unsharded_miss_axis) {
           dims_mapping.emplace_back(-1);
         } else {
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Tensor axis [%s] of not in axis_to_dim_map.", axis);
         }
       } else {
@@ -523,7 +539,7 @@ void DebugInfoForInferSpmd(const std::string& rule_name,
                 << "] need to be " << dist_attr_vec[j];
       }
     } else {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "The dist attr of the %d th input should be TensorDistAttr "
           "or std::vector<TensorDistAttr>.",
           i));
@@ -544,7 +560,7 @@ void DebugInfoForInferSpmd(const std::string& rule_name,
                 << "] need to be " << dist_attr_vec[j];
       }
     } else {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "The dist attr of the %d th output should be TensorDistAttr "
           "or std::vector<TensorDistAttr>.",
           i));
@@ -560,7 +576,7 @@ TensorDistAttr ReduceGradBroadCastDims(const TensorDistAttr& input,
 
 TensorDistAttr ReduceGradBroadCastDims(int64_t input_dims,
                                        const TensorDistAttr& grad) {
-  TensorDistAttr input;
+  TensorDistAttr input = CopyTensorDistAttrForOutput(grad);
   std::vector<int64_t> dim_mapping(input_dims, -1);
   input.set_dims_mapping(dim_mapping);
   return ReduceGradBroadCastDims(input, grad);
@@ -573,10 +589,10 @@ TensorDistAttr ReduceGradBroadCastDims(const TensorDistAttr& input,
   PADDLE_ENFORCE_GE(
       grad_dim,
       input_dim,
-      phi::errors::InvalidArgument("grad dim must ge than input dim, but we "
-                                   "got grad_dim [%d], input_dim[%d]",
-                                   grad_dim,
-                                   input_dim));
+      common::errors::InvalidArgument("grad dim must ge than input dim, but we "
+                                      "got grad_dim [%d], input_dim[%d]",
+                                      grad_dim,
+                                      input_dim));
   if (grad_dim == input_dim) {
     return grad;
   }

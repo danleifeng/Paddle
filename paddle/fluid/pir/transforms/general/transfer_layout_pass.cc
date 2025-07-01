@@ -31,6 +31,7 @@
 #include "paddle/common/layout.h"
 #include "paddle/fluid/inference/api/paddle_pass_builder.h"
 #include "paddle/fluid/pir/dialect/operator/interface/layout_transformation.h"
+#include "paddle/fluid/pir/dialect/operator/ir/control_flow_op.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
@@ -43,6 +44,26 @@
 #include "paddle/pir/include/pass/utils.h"
 
 struct Node;
+// Since AutoLayoutPass registers a large number of
+// LayoutTransformationInterface, in order to ensure the correctness of
+// TransferLayoutPass, the original list is fixed。
+// Note: This is a temporary solution, TransferLayoutPass will be retired in the
+// future.
+const std::set<std::string> kOpsOriginTransfer = {"pd_op.add_group_norm_silu",
+                                                  "pd_op.fused_conv2d_add_act",
+                                                  "pd_op.argmax",
+                                                  "pd_op.concat",
+                                                  "pd_op.conv2d",
+                                                  "pd_op.conv2d_transpose",
+                                                  "pd_op.group_norm",
+                                                  "pd_op.pool2d",
+                                                  "pd_op.silu",
+                                                  "pd_op.squeeze",
+                                                  "pd_op.swish",
+                                                  "pd_op.add",
+                                                  "pd_op.assign",
+                                                  "pd_op.multiply",
+                                                  "builtin.combine"};
 
 struct SrcNode {
   bool operator==(const SrcNode& rhs) const { return true; }
@@ -65,6 +86,12 @@ SrcNode src_node() { return SrcNode(); }
 DstNode dst_node() { return DstNode(); }
 
 const float INF = std::numeric_limits<float>::max();
+
+// for some edge weight, we need to set it to INF, but which
+// may cause precision problem. So we choose a value
+// large enough.
+const float THRESHOLD = INF / 2.0f;
+
 template <class... Ts>
 struct overloaded : Ts... {
   using Ts::operator()...;
@@ -166,8 +193,10 @@ struct FlowGraph {
   };
 
   std::vector<Edge> edges;
-  // std::vector<Node> nodes;
   std::unordered_map<Node, std::vector<EdgeIndex>> adjs;
+
+  // used to avoid duplicate links
+  std::unordered_map<Node, std::unordered_set<Node>> adjs_by_node;
   std::unordered_map<Node, EdgeIndex> cur_arcs;
   std::unordered_map<Node, size_t> heights;
   const pir::Program& program;
@@ -181,12 +210,18 @@ struct FlowGraph {
       return;
     }
 
+    if (adjs_by_node[src].find(dst) != adjs_by_node[src].end()) {
+      return;
+    }
+
     edges.emplace_back(src, dst, capacity, flow, real);
     adjs[src].push_back(edges.size() - 1);
+    adjs_by_node[src].insert(dst);
 
     // add reverse edge
     edges.emplace_back(dst, src, 0, flow);
     adjs[dst].push_back(edges.size() - 1);
+    adjs_by_node[dst].insert(src);
   }
 
   explicit FlowGraph(const pir::Program& program) : program(program) {
@@ -197,17 +232,21 @@ struct FlowGraph {
       Node op_node(&op);
       auto layout_transform_iface =
           op.dyn_cast<paddle::dialect::LayoutTransformationInterface>();
-      const auto& relevate_inputs =
-          layout_transform_iface ? layout_transform_iface.RelevantInputs(&op)
-                                 : op.operands_source();
-      const auto& relevate_outputs =
-          layout_transform_iface ? layout_transform_iface.RelevantOutputs(&op)
-                                 : op.results();
-      VLOG(10) << "[BuildGraph]" << op_node << " isz:" << relevate_inputs.size()
-               << " osz:" << relevate_outputs.size();
+      const auto& relevant_inputs =
+          layout_transform_iface && (kOpsOriginTransfer.find(op.name()) !=
+                                     kOpsOriginTransfer.end())
+              ? layout_transform_iface.RelevantInputs(&op)
+              : op.operands_source();
+      const auto& relevant_outputs =
+          layout_transform_iface && (kOpsOriginTransfer.find(op.name()) !=
+                                     kOpsOriginTransfer.end())
+              ? layout_transform_iface.RelevantOutputs(&op)
+              : op.results();
+      VLOG(10) << "[BuildGraph]" << op_node << " isz:" << relevant_inputs.size()
+               << " osz:" << relevant_outputs.size();
 
       // add in edge
-      for (auto& operand : relevate_inputs) {
+      for (auto& operand : relevant_inputs) {
         Node operand_node(operand);
         // the capacity should be set as the out_degree of operand node
         float weight = 1.0f;
@@ -220,7 +259,7 @@ struct FlowGraph {
         AddEdge(operand_node, op_node, weight, 0.0f, true);
       }
 
-      for (const auto& op_result : relevate_outputs) {
+      for (const auto& op_result : relevant_outputs) {
         // we have ssa, so the output must not be processed
         Node op_result_node(op_result);
 
@@ -256,25 +295,29 @@ struct FlowGraph {
         continue;
       }
       Node op_node(&op);
-      AddEdge(src_node(), op_node, INF);
+      AddEdge(src_node(), op_node, THRESHOLD);
 
       auto layout_transform_iface =
           op.dyn_cast<paddle::dialect::LayoutTransformationInterface>();
-      const auto& relevate_inputs =
-          layout_transform_iface ? layout_transform_iface.RelevantInputs(&op)
-                                 : op.operands_source();
-      const auto& relevate_outputs =
-          layout_transform_iface ? layout_transform_iface.RelevantOutputs(&op)
-                                 : op.results();
+      const auto& relevant_inputs =
+          layout_transform_iface && (kOpsOriginTransfer.find(op.name()) !=
+                                     kOpsOriginTransfer.end())
+              ? layout_transform_iface.RelevantInputs(&op)
+              : op.operands_source();
+      const auto& relevant_outputs =
+          layout_transform_iface && (kOpsOriginTransfer.find(op.name()) !=
+                                     kOpsOriginTransfer.end())
+              ? layout_transform_iface.RelevantOutputs(&op)
+              : op.results();
 
-      for (const auto& op_operand : relevate_inputs) {
+      for (const auto& op_operand : relevant_inputs) {
         Node operand_node(op_operand);
-        AddEdge(src_node(), operand_node, INF);
+        AddEdge(src_node(), operand_node, THRESHOLD);
       }
 
-      for (const auto& op_result : relevate_outputs) {
+      for (const auto& op_result : relevant_outputs) {
         Node op_result_node(op_result);
-        AddEdge(src_node(), op_result_node, INF);
+        AddEdge(src_node(), op_result_node, THRESHOLD);
       }
     }
 
@@ -282,7 +325,8 @@ struct FlowGraph {
     for (auto& op : *(program.block())) {
       auto layout_transform_iface =
           op.dyn_cast<paddle::dialect::LayoutTransformationInterface>();
-      if (!layout_transform_iface) {
+      if (!layout_transform_iface ||
+          (kOpsOriginTransfer.find(op.name()) == kOpsOriginTransfer.end())) {
         continue;
       }
 
@@ -294,7 +338,7 @@ struct FlowGraph {
       if (prefer_layout == common::DataLayout::NHWC) {
         Node op_node(&op);
         mutable_nodes.insert(op_node);
-        AddEdge(op_node, dst_node(), INF);
+        AddEdge(op_node, dst_node(), THRESHOLD);
         VLOG(10) << "[PreProcess] node: " << op_node
                  << " should be set to NHWC";
       }
@@ -313,11 +357,13 @@ struct FlowGraph {
     for (auto& op : *(program.block())) {
       auto layout_transform_iface =
           op.dyn_cast<paddle::dialect::LayoutTransformationInterface>();
-      const auto& relevate_outputs =
-          layout_transform_iface ? layout_transform_iface.RelevantOutputs(&op)
-                                 : op.results();
+      const auto& relevant_outputs =
+          layout_transform_iface && (kOpsOriginTransfer.find(op.name()) !=
+                                     kOpsOriginTransfer.end())
+              ? layout_transform_iface.RelevantOutputs(&op)
+              : op.results();
 
-      for (const auto& op_result : relevate_outputs) {
+      for (const auto& op_result : relevant_outputs) {
         Node op_result_node(op_result);
         for (auto it = op_result.use_begin(); it != op_result.use_end(); ++it) {
           auto user_op = it->owner();
@@ -332,7 +378,7 @@ struct FlowGraph {
           Node user_op_node(user_op);
           VLOG(10) << "[PreProcess] control flow link:" << op_result_node
                    << " -> " << user_op_node;
-          AddEdge(op_result_node, user_op_node, 1.0f, 1.0f, true);
+          AddEdge(op_result_node, user_op_node, 1.0f, 0.0f, true);
         }
       }
     }
@@ -375,7 +421,9 @@ struct FlowGraph {
 
                 auto layout_transform_iface = fop->dyn_cast<
                     paddle::dialect::LayoutTransformationInterface>();
-                if (layout_transform_iface) {
+                if (layout_transform_iface &&
+                    (kOpsOriginTransfer.find(op->name()) !=
+                     kOpsOriginTransfer.end())) {
                   return !layout_transform_iface.CanBeModified(fop);
                 }
                 return true;
@@ -447,7 +495,7 @@ struct FlowGraph {
       is_node_layout_visited.insert(node);
       if (mutable_nodes.count(node) == 0) {
         VLOG(10) << "add node to nchw set: " << node;
-        AddEdge(src_node(), node, INF);
+        AddEdge(src_node(), node, THRESHOLD);
       }
       for (const auto& e : adjs[node]) {
         auto& edge = edges[e];
@@ -477,7 +525,7 @@ struct FlowGraph {
     return (heights[dst_node()] > 0);
   }
 
-  // cf is the admissable flow in current path
+  // cf is the admissible flow in current path
   float FindBlockingFlow(Node src, float cf) {
     if (src == dst_node() || abs(cf) < 1e-9) {
       return cf;
@@ -494,6 +542,9 @@ struct FlowGraph {
         auto left_capacity = e.capacity - e.flow;
         auto update_flow = std::min(cf - ret, left_capacity);
         auto f = FindBlockingFlow(next_node, update_flow);
+        VLOG(10) << "find blocking flow: " << src << " -> " << next_node
+                 << " flow: " << f << " capa: " << left_capacity
+                 << " update_flow: " << update_flow;
         if (f > 0) {
           e.flow += f;
           auto reverse_e_ind = e_ind ^ 1;
@@ -523,9 +574,14 @@ struct FlowGraph {
       for (auto& [node, nexts] : adjs) {
         cur_arcs[node] = 0;
       }
+      VLOG(10) << "--------------------[find blocking flow "
+                  "start]---------------------------";
       while (auto f = FindBlockingFlow(src_node(), INF)) {
         total_flow += f;
+        VLOG(10) << "[new flow]: " << f;
       }
+      VLOG(10) << "--------------------[find blocking flow end]" << total_flow
+               << "---------------------------";
     }
     VLOG(10) << "--------------------[max flow end]---------------------------";
     return total_flow;
@@ -704,7 +760,9 @@ class TransferLayoutPass : public pir::Pass {
           VLOG(10) << "[Rewrite][RewriteByLayout] " << node;
           auto layout_transformation_iface =
               op->dyn_cast<paddle::dialect::LayoutTransformationInterface>();
-          if (layout_transformation_iface) {
+          if (layout_transformation_iface &&
+              (kOpsOriginTransfer.find(op->name()) !=
+               kOpsOriginTransfer.end())) {
             layout_transformation_iface.RewriteByLayout(
                 op, common::DataLayout::NHWC);
             num_of_layout_changed_ops++;
@@ -752,6 +810,7 @@ class TransferLayoutPass : public pir::Pass {
         pir::SetNewLayoutForValue(transpose_op.out(), new_layout);
         dst_value.ReplaceUsesWithIf(transpose_op.out(),
                                     replace_uses_without_self);
+        value_replacement_map[dst_value] = transpose_op.out();
       }
 
       // if node is the src node of a cut edge
@@ -767,12 +826,17 @@ class TransferLayoutPass : public pir::Pass {
         }
 
         auto value = std::get<pir::Value>(node.data);
+        // The 'value' might have been replaced with its transposed version
+        // due to processing previous Op-sourced cut edges. See more details at
+        // https://github.com/PaddlePaddle/Paddle/pull/73418
+        if (value_replacement_map.find(value) != value_replacement_map.end()) {
+          value = value_replacement_map[value];
+        }
         VLOG(10) << "[Rewrite][Var] for var:"
                  << (value ? value.defining_op() : nullptr);
         for (const auto& op : operation_set) {
           VLOG(10) << " op: " << op << ",";
         }
-        VLOG(10);
         const auto& perm =
             ((src_set.count(node) > 0) ? layout_to_perm("NCHW", "NHWC")
                                        : layout_to_perm("NHWC", "NCHW"));
@@ -791,13 +855,14 @@ class TransferLayoutPass : public pir::Pass {
           bool is_arg_in_cut_set =
               operation_set.find(arg.owner()) != operation_set.end();
           auto cur_op = arg.owner();
-          if (auto parent = cur_op->GetParentOp();
-              parent && !is_arg_in_cut_set) {
+          auto parent = cur_op->GetParentOp();
+          while (parent && !is_arg_in_cut_set) {
             is_arg_in_cut_set =
                 operation_set.find(parent) != operation_set.end();
             VLOG(10) << "[replace_uses_in_cut_set]" << parent << " "
                      << is_arg_in_cut_set;
             cur_op = parent;
+            parent = cur_op->GetParentOp();
           }
           return is_arg_in_cut_set && (arg.owner() != transpose_op.operation());
         };
@@ -807,6 +872,11 @@ class TransferLayoutPass : public pir::Pass {
     }
     AddStatistics(num_of_transpose_ops, num_of_layout_changed_ops);
   }
+
+ private:
+  // Tracks how an original op output Value is redirected to a new Value (from a
+  // TransposeOp) due to an Op-sourced cut.
+  std::unordered_map<pir::Value, pir::Value> value_replacement_map;
 };
 
 namespace pir {

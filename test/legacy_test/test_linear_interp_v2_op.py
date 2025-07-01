@@ -22,7 +22,6 @@ import paddle
 from paddle import base
 from paddle.base import core
 from paddle.nn.functional import interpolate
-from paddle.pir_utils import test_with_pir_api
 
 
 def create_test_case0(self):
@@ -529,43 +528,43 @@ class TestResizeLinearOpUint8(OpTest):
 
 
 class TestLinearInterpOpError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_error(self):
-        with paddle_static_guard():
-            with paddle.static.program_guard(
+        with (
+            paddle_static_guard(),
+            paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
-            ):
+            ),
+        ):
 
-                def input_shape_error():
-                    x1 = paddle.static.data(
-                        name="x1", shape=[1], dtype="float32"
-                    )
-                    out1 = paddle.nn.Upsample(
-                        size=[256], data_format='NCW', mode='linear'
-                    )
-                    out1_res = out1(x1)
+            def input_shape_error():
+                x1 = paddle.static.data(name="x1", shape=[1], dtype="float32")
+                out1 = paddle.nn.Upsample(
+                    size=[256], data_format='NCW', mode='linear'
+                )
+                out1_res = out1(x1)
 
-                def data_format_error():
-                    x2 = paddle.static.data(
-                        name="x2", shape=[1, 3, 128], dtype="float32"
-                    )
-                    out2 = paddle.nn.Upsample(
-                        size=[256], data_format='NHWCD', mode='linear'
-                    )
-                    out2_res = out2(x2)
+            def data_format_error():
+                x2 = paddle.static.data(
+                    name="x2", shape=[1, 3, 128], dtype="float32"
+                )
+                out2 = paddle.nn.Upsample(
+                    size=[256], data_format='NHWCD', mode='linear'
+                )
+                out2_res = out2(x2)
 
-                def out_shape_error():
-                    x3 = paddle.static.data(
-                        name="x3", shape=[1, 3, 128], dtype="float32"
-                    )
-                    out3 = paddle.nn.Upsample(
-                        size=[256, 256], data_format='NHWC', mode='linear'
-                    )
-                    out3_res = out3(x3)
+            def out_shape_error():
+                x3 = paddle.static.data(
+                    name="x3", shape=[1, 3, 128], dtype="float32"
+                )
+                out3 = paddle.nn.Upsample(
+                    size=[256, 256], data_format='NHWC', mode='linear'
+                )
+                out3_res = out3(x3)
 
-                self.assertRaises(ValueError, input_shape_error)
-                self.assertRaises(ValueError, data_format_error)
-                self.assertRaises(ValueError, out_shape_error)
+            self.assertRaises(ValueError, input_shape_error)
+            self.assertRaises(ValueError, data_format_error)
+            self.assertRaises(ValueError, out_shape_error)
 
 
 @unittest.skipIf(

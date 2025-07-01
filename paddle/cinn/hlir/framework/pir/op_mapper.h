@@ -33,7 +33,7 @@ enum MapperType {
 };
 
 class OpMapper {
-  using OperandIndexsFunction = std::function<std::vector<size_t>()>;
+  using OperandIndicesFunction = std::function<std::vector<size_t>()>;
   using AppendAttrFunction =
       std::function<void(const ::pir::Operation& op,
                          utils::AttributeMap& attrs)>;  // NOLINT
@@ -55,8 +55,11 @@ class OpMapper {
 
   std::vector<::pir::Value> RealOperandSources(
       const ::pir::Operation& op) const {
-    CHECK(has(op, MapperType::OPERAND))
-        << "Not register OperandIndexsFunction for " << op.name();
+    PADDLE_ENFORCE_EQ(
+        has(op, MapperType::OPERAND),
+        true,
+        ::common::errors::PreconditionNotMet(
+            "Not register OperandIndicesFunction for %s", op.name().c_str()));
     std::vector<::pir::Value> inputs;
     for (auto idx : operand_funcs_.at(op.name())()) {
       inputs.push_back(op.operand_source(idx));
@@ -66,8 +69,11 @@ class OpMapper {
 
   void AppendVariantAttrs(const ::pir::Operation& op,
                           utils::AttributeMap& attrs) const {  // NOLINT
-    CHECK(has(op, MapperType::ATTRIBUTE))
-        << "Not register AppendAttrFunction for " << op.name();
+    PADDLE_ENFORCE_EQ(
+        has(op, MapperType::ATTRIBUTE),
+        true,
+        ::common::errors::PreconditionNotMet(
+            "Not register AppendAttrFunction for %s", op.name().c_str()));
     attr_funcs_.at(op.name())(op, attrs);
   }
 
@@ -75,7 +81,7 @@ class OpMapper {
   OpMapper() { RegisterMapRules(); }
   void RegisterMapRules();
 
-  std::unordered_map<std::string, OperandIndexsFunction> operand_funcs_;
+  std::unordered_map<std::string, OperandIndicesFunction> operand_funcs_;
   std::unordered_map<std::string, AppendAttrFunction> attr_funcs_;
 };
 

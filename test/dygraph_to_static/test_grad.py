@@ -19,7 +19,8 @@ import unittest
 import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
-    test_legacy_and_pt_and_pir,
+    test_ast_only,
+    test_pir_only,
 )
 
 import paddle
@@ -74,7 +75,6 @@ class TestGrad(Dy2StTestBase):
         self.x = paddle.ones(shape=[10, 2, 5], dtype='float32')
         self.x.stop_gradient = False
 
-    @test_legacy_and_pt_and_pir
     def test_forward(self):
         dygraph_res = self.func(self.x).numpy()
         static_res = paddle.jit.to_static(self.func)(self.x).numpy()
@@ -98,7 +98,6 @@ class TestGradLinear(TestGrad):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    @test_legacy_and_pt_and_pir
     def test_save_infer_program(self):
         static_fn = paddle.jit.to_static(self.func)
         input_spec = [
@@ -111,7 +110,6 @@ class TestGradLinear(TestGrad):
         load_res = load_func(self.x).numpy()
         np.testing.assert_allclose(origin_res, load_res, rtol=1e-05)
 
-    @test_legacy_and_pt_and_pir
     def test_save_train_program(self):
         static_fn = paddle.jit.to_static(self.func)
         grad_clip = paddle.nn.ClipGradByGlobalNorm(2.0)
@@ -152,6 +150,75 @@ class TestNoGradLinear(TestGradLinear):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+
+class UnuseGradVarLayer(paddle.nn.Layer):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, var_0, var_1):
+        var_1 = var_1 + 1
+        return var_0, var_1
+
+
+class TestUnuseGradVar(Dy2StTestBase):
+    @test_pir_only
+    def test_run(self):
+        layer = UnuseGradVarLayer()
+        layer = paddle.jit.to_static(layer)
+
+        x = paddle.to_tensor([1.0])
+        y = paddle.to_tensor([2.0])
+        x.stop_gradient = False
+        y.stop_gradient = False
+
+        out1, out2 = layer(x, y)
+        out = out1 + out2
+        out.backward()
+        np.testing.assert_array_equal(out.numpy(), [4])
+        np.testing.assert_array_equal(x.grad.numpy(), [1])
+
+
+class NoGradNet(paddle.nn.Layer):
+    def __init__(self):
+        super().__init__()
+        self.linear = paddle.nn.Linear(3, 4)
+
+    def forward(self, x):
+        with paddle.no_grad():
+            out = self.linear(x)
+        return out
+
+
+class TestNoGrad(Dy2StTestBase):
+    @test_pir_only
+    def test_run(self):
+        net = NoGradNet()
+        net = paddle.jit.to_static(net)
+        x = paddle.rand([2, 3], 'float32')
+        x.stop_gradient = False
+        out = net(x)
+        np.testing.assert_array_equal(out.stop_gradient, True)
+
+
+def grad_with_if_case(x):
+    y = paddle.tanh(x)
+    if x.numel() > 0:
+        return paddle.grad([y], [x])[0]
+    return paddle.ones_like(x, dtype='float32')
+
+
+class TestGradWithIf(Dy2StTestBase):
+    @test_pir_only
+    @test_ast_only
+    def test_grad_with_if(self):
+        fn = grad_with_if_case
+        static_fn = paddle.jit.to_static(fn)
+        x = paddle.randn([2, 2])
+        x.stop_gradient = False
+        dx = fn(x)
+        dx_st = static_fn(x)
+        np.testing.assert_allclose(dx, dx_st)
 
 
 if __name__ == '__main__':

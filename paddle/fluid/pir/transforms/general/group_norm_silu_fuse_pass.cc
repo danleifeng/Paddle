@@ -57,7 +57,13 @@ After the pass is applied:GPU
 namespace {
 
 class GroupNormSiluPattern : public paddle::drr::DrrPatternBase {
+ private:
+  const bool enable_gpu_mixed_;
+
  public:
+  explicit GroupNormSiluPattern(bool enable_gpu_mixed)
+      : enable_gpu_mixed_(enable_gpu_mixed) {}
+
   std::string name() const override { return "GroupNormSiluPattern"; }
 
   void operator()(paddle::drr::DrrPatternContext *ctx) const override {
@@ -75,9 +81,9 @@ class GroupNormSiluPattern : public paddle::drr::DrrPatternBase {
     silu({&pat.Tensor("Y")}, {&pat.Tensor("Out")});
 
 #ifdef PADDLE_WITH_CUDA
-    pat.AddConstraint([](const paddle::drr::MatchContext &match_ctx) {
+    pat.AddConstraint([this](const paddle::drr::MatchContext &match_ctx) {
       auto x_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("X"));
-      if (!x_dtype.isa<pir::Float16Type>() &&
+      if (!this->enable_gpu_mixed_ && !x_dtype.isa<pir::Float16Type>() &&
           !x_dtype.isa<pir::BFloat16Type>()) {
         return false;
       }
@@ -121,7 +127,12 @@ class GroupNormSiluFusePass : public pir::PatternRewritePass {
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);
-    ps.Add(paddle::drr::Create<GroupNormSiluPattern>(context));
+    bool enable_gpu_mixed = false;
+    if (Has("enable_gpu_mixed")) {
+      enable_gpu_mixed = Get<bool>("enable_gpu_mixed");
+    }
+    ps.Add(
+        paddle::drr::Create<GroupNormSiluPattern>(context, enable_gpu_mixed));
     return ps;
   }
 };

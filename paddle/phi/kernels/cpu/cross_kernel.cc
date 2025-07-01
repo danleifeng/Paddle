@@ -38,7 +38,7 @@ void CrossKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         dim < input_x_dims.size() && dim >= (0 - input_x_dims.size()),
         true,
-        phi::errors::OutOfRange(
+        common::errors::OutOfRange(
             "Attr(dim) is out of range, It's expected "
             "to be in range of [-%d, %d]. But received Attr(dim) = %d.",
             input_x_dims.size(),
@@ -51,7 +51,7 @@ void CrossKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         input_x_dims[dim] == 3,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Input(X/Y).dims[dim] must be equal to 3. But received: "
             "Input(X/Y).dims[dim] = [%d].",
             input_x_dims[dim]));
@@ -64,19 +64,24 @@ void CrossKernel(const Context& dev_ctx,
     }
     PADDLE_ENFORCE_EQ(dim == DDim::kMaxRank,
                       false,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "There must be at least one dimension 'd' so that "
                           "Input(X/Y).dims()[d] is equal to 3. "
                           "But received: Input(X/Y).dims() == [%s].",
                           input_x_dims));
   }
-  auto outer_loops = 1;
-  for (auto i = 0; i < dim; i++) {
-    outer_loops *= static_cast<int>(input_x_dims[i]);
+  if (input_x.numel() == 0 || input_y.numel() == 0) {
+    output->Resize(input_x.dims());
+    dev_ctx.template Alloc<T>(output);
+    return;
   }
-  auto slice_size = 1;
+  int64_t outer_loops = 1;
+  for (auto i = 0; i < dim; i++) {
+    outer_loops *= input_x_dims[i];
+  }
+  int64_t slice_size = 1;
   for (auto i = dim + 1; i < input_x_dims.size(); i++) {
-    slice_size *= static_cast<int>(input_x_dims[i]);
+    slice_size *= input_x_dims[i];
   }
 
   std::vector<T> input_x_vec, input_y_vec;
@@ -86,13 +91,13 @@ void CrossKernel(const Context& dev_ctx,
 
   dev_ctx.template Alloc<T>(output);
 
-  for (auto i = 0; i < outer_loops; i++) {
-    for (auto j = 0; j < 3; j++) {
-      auto dst_pos = (3 * i + j) * slice_size;
-      auto in_pos1 = (3 * i + ((j + 1) % 3)) * slice_size;
-      auto in_pos2 = (3 * i + ((j + 2) % 3)) * slice_size;
+  for (int64_t i = 0; i < outer_loops; i++) {
+    for (int64_t j = 0; j < 3; j++) {
+      int64_t dst_pos = (3 * i + j) * slice_size;
+      int64_t in_pos1 = (3 * i + ((j + 1) % 3)) * slice_size;
+      int64_t in_pos2 = (3 * i + ((j + 2) % 3)) * slice_size;
 
-      for (auto k = 0; k < slice_size; k++) {
+      for (int64_t k = 0; k < slice_size; k++) {
         out_vec[dst_pos + k] =
             input_x_vec[in_pos1 + k] * input_y_vec[in_pos2 + k] -
             input_x_vec[in_pos2 + k] * input_y_vec[in_pos1 + k];

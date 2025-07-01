@@ -24,8 +24,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/softmax_kernel.h"
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void SoftmaxCsrKernel(const Context& dev_ctx,
@@ -34,7 +33,7 @@ void SoftmaxCsrKernel(const Context& dev_ctx,
                       SparseCsrTensor* out) {
   PADDLE_ENFORCE_EQ(axis,
                     -1,
-                    phi::errors::Unimplemented(
+                    common::errors::Unimplemented(
                         "SparseCsrTensor only support axis=-1 for softmax, "
                         "which is faster when reading data by row (axis=-1)"));
   EmptyLikeCsrKernel<T, Context>(dev_ctx, x, out);
@@ -172,8 +171,7 @@ void SoftmaxCooKernel(const Context& dev_ctx,
       }));
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(softmax_csr,
                    CPU,

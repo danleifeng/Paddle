@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import sys
 import unittest
 
@@ -52,7 +53,13 @@ class Test_Forward_Hook(unittest.TestCase):
     def test_forward_hook_return_value(self):
         seed = 90
 
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
 
@@ -133,7 +140,13 @@ class Test_Forward_Hook(unittest.TestCase):
     def test_forward_hook(self):
         seed = 90
 
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
 
@@ -209,6 +222,41 @@ class Test_Forward_Hook(unittest.TestCase):
                 outs_remove_hook = simplenet(input, y)
                 self.assertFalse(call_forward_post_hook)
                 self.assertFalse(call_forward_pre_hook)
+
+
+def forward_pre_hook_with_kwargs(layer, args, kwargs):
+    kwargs['x'] = kwargs['x'] * 2
+    return (args, kwargs)
+
+
+class SimpleNetWithKWArgs(paddle.nn.Layer):
+    def __init__(
+        self,
+    ):
+        super().__init__()
+
+    def forward(self, x, y):
+        z = x + y
+
+        return z
+
+
+class TestHookWithKWArgs(unittest.TestCase):
+    def test_kwargs_hook(self):
+        net = SimpleNetWithKWArgs()
+        remove_handler = net.register_forward_pre_hook(
+            forward_pre_hook_with_kwargs, with_kwargs=True
+        )
+
+        x = paddle.randn((2, 3))
+        y = paddle.randn((2, 3))
+
+        out = net(x=x, y=y)
+        np.testing.assert_allclose(out.numpy(), (x * 2 + y).numpy())
+
+        remove_handler.remove()
+        out = net(x=x, y=y)
+        np.testing.assert_allclose(out.numpy(), (x + y).numpy())
 
 
 if __name__ == '__main__':

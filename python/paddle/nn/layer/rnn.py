@@ -169,7 +169,7 @@ def _maybe_copy(state: Tensor, new_state: Tensor, step_mask: Tensor) -> Tensor:
 
 
 def _transpose_batch_time(x: Tensor) -> Tensor:
-    perm = [1, 0] + list(range(2, len(x.shape)))
+    perm = [1, 0, *list(range(2, len(x.shape)))]
     return paddle.transpose(x, perm)
 
 
@@ -286,6 +286,7 @@ def _rnn_static_graph(
         inputs = paddle.utils.map_structure(_transpose_batch_time, inputs)
 
     max_seq_len = paddle.shape(paddle.utils.flatten(inputs)[0])[0]
+    max_seq_len = paddle.cast(max_seq_len, paddle.int32)
     if sequence_length is not None:
         mask = paddle.static.nn.sequence_lod.sequence_mask(
             sequence_length,
@@ -650,7 +651,7 @@ class RNNCellBase(Layer):
         class Shape:
             def __init__(self, shape):
                 self.shape = (
-                    list(shape) if shape[0] == -1 else ([-1] + list(shape))
+                    list(shape) if shape[0] == -1 else ([-1, *list(shape)])
                 )
 
         # nested structure of shapes
@@ -1648,7 +1649,7 @@ class RNNBase(LayerList):
                     default_initializer=I.Constant(0.0),
                 )
             ]
-            # dropout state may also can be hided and avoid saving
+            # dropout state may also can be hid and avoid saving
             # should dropout state be persistable for static-graph
             if in_pir_mode():
                 self._dropout_state = paddle.pir.core.create_parameter(
@@ -1684,38 +1685,40 @@ class RNNBase(LayerList):
                     )
                     return
             # for static-graph, append coalesce_tensor into startup program
-            with program_guard(
-                default_startup_program(), default_startup_program()
+            with (
+                program_guard(
+                    default_startup_program(), default_startup_program()
+                ),
+                paddle.no_grad(),
             ):
-                with paddle.no_grad():
-                    if in_pir_mode():
-                        _C_ops.coalesce_tensor(
-                            self._all_weights,
-                            params[0].dtype,
-                            True,
-                            False,
-                            False,
-                            0.0,
-                            False,
-                            -1,
-                            -1,
-                            [],
-                            [],
-                        )
-                    else:
-                        self._helper.append_op(
-                            type="coalesce_tensor",
-                            inputs={"Input": self._all_weights},
-                            outputs={
-                                "Output": self._all_weights,
-                                "FusedOutput": self._flat_weight,
-                            },
-                            attrs={
-                                "copy_data": True,
-                                "use_align": False,
-                                "dtype": params[0].dtype,
-                            },
-                        )
+                if in_pir_mode():
+                    _C_ops.coalesce_tensor(
+                        self._all_weights,
+                        params[0].dtype,
+                        True,
+                        False,
+                        False,
+                        0.0,
+                        False,
+                        -1,
+                        -1,
+                        [],
+                        [],
+                    )
+                else:
+                    self._helper.append_op(
+                        type="coalesce_tensor",
+                        inputs={"Input": self._all_weights},
+                        outputs={
+                            "Output": self._all_weights,
+                            "FusedOutput": self._flat_weight,
+                        },
+                        attrs={
+                            "copy_data": True,
+                            "use_align": False,
+                            "dtype": params[0].dtype,
+                        },
+                    )
 
     def _cudnn_impl(
         self,
@@ -2048,7 +2051,7 @@ class LSTM(RNNBase):
     Inputs:
         - **inputs** (Tensor): the input sequence. If `time_major` is True, the shape is `[time_steps, batch_size, input_size]`, else, the shape is `[batch_size, time_steps, input_size]`. `time_steps` means the length of the input sequence.
         - **initial_states** (list|tuple, optional): the initial state, a list/tuple of (h, c), the shape of each is `[num_layers * num_directions, batch_size, hidden_size]`. If initial_state is not given, zero initial states are used.
-        - **sequence_length** (Tensor, optional): shape `[batch_size]`, dtype: int64 or int32. The valid lengths of input sequences. Defaults to None. If `sequence_length` is not None, the inputs are treated as padded sequences. In each input sequence, elements whos time step index are not less than the valid length are treated as paddings.
+        - **sequence_length** (Tensor, optional): shape `[batch_size]`, dtype: int64 or int32. The valid lengths of input sequences. Defaults to None. If `sequence_length` is not None, the inputs are treated as padded sequences. In each input sequence, elements whose time step index are not less than the valid length are treated as paddings.
 
     Returns:
 
@@ -2172,7 +2175,7 @@ class GRU(RNNBase):
     Inputs:
         - **inputs** (Tensor): the input sequence. If `time_major` is True, the shape is `[time_steps, batch_size, input_size]`, else, the shape is `[batch_size, time_steps, input_size]`. `time_steps` means the length of the input sequence.
         - **initial_states** (Tensor, optional): the initial state. The shape is `[num_layers * num_directions, batch_size, hidden_size]`. If initial_state is not given, zero initial states are used. Defaults to None.
-        - **sequence_length** (Tensor, optional): shape `[batch_size]`, dtype: int64 or int32. The valid lengths of input sequences. Defaults to None. If `sequence_length` is not None, the inputs are treated as padded sequences. In each input sequence, elements whos time step index are not less than the valid length are treated as paddings.
+        - **sequence_length** (Tensor, optional): shape `[batch_size]`, dtype: int64 or int32. The valid lengths of input sequences. Defaults to None. If `sequence_length` is not None, the inputs are treated as padded sequences. In each input sequence, elements whose time step index are not less than the valid length are treated as paddings.
 
     Returns:
 

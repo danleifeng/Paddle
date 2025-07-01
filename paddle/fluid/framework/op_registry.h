@@ -24,8 +24,7 @@ limitations under the License. */
 #include <unordered_map>
 #include <unordered_set>
 
-#define GLOG_NO_ABBREVIATED_SEVERITIES  // msvc conflict logging with windows.h
-#include "glog/logging.h"               // For VLOG()
+#include "glog/logging.h"  // For VLOG()
 #include "paddle/common/flags.h"
 #include "paddle/common/macros.h"
 #include "paddle/fluid/framework/attribute.h"
@@ -61,8 +60,8 @@ class OpVersionMap_OpVersionPair;
 class ProgramDesc;
 class VarDesc;
 class VarType;
-class VarType_LoDTensorArrayDesc;
-class VarType_LoDTensorDesc;
+class VarType_DenseTensorArrayDesc;
+class VarType_DenseTensorDesc;
 class VarType_ReaderDesc;
 class VarType_TensorDesc;
 class VarType_Tuple;
@@ -95,7 +94,7 @@ struct OperatorRegistrar : public Registrar {
     PADDLE_ENFORCE_EQ(
         OpInfoMap::Instance().Has(op_type),
         false,
-        phi::errors::AlreadyExists(
+        common::errors::AlreadyExists(
             "Operator '%s' is registered more than once.", op_type));
     static_assert(sizeof...(ARGS) != 0,
                   "OperatorRegistrar should be invoked at least by OpClass");

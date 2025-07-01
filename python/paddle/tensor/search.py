@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+from typing_extensions import overload
 
 import paddle
 from paddle import _C_ops
@@ -236,7 +237,10 @@ def argmax(
         flatten = True
         axis = 0
 
-    if in_dynamic_or_pir_mode():
+    if in_dynamic_mode():
+        return _C_ops.argmax(x, axis, keepdim, flatten, var_dtype)
+    elif in_pir_mode():
+        check_dtype(var_dtype, 'dtype', ['int32', 'int64'], 'argmax')
         return _C_ops.argmax(x, axis, keepdim, flatten, var_dtype)
     else:
         helper = LayerHelper("argmax", **locals())
@@ -255,7 +259,7 @@ def argmax(
             ],
             'paddle.argmax',
         )
-        check_dtype(var_dtype, 'dtype', ['int32', 'int64'], 'argmin')
+        check_dtype(var_dtype, 'dtype', ['int32', 'int64'], 'argmax')
         attrs = {}
         out = helper.create_variable_for_type_inference(var_dtype)
         attrs['keepdims'] = keepdim
@@ -334,7 +338,10 @@ def argmin(
         flatten = True
         axis = 0
 
-    if in_dynamic_or_pir_mode():
+    if in_dynamic_mode():
+        return _C_ops.argmin(x, axis, keepdim, flatten, var_dtype)
+    elif in_pir_mode():
+        check_dtype(var_dtype, 'dtype', ['int32', 'int64'], 'argmin')
         return _C_ops.argmin(x, axis, keepdim, flatten, var_dtype)
     else:
         helper = LayerHelper("argmin", **locals())
@@ -415,6 +422,7 @@ def index_select(
             x,
             'x',
             [
+                'bool',
                 'uint16',
                 'float16',
                 'float32',
@@ -445,18 +453,15 @@ def index_select(
 
 
 @overload
-def nonzero(x: Tensor, as_tuple: Literal[False] = ...) -> Tensor:
-    ...
+def nonzero(x: Tensor, as_tuple: Literal[False] = ...) -> Tensor: ...
 
 
 @overload
-def nonzero(x: Tensor, as_tuple: Literal[True] = ...) -> tuple[Tensor, ...]:
-    ...
+def nonzero(x: Tensor, as_tuple: Literal[True] = ...) -> tuple[Tensor, ...]: ...
 
 
 @overload
-def nonzero(x: Tensor, as_tuple: bool = ...) -> Tensor | tuple[Tensor, ...]:
-    ...
+def nonzero(x: Tensor, as_tuple: bool = ...) -> Tensor | tuple[Tensor, ...]: ...
 
 
 def nonzero(x: Tensor, as_tuple=False):
@@ -519,10 +524,6 @@ def nonzero(x: Tensor, as_tuple=False):
              [3]])
 
     """
-    list_out = []
-    shape = x.shape
-    rank = len(shape)
-
     if in_dynamic_or_pir_mode():
         outs = _C_ops.nonzero(x)
     else:
@@ -554,14 +555,39 @@ def nonzero(x: Tensor, as_tuple=False):
 
     if not as_tuple:
         return outs
-    elif rank == 1:
-        return (outs,)
     else:
-        for i in range(rank):
-            list_out.append(
-                paddle.slice(outs, axes=[1], starts=[i], ends=[i + 1])
-            )
+        rank = x.ndim
+        list_out = [outs[:, i] for i in range(rank)]
         return tuple(list_out)
+
+
+def _restrict_nonzero(condition: Tensor, total_true_num: int) -> Tensor:
+    """
+    Return a tensor containing the indices of all non-zero elements of the `input`
+    tensor. Using a manually set total_true_num as shape information, thereby
+    eliminating the need to transfer shape information from the device to the host.
+
+    Args:
+        x (Tensor): The input tensor variable.
+        total_true_num (int): The manually set output shape.
+
+    Returns:
+        Tensor, The data type is int64.
+
+    Examples:
+
+        .. code-block:: python
+
+            >>> import paddle
+
+            >>> x = paddle.to_tensor([0.0, 1.0, 0.0, 3.0])
+            >>> out = paddle.tensor.search._restrict_nonzero(x, 2)
+            >>> print(out)
+            Tensor(shape=[2, 1], dtype=int64, place=Place(gpu), stop_gradient=True,
+            [[1],
+             [3]])
+    """
+    return _C_ops.restrict_nonzero(condition, total_true_num)
 
 
 def sort(
@@ -726,7 +752,7 @@ def where(
         ``numpy.where(condition)`` is identical to ``paddle.nonzero(condition, as_tuple=True)``, please refer to :ref:`api_paddle_nonzero`.
 
     Args:
-        condition (Tensor): The condition to choose x or y. When True (nonzero), yield x, otherwise yield y.
+        condition (Tensor): The condition to choose x or y. When True (nonzero), yield x, otherwise yield y, must have a dtype of bool if used as mask.
         x (Tensor|scalar|None, optional): A Tensor or scalar to choose when the condition is True with data type of bfloat16, float16, float32, float64, int32 or int64. Either both or neither of x and y should be given.
         y (Tensor|scalar|None, optional): A Tensor or scalar to choose when the condition is False with data type of bfloat16, float16, float32, float64, int32 or int64. Either both or neither of x and y should be given.
         name (str|None, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
@@ -766,58 +792,90 @@ def where(
     if x is None or y is None:
         raise ValueError("either both or neither of x and y should be given")
 
+    # NOTE: We might need to adapt the broadcast_shape and broadcast_to for dynamic shape
+    # so dynamic and pir branch can be merged into one code block
     condition_shape = list(condition.shape)
     x_shape = list(x.shape)
     y_shape = list(y.shape)
 
-    if x_shape == y_shape and condition_shape == x_shape:
-        broadcast_condition = condition
+    if in_dynamic_mode():
+        # NOTE: `condition` must be a bool Tensor as required in
+        # https://data-apis.org/array-api/latest/API_specification/generated/array_api.where.html#array_api.where
+        if condition.dtype != paddle.bool:
+            raise ValueError(
+                "The `condition` is expected to be a boolean Tensor, "
+                f"but got a Tensor with dtype {condition.dtype}"
+            )
+        broadcast_shape = paddle.broadcast_shape(x_shape, y_shape)
+        broadcast_shape = paddle.broadcast_shape(
+            broadcast_shape, condition_shape
+        )
+
         broadcast_x = x
         broadcast_y = y
-    else:
-        zeros_like_x = paddle.zeros_like(x)
-        zeros_like_y = paddle.zeros_like(y)
-        zeros_like_condition = paddle.zeros_like(condition)
-        zeros_like_condition = paddle.cast(zeros_like_condition, x.dtype)
-        cast_cond = paddle.cast(condition, x.dtype)
+        broadcast_condition = condition
 
-        broadcast_zeros = paddle.add(zeros_like_x, zeros_like_y)
-        broadcast_zeros = paddle.add(broadcast_zeros, zeros_like_condition)
-        broadcast_x = paddle.add(x, broadcast_zeros)
-        broadcast_y = paddle.add(y, broadcast_zeros)
-        broadcast_condition = paddle.add(cast_cond, broadcast_zeros)
-        broadcast_condition = paddle.cast(broadcast_condition, 'bool')
+        if condition_shape != broadcast_shape:
+            broadcast_condition = paddle.broadcast_to(
+                broadcast_condition, broadcast_shape
+            )
+        if x_shape != broadcast_shape:
+            broadcast_x = paddle.broadcast_to(broadcast_x, broadcast_shape)
+        if y_shape != broadcast_shape:
+            broadcast_y = paddle.broadcast_to(broadcast_y, broadcast_shape)
 
-    if in_dynamic_or_pir_mode():
         return _C_ops.where(broadcast_condition, broadcast_x, broadcast_y)
+
     else:
-        check_variable_and_dtype(condition, 'condition', ['bool'], 'where')
-        check_variable_and_dtype(
-            x,
-            'x',
-            ['uint16', 'float16', 'float32', 'float64', 'int32', 'int64'],
-            'where',
-        )
-        check_variable_and_dtype(
-            y,
-            'y',
-            ['uint16', 'float16', 'float32', 'float64', 'int32', 'int64'],
-            'where',
-        )
-        helper = LayerHelper("where", **locals())
-        out = helper.create_variable_for_type_inference(dtype=x.dtype)
+        # for PIR and old IR
+        if x_shape == y_shape and condition_shape == x_shape:
+            broadcast_condition = condition
+            broadcast_x = x
+            broadcast_y = y
+        else:
+            zeros_like_x = paddle.zeros_like(x)
+            zeros_like_y = paddle.zeros_like(y)
+            zeros_like_condition = paddle.zeros_like(condition)
+            zeros_like_condition = paddle.cast(zeros_like_condition, x.dtype)
+            cast_cond = paddle.cast(condition, x.dtype)
 
-        helper.append_op(
-            type='where',
-            inputs={
-                'Condition': broadcast_condition,
-                'X': broadcast_x,
-                'Y': broadcast_y,
-            },
-            outputs={'Out': [out]},
-        )
+            broadcast_zeros = paddle.add(zeros_like_x, zeros_like_y)
+            broadcast_zeros = paddle.add(broadcast_zeros, zeros_like_condition)
+            broadcast_x = paddle.add(x, broadcast_zeros)
+            broadcast_y = paddle.add(y, broadcast_zeros)
+            broadcast_condition = paddle.add(cast_cond, broadcast_zeros)
+            broadcast_condition = paddle.cast(broadcast_condition, 'bool')
 
-        return out
+        if in_pir_mode():
+            return _C_ops.where(broadcast_condition, broadcast_x, broadcast_y)
+        else:
+            check_variable_and_dtype(condition, 'condition', ['bool'], 'where')
+            check_variable_and_dtype(
+                x,
+                'x',
+                ['uint16', 'float16', 'float32', 'float64', 'int32', 'int64'],
+                'where',
+            )
+            check_variable_and_dtype(
+                y,
+                'y',
+                ['uint16', 'float16', 'float32', 'float64', 'int32', 'int64'],
+                'where',
+            )
+            helper = LayerHelper("where", **locals())
+            out = helper.create_variable_for_type_inference(dtype=x.dtype)
+
+            helper.append_op(
+                type='where',
+                inputs={
+                    'Condition': broadcast_condition,
+                    'X': broadcast_x,
+                    'Y': broadcast_y,
+                },
+                outputs={'Out': [out]},
+            )
+
+            return out
 
 
 @inplace_apis_in_dygraph_only
@@ -837,26 +895,33 @@ def where_(
     if x is None or y is None:
         raise ValueError("either both or neither of x and y should be given")
 
+    # NOTE: `condition` must be a bool Tensor as required in
+    # https://data-apis.org/array-api/latest/API_specification/generated/array_api.where.html#array_api.where
+    if condition.dtype != paddle.bool:
+        raise ValueError(
+            "The `condition` is expected to be a boolean Tensor, "
+            f"but got a Tensor with dtype {condition.dtype}"
+        )
+
     condition_shape = list(condition.shape)
     x_shape = list(x.shape)
     y_shape = list(y.shape)
-    if x_shape == y_shape and condition_shape == x_shape:
-        broadcast_condition = condition
-        broadcast_x = x
-        broadcast_y = y
-    else:
-        zeros_like_x = paddle.zeros_like(x)
-        zeros_like_y = paddle.zeros_like(y)
-        zeros_like_condition = paddle.zeros_like(condition)
-        zeros_like_condition = paddle.cast(zeros_like_condition, x.dtype)
-        cast_cond = paddle.cast(condition, x.dtype)
 
-        broadcast_zeros = paddle.add(zeros_like_x, zeros_like_y)
-        broadcast_zeros = paddle.add(broadcast_zeros, zeros_like_condition)
-        broadcast_x = x.add_(broadcast_zeros)
-        broadcast_y = paddle.add(y, broadcast_zeros)
-        broadcast_condition = paddle.add(cast_cond, broadcast_zeros)
-        broadcast_condition = paddle.cast(broadcast_condition, 'bool')
+    broadcast_shape = paddle.broadcast_shape(x_shape, y_shape)
+    broadcast_shape = paddle.broadcast_shape(broadcast_shape, condition_shape)
+
+    broadcast_x = x
+    broadcast_y = y
+    broadcast_condition = condition
+
+    if condition_shape != broadcast_shape:
+        broadcast_condition = paddle.broadcast_to(
+            broadcast_condition, broadcast_shape
+        )
+    if x_shape != broadcast_shape:
+        broadcast_x = paddle.broadcast_to(broadcast_x, broadcast_shape)
+    if y_shape != broadcast_shape:
+        broadcast_y = paddle.broadcast_to(broadcast_y, broadcast_shape)
 
     if in_dynamic_mode():
         return _C_ops.where_(broadcast_condition, broadcast_x, broadcast_y)
@@ -975,6 +1040,11 @@ def masked_select(x: Tensor, mask: Tensor, name: str | None = None) -> Tensor:
     Returns a new 1-D tensor which indexes the input tensor according to the ``mask``
     which is a tensor with data type of bool.
 
+    Note:
+        ``paddle.masked_select`` supports broadcasting. If you want know more about broadcasting, please refer to `Introduction to Tensor`_ .
+
+        .. _Introduction to Tensor: ../../guides/beginner/tensor_en.html#chapter5-broadcasting-of-tensor
+
     Args:
         x (Tensor): The input Tensor, the data type can be int32, int64, uint16, float16, float32, float64.
         mask (Tensor): The Tensor containing the binary mask to index with, it's data type is bool.
@@ -1053,7 +1123,7 @@ def topk(
         largest (bool, optional) : largest is a flag, if set to true,
             algorithm will sort by descending order, otherwise sort by
             ascending order. Default is True.
-        sorted (bool, optional): controls whether to return the elements in sorted order, default value is True. In gpu device, it always return the sorted value.
+        sorted (bool, optional): controls whether to return the elements in sorted order, default value is True.
         name (str|None, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:

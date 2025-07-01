@@ -21,8 +21,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ContextManager,
-    Sequence,
     TypeVar,
     overload,
 )
@@ -41,8 +39,9 @@ from .tracer import Tracer
 
 if TYPE_CHECKING:
     from collections import OrderedDict
+    from collections.abc import Generator, Sequence
+    from contextlib import AbstractContextManager
     from types import TracebackType
-    from typing import Generator
 
     from typing_extensions import Self
 
@@ -65,11 +64,26 @@ def in_to_static_mode() -> bool:
     return global_var._in_to_static_mode_
 
 
+def in_sot_simulation_mode() -> bool:
+    """
+    Returns whether the code is running under the SOT simulation context.
+
+    NOTE: Always returns False because if this function is called directly from native Python,
+    it is not within the SOT simulation process. In that case, returning False is correct.
+    If the code is running within the SOT simulation process, the function will be represented
+    by UserDefinedFunctionVariable, which is specially handled in its `call_function` method
+    to return True when this function is called.
+
+    This design avoids introducing `global_var` into the guard logic.
+    """
+    return False
+
+
 # TODO(Aurelius84): Need to remove this alias after clean usage in PaddleX
 in_declarative_mode = in_to_static_mode
 
 
-def to_static_unsupport_argument_warning(
+def to_static_unsupported_argument_warning(
     func_name, input_names, inputs, support_values
 ):
     """
@@ -87,7 +101,7 @@ def to_static_unsupport_argument_warning(
 
 
 def _switch_to_static_graph_(
-    func: Callable[_InputT, _RetT]
+    func: Callable[_InputT, _RetT],
 ) -> Callable[_InputT, _RetT]:
     def __impl__(*args: _InputT.args, **kwargs: _InputT.kwargs) -> _RetT:
         with framework._dygraph_guard(None):
@@ -100,7 +114,7 @@ switch_to_static_graph = wrap_decorator(_switch_to_static_graph_)
 
 
 @signature_safe_contextmanager
-def _to_static_mode_guard_(
+def to_static_mode_guard(
     is_to_static: bool = True,
 ) -> Generator[None, None, None]:
     global global_var
@@ -114,7 +128,7 @@ def _to_static_mode_guard_(
 
 @signature_safe_contextmanager
 def param_guard(
-    parameters: OrderedDict[str, Tensor]
+    parameters: OrderedDict[str, Tensor],
 ) -> Generator[None, None, None]:
     # Note: parameters is a reference of self._parameters or self._buffers
     if in_to_static_mode() and not paddle.in_dynamic_mode() and parameters:
@@ -157,7 +171,10 @@ def _convert_into_variable(tensor):
             # But if its shape is empty while created from `create_variable()`, we consider this buffer
             # non-persistable. See case of `dropout_state` in lstm api.
             is_persistable = True
-            if tensor.name.endswith(NON_PERSISTABLE_VAR_NAME_SUFFIX):
+            # NOTE(SigureMo): Why do not use `tensor.name.endswith(NON_PERSISTABLE_VAR_NAME_SUFFIX)`?
+            # Because the tensor maybe copied, the name of the tensor will be appended with a new suffix.
+            # Such as `lstm_0.dropout_state__non_persistable_deepcopy_204`
+            if NON_PERSISTABLE_VAR_NAME_SUFFIX in tensor.name:
                 is_persistable = False
 
             new_var = tensor._to_static_var(
@@ -286,26 +303,20 @@ def disable_dygraph() -> None:
 def _switch_tracer_mode_guard_(
     is_train: bool = True,
 ) -> Generator[None, None, None]:
-    tracer = framework._dygraph_tracer()
-    if tracer:
-        has_grad = tracer._has_grad
-        tracer._has_grad = is_train
-        try:
-            yield
-        finally:
-            tracer._has_grad = has_grad
-    else:
+    has_grad = core._has_grad()
+    core._set_has_grad(is_train)
+    try:
         yield
+    finally:
+        core._set_has_grad(has_grad)
 
 
 @overload
-def no_grad(func: None = ...) -> ContextManager:
-    ...
+def no_grad(func: None = ...) -> AbstractContextManager: ...
 
 
 @overload
-def no_grad(func: Callable[_InputT, _RetT]) -> Callable[_InputT, _RetT]:
-    ...
+def no_grad(func: Callable[_InputT, _RetT]) -> Callable[_InputT, _RetT]: ...
 
 
 def no_grad(func=None):
@@ -355,10 +366,6 @@ def no_grad(func=None):
             >>> test_layer()
 
     """
-    if in_to_static_mode():
-        warnings.warn(
-            "paddle.no_grad is only supported for inference model, and not supported for training under @to_static."
-        )
     if func is None:
         return _switch_tracer_mode_guard_(is_train=False)
     else:
@@ -378,6 +385,8 @@ def no_grad(func=None):
 class _DecoratorContextManager:
     """Allow a context manager to be used as a decorator"""
 
+    DECORATED_BY_MARKER_ATTR = "__decorated_by__"
+
     def __call__(
         self, func: Callable[_InputT, _RetT]
     ) -> Callable[_InputT, _RetT]:
@@ -393,9 +402,15 @@ class _DecoratorContextManager:
                 yield from gen
 
         if inspect.isgeneratorfunction(func):
-            return _decorate_generator(func)
+            decorated_fn = _decorate_generator(func)
         else:
-            return _decorate_function(func)
+            decorated_fn = _decorate_function(func)
+        setattr(
+            decorated_fn,
+            _DecoratorContextManager.DECORATED_BY_MARKER_ATTR,
+            self,
+        )
+        return decorated_fn
 
     def __enter__(self) -> Any:
         raise NotImplementedError
@@ -437,14 +452,11 @@ def is_grad_enabled() -> bool:
             >>> paddle.is_grad_enabled()
             False
     """
-    tracer = framework._dygraph_tracer()
-    return tracer._has_grad if tracer else False
+    return core._has_grad()
 
 
 def _set_grad_enabled(mode: bool) -> None:
-    tracer = framework._dygraph_tracer()
-    if tracer:
-        tracer._has_grad = mode
+    core._set_has_grad(mode)
 
 
 class set_grad_enabled(_DecoratorContextManager):
@@ -484,8 +496,7 @@ class set_grad_enabled(_DecoratorContextManager):
         _set_grad_enabled(mode)
         self.mode = mode
 
-    def __enter__(self) -> None:
-        ...
+    def __enter__(self) -> None: ...
 
     def __exit__(self, *args: object) -> None:
         _set_grad_enabled(self.prev)
@@ -639,11 +650,13 @@ def guard(place: PlaceLike | None = None) -> Generator[None, None, None]:
     else:
         expected_place = framework._current_expected_place_()
 
-    with framework.program_guard(train, startup):
-        with framework.unique_name.guard():
-            with framework._dygraph_guard(tracer):
-                with framework._dygraph_place_guard(expected_place):
-                    yield
+    with (
+        framework.program_guard(train, startup),
+        framework.unique_name.guard(),
+        framework._dygraph_guard(tracer),
+        framework._dygraph_place_guard(expected_place),
+    ):
+        yield
 
 
 @framework.non_static_only
@@ -795,9 +808,9 @@ def grad(
         # to calculate grads.
         from paddle.static import gradients
 
-        to_static_unsupport_argument_warning(
+        to_static_unsupported_argument_warning(
             "paddle.grad",
-            ["retain_graph", "create_grad", "only_inputs", "allow_unused"],
+            ["retain_graph", "create_graph", "only_inputs", "allow_unused"],
             [retain_graph, create_graph, only_inputs, allow_unused],
             [None, False, True, False],
         )

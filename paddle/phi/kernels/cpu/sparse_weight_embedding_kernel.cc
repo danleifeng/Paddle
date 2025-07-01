@@ -54,7 +54,7 @@ struct EmbeddingCPUSparseFunctor {
         PADDLE_ENFORCE_GE(
             ids[i],
             0,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "Variable value (input) of OP(fluid.layers.embedding) "
                 "expected >= 0. But received %ld",
                 ids[i]));
@@ -62,7 +62,7 @@ struct EmbeddingCPUSparseFunctor {
         PADDLE_ENFORCE_GE(
             id_index,
             0,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "the input key should be exists. But received %d.", id_index));
 
         if (input_data_type == phi::DataType::BFLOAT16) {
@@ -87,21 +87,21 @@ struct EmbeddingCPUSparseFunctor {
 };
 
 template <typename T, typename Context>
-void SparseWeightEmbeddingKernel(const Context& ctx,
+void SparseWeightEmbeddingKernel(const Context& dev_ctx,
                                  const DenseTensor& input,
                                  const SelectedRows& weight,
                                  int64_t padding_idx,
                                  DenseTensor* out) {
   EmbeddingCPUSparseFunctor<T, Context> functor(
-      ctx, input, weight, padding_idx, out);
+      dev_ctx, input, weight, padding_idx, out);
 
   if (input.dtype() == phi::DataType::INT32) {
     functor.template apply<int>();
   } else if (input.dtype() == phi::DataType::INT64) {
     functor.template apply<int64_t>();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int32 and int64"));
   }
 }
 

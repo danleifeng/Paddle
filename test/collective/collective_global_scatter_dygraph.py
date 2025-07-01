@@ -48,7 +48,7 @@ class TestCollectiveGlobalScatterAPI(TestCollectiveAPIRunnerBase):
             local_input_buf = paddle.to_tensor(local_input_buf)
             global_expert_count = []
             paddle.distributed.alltoall(
-                paddle.split(local_expert_count, 2, axis=0), global_expert_count
+                global_expert_count, paddle.split(local_expert_count, 2, axis=0)
             )
             global_expert_count = paddle.concat(global_expert_count, axis=0)
             local_input_buf.stop_gradient = False

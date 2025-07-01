@@ -36,8 +36,8 @@
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable.h"
 #include "paddle/fluid/framework/variable_helper.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/init.h"
+#include "paddle/phi/core/platform/device_context.h"
 
 using AtomicVectorSizeT = std::vector<std::atomic<size_t>>;
 
@@ -140,6 +140,10 @@ void PrintValuesAndVariables(
 
 const std::vector<std::string> GetInstructionCallStack(
     const std::string& type, const pir::AttributeMap& attrs);
+
+std::unordered_map<std::string, std::set<std::string>> GetNoNeedBufferValues(
+    const std::unordered_map<std::string, std::shared_ptr<::pir::Program>>&
+        type_to_ir_program);
 }  // namespace interpreter
 }  // namespace framework
 }  // namespace paddle

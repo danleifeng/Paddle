@@ -16,11 +16,10 @@ limitations under the License. */
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/common/flags.h"
-#include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #include "paddle/phi/core/distributed/comm_context_manager.h"
 #include "paddle/phi/core/distributed/nccl_comm_context.h"
-COMMON_DECLARE_bool(dynamic_static_unified_comm);
+#include "paddle/phi/core/platform/collective_helper.h"
 #endif
 #include "paddle/fluid/distributed/collective/process_group.h"
 #include "paddle/phi/api/include/tensor.h"
@@ -41,13 +40,11 @@ void send_shape_info(const phi::DenseTensor& x,
     PADDLE_ENFORCE_EQ(
         ((stream != nullptr && comm != nullptr) || comm_ctx != nullptr),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "NCCLComm and Stream should be provided if use NCCL "
             "to send the shape info."));
   }
   phi::DataType shape_dtype = phi::DataType::INT32;
-  ncclDataType_t nccl_dtype =
-      platform::ToNCCLDataType(framework::TransToProtoVarType(shape_dtype));
   auto dims = x.dims();
   int shape_size = dims.size();
 
@@ -69,17 +66,7 @@ void send_shape_info(const phi::DenseTensor& x,
     gpu_shape_size_tensor->mutable_data(place, shape_dtype);
     framework::TensorCopySync(
         cpu_shape_size_tensor, place, gpu_shape_size_tensor);
-    if (comm_ctx) {
-      comm_ctx->Send(*gpu_shape_size_tensor, 1, peer, stream);
-    } else {
-      PADDLE_ENFORCE_GPU_SUCCESS(
-          phi::dynload::ncclSend(gpu_shape_size_tensor->data<int>(),
-                                 1,
-                                 nccl_dtype,
-                                 peer,
-                                 comm->comm(),
-                                 stream));
-    }
+    comm_ctx->Send(*gpu_shape_size_tensor, 1, peer, stream);
   }
   VLOG(3) << "send the shape size: " << shape_size << " to peer";
 
@@ -102,17 +89,7 @@ void send_shape_info(const phi::DenseTensor& x,
     gpu_shape_tensor->Resize({shape_size});
     gpu_shape_tensor->mutable_data(place, shape_dtype);
     framework::TensorCopySync(cpu_shape_tensor, place, gpu_shape_tensor);
-    if (comm_ctx) {
-      comm_ctx->Send(*gpu_shape_tensor, shape_size, peer, stream);
-    } else {
-      PADDLE_ENFORCE_GPU_SUCCESS(
-          phi::dynload::ncclSend(gpu_shape_tensor->data<int>(),
-                                 shape_size,
-                                 nccl_dtype,
-                                 peer,
-                                 comm->comm(),
-                                 stream));
-    }
+    comm_ctx->Send(*gpu_shape_tensor, shape_size, peer, stream);
   }
   VLOG(3) << "send the shape: (" << dims << ") to peer";
 }
@@ -129,14 +106,14 @@ class SendOpV2CUDAKernel : public framework::OpKernel<T> {
     PADDLE_ENFORCE_GE(
         rid,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The ring_id (%d) for send_v2 op must be non-negative.", rid));
 
     int peer = ctx.Attr<int>("peer");
     PADDLE_ENFORCE_GE(
         peer,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The peer (%d) for send_v2 op must be non-negative.", peer));
     auto map = distributed::ProcessGroupMapFromGid::getInstance();
     if (map->has(rid)) {
@@ -168,68 +145,29 @@ class SendOpV2CUDAKernel : public framework::OpKernel<T> {
 
     const auto& comm_context_manager =
         phi::distributed::CommContextManager::GetInstance();
-    if (FLAGS_dynamic_static_unified_comm) {
-      PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(rid)),
-                        true,
-                        phi::errors::InvalidArgument(
-                            "You choose to use new communication library by "
-                            "setting environment "
-                            "variable FLAGS_dynamic_static_unified_comm True. "
-                            "But ring_id(%d) is "
-                            "not found in comm_context_manager.",
-                            std::to_string(rid)));
-      comm_ctx = static_cast<phi::distributed::NCCLCommContext*>(
-          comm_context_manager.Get(std::to_string(rid)));
-      PADDLE_ENFORCE_NE(comm_ctx,
-                        nullptr,
-                        phi::errors::Unavailable(
-                            "NCCLCommContext is nullptr, collective op should "
-                            "has ring_id attr."));
-      stream = comm_ctx->GetStream();
-      VLOG(3) << "new comm_context_manager has rid " << rid;
-    } else {
-      comm = platform::NCCLCommContext::Instance().Get(rid, place);
-      PADDLE_ENFORCE_LT(
-          peer,
-          comm->nranks(),
-          phi::errors::InvalidArgument("The value of peer (%d) you set must "
-                                       "be less than comm->nranks (%d).",
-                                       peer,
-                                       comm->nranks()));
-      stream = comm->stream();
-      VLOG(3) << "old NCCLCommContext has rid " << rid;
-    }
+
+    PADDLE_ENFORCE_EQ(comm_context_manager.Has(std::to_string(rid)),
+                      true,
+                      common::errors::InvalidArgument(
+                          "You choose to use new communication library. "
+                          "But ring_id(%d) is "
+                          "not found in comm_context_manager.",
+                          std::to_string(rid)));
+    comm_ctx = static_cast<phi::distributed::NCCLCommContext*>(
+        comm_context_manager.Get(std::to_string(rid)));
+    PADDLE_ENFORCE_NE(comm_ctx,
+                      nullptr,
+                      common::errors::Unavailable(
+                          "NCCLCommContext is nullptr, collective op should "
+                          "has ring_id attr."));
+    stream = comm_ctx->GetStream();
+    VLOG(3) << "new comm_context_manager has rid " << rid;
 
     if (ctx.Attr<bool>("use_calc_stream")) {
       // should ExecutionContext for calc stream.
       stream = ctx.cuda_device_context().stream();
     }
 
-    auto* x_var = ctx.InputVar("X");
-    if (x_var->IsType<framework::LoDTensorArray>()) {
-      PADDLE_ENFORCE_EQ(
-          dynamic_shape,
-          false,
-          phi::errors::InvalidArgument("Dynamic shape for send/recv not "
-                                       "support LoDTensorArray for now."));
-      auto& x_array = x_var->Get<framework::LoDTensorArray>();
-      for (size_t idx = 0; idx < x_array.size(); idx++) {
-        VLOG(3) << "LodTensorArray: idx(" << idx << ")";
-        auto& x = x_array.at(idx);
-        int numel = x.numel();
-        ncclDataType_t dtype =
-            platform::ToNCCLDataType(framework::TransToProtoVarType(x.dtype()));
-        if (comm_ctx) {
-          comm_ctx->Send(x, numel, peer, stream);
-        } else {
-          PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclSend(
-              x.data<T>(), numel, dtype, peer, comm->comm(), stream));
-        }
-        VLOG(3) << "rank " << comm->rank() << " send "
-                << common::product(x.dims()) << " to " << peer;
-      }
-      return;
-    }
     auto x = ctx.Input<phi::DenseTensor>("X");
     int numel = x->numel();
 
@@ -244,20 +182,11 @@ class SendOpV2CUDAKernel : public framework::OpKernel<T> {
                       /* ProcessGroup* */ nullptr);
     }
 
-    if (comm_ctx) {
-      comm_ctx->Send(*x, numel, peer, stream);
-    } else {
-      ncclDataType_t dtype =
-          platform::ToNCCLDataType(framework::TransToProtoVarType(x->dtype()));
-      PADDLE_ENFORCE_GPU_SUCCESS(phi::dynload::ncclSend(
-          x->data<T>(), numel, dtype, peer, comm->comm(), stream));
-      VLOG(3) << "rank " << comm->rank() << " send "
-              << common::product(x->dims()) << " to " << peer;
-    }
+    comm_ctx->Send(*x, numel, peer, stream);
 #else
     PADDLE_THROW(
-        phi::errors::Unavailable("PaddlePaddle should be compiled with NCCL "
-                                 "and NCCL version >= 2.7.3 is needed."));
+        common::errors::Unavailable("PaddlePaddle should be compiled with NCCL "
+                                    "and NCCL version >= 2.7.3 is needed."));
 #endif
   }
 };

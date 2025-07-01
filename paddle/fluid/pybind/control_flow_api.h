@@ -39,6 +39,10 @@ class PyWhileOp : public dialect::WhileOp {
   /// corresponding output of the new while_op,
   ///
   std::vector<pir::Value> OptimizeUpdate();
+  void AddExtraInput(const pir::Value &value);
+
+ private:
+  std::vector<pir::Value> extra_inputs_;
 };
 
 void BindControlFlowApi(pybind11::module *m);

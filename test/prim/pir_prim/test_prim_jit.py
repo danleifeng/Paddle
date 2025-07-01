@@ -39,7 +39,7 @@ class TestDy2staticPir(unittest.TestCase):
         ref_grad = x.grad.numpy()
         x.clear_gradient()
 
-        # ==== to static compuatation ====
+        # ==== to static computation ====
         out = static_func(x)
         actual_out = out * 2
         actual_out.backward()
@@ -75,7 +75,7 @@ class TestDy2staticPirEval(unittest.TestCase):
         x.stop_gradient = False
         ref_out = func(x) * 2
 
-        # ==== to static compuatation ====
+        # ==== to static computation ====
         out = static_func(x)
         actual_out = out * 2
 

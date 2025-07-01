@@ -28,6 +28,9 @@
 
 namespace pir {
 using InferSymbolicShapeCacheValue = std::vector<symbol::ShapeOrDataDimExprs>;
+
+enum TransLayoutType { NCHW2NHWC, NHWC2NCHW, INVALID };
+
 /**
  * This class represents information needed to determine the output
  * shape of an operator, which includes the operator's name, input shapes, and
@@ -36,12 +39,12 @@ using InferSymbolicShapeCacheValue = std::vector<symbol::ShapeOrDataDimExprs>;
 class IR_API InferSymbolicShapeCacheKey {
  public:
   InferSymbolicShapeCacheKey(
-      const Operation& op,
-      const std::vector<symbol::ShapeOrDataDimExprs>& input_shape_or_datas);
-  InferSymbolicShapeCacheKey(
       const std::string& op_name,
       const std::vector<symbol::ShapeOrDataDimExprs>& input_shape_or_datas,
-      const AttributeMap& attributes);
+      const std::map<std::string, Attribute>& attributes)
+      : op_name_(op_name),
+        input_shape_or_datas_(input_shape_or_datas),
+        attributes_(attributes) {}
   bool operator==(const InferSymbolicShapeCacheKey& other) const;
   std::size_t GetHashValue() const;
   friend std::ostream& operator<<(std::ostream& os,
@@ -51,10 +54,17 @@ class IR_API InferSymbolicShapeCacheKey {
  private:
   std::string op_name_;
   std::vector<symbol::ShapeOrDataDimExprs> input_shape_or_datas_;
-  std::vector<std::pair<std::string, ::pir::Attribute>> attributes_;
+  std::map<std::string, Attribute> attributes_;
   const std::vector<symbol::ShapeOrDataDimExprs>& GetInputShapeOrDatas() const;
   void SetInputShapeOrDatas(
       const std::vector<symbol::ShapeOrDataDimExprs>& input_shape_or_datas);
+};
+
+struct InputDynamicDimSpec {
+  std::string dim_name;
+  // input_bind = [(input_name, dim_index)]
+  std::vector<std::pair<std::string, int>> input_bind;
+  symbol::ConstraintsManager::Range range;
 };
 }  // namespace pir
 
@@ -75,7 +85,7 @@ class IR_API InferSymbolicShapeContext {
   InferSymbolicShapeContext() = default;
   InferSymbolicShapeContext(const InferSymbolicShapeContext&) = delete;
   InferSymbolicShapeContext(InferSymbolicShapeContext&&) = delete;
-  void Init();
+  void Init(const std::vector<InputDynamicDimSpec>& input_dynamic_dim_spec);
 
   // Note: Only initialize the symbol info, the value info is not update.
   void RegisterSymbolConstraintFromContext(
@@ -94,7 +104,16 @@ class IR_API InferSymbolicShapeContext {
 
   void AddEqualCstr(const symbol::DimExpr& lhs, const symbol::DimExpr& rhs);
 
+  // Add equal constraints for each dim in lhs and rhs.
+  void AddEqualCstr(const std::vector<symbol::DimExpr>& lhs,
+                    const std::vector<symbol::DimExpr>& rhs);
+
   bool IsEqual(const symbol::DimExpr& lhs, const symbol::DimExpr& rhs) const;
+
+  // Returns true if:
+  //    lhs[i] == rhs[i] for all i
+  bool IsEqual(const std::vector<symbol::DimExpr>& lhs,
+               const std::vector<symbol::DimExpr>& rhs) const;
 
   void AddGreatThanOneCstr(const symbol::DimExpr& dim_expr);
 
@@ -106,6 +125,8 @@ class IR_API InferSymbolicShapeContext {
   bool IsBroadcastable(const symbol::DimExpr& lhs,
                        const symbol::DimExpr& rhs) const;
 
+  bool HasPredefinedRange(const symbol::DimExpr& dim_expr) const;
+
   void PrintShapeOrDatas() const;
 
   void SetOpInferSymbolicShapeCache(
@@ -115,9 +136,23 @@ class IR_API InferSymbolicShapeContext {
   std::optional<InferSymbolicShapeCacheValue> GetOpInferSymbolicShapeCache(
       const InferSymbolicShapeCacheKey& op_infer_cache_key) const;
 
+  void ClearOpInferSymbolicShapeCache();
+
   const symbol::ConstraintsManager& constraints_manager() const {
     return constraints_manager_;
   }
+
+  struct DimIndexAndExpr {
+    int index;
+    symbol::DimExpr dim_expr;
+    DimIndexAndExpr(int index_val, const symbol::DimExpr& dim_expr_val)
+        : index(index_val), dim_expr(dim_expr_val) {}
+  };
+
+  bool HasPredefinedDimExprForInputName(const std::string& input_name) const;
+
+  const std::vector<DimIndexAndExpr> GetPredefinedDimExprForInputName(
+      const std::string& input_name) const;
 
  private:
   symbol::ShapeOrDataDimExprs SimplifyBroadcastForShapeOrData(
@@ -140,6 +175,12 @@ class IR_API InferSymbolicShapeContext {
 
   std::unordered_map<InferSymbolicShapeCacheKey, InferSymbolicShapeCacheValue>
       infer_symbolic_shape_cache_;
+
+  std::unordered_map<std::string, std::vector<DimIndexAndExpr>>
+      predefined_dimexpr_map_for_inputs_;
+
+  std::unordered_map<std::string, symbol::DimExpr>
+      input_dynamic_dim_name_spec_to_dimexpr_map_;
 };
 
 class IR_API ShapeConstraintIRAnalysis final
@@ -148,7 +189,7 @@ class IR_API ShapeConstraintIRAnalysis final
   ShapeConstraintIRAnalysis() = default;
   ShapeConstraintIRAnalysis(const ShapeConstraintIRAnalysis&) = delete;
   ShapeConstraintIRAnalysis(ShapeConstraintIRAnalysis&&) = delete;
-  void Init();
+  void InitInferContext();
 
   void RegisterSymbolConstraintFromShapeAnalysis(
       const ShapeConstraintIRAnalysis& other);
@@ -159,6 +200,15 @@ class IR_API ShapeConstraintIRAnalysis final
 
   void SetShapeOrDataForValue(Value val,
                               const symbol::ShapeOrDataDimExprs& shape_or_data);
+
+  // Set ShapeOrData of `to` value by ShapeOrData of `from` value.
+  void ShareShapeOrData(Value from, Value to);
+
+  // Update Symbol Shape for value by layout transformation.
+  void UpdateShapeOrDataByTransLayout(Value val,
+                                      TransLayoutType trans_layout_type);
+
+  void AddEqualCstr(const symbol::DimExpr& lhs, const symbol::DimExpr& rhs);
 
   bool IsEqual(const symbol::DimExpr& lhs, const symbol::DimExpr& rhs) const;
 
@@ -202,6 +252,16 @@ class IR_API ShapeConstraintIRAnalysis final
     return context_.constraints_manager();
   }
 
+  void ClearOpInferSymbolicShapeCache() {
+    context_.ClearOpInferSymbolicShapeCache();
+  }
+
+  void SetInputDynamicDimSpec(
+      const std::vector<InputDynamicDimSpec>& input_dynamic_dim_spec);
+
+  void AppendInputDynamicDimSpec(
+      const std::vector<InputDynamicDimSpec>& input_dynamic_dim_spec);
+
  private:
   InferSymbolicShapeContext* MutInferSymbolicShapeContext() {
     return &context_;
@@ -215,6 +275,7 @@ class IR_API ShapeConstraintIRAnalysis final
 
  private:
   InferSymbolicShapeContext context_;
+  std::vector<InputDynamicDimSpec> input_dynamic_dim_spec_;
 };
 
 class IR_API ShapeAnalysisManager {

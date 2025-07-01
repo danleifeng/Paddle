@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def compute_segment_sum(x, segment_ids):
@@ -124,7 +123,7 @@ class TestSegmentOps(OpTest):
         self.convert_bf16()
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(["X"], "Out", check_pir=True)
@@ -223,11 +222,15 @@ class TestSegmentMean(TestSegmentOps):
 
     def test_check_output(self):
         if core.is_compiled_with_cuda():
-            self.check_output_with_place(core.CUDAPlace(0), check_pir=True)
+            self.check_output_with_place(
+                core.CUDAPlace(0), check_pir=True, check_symbol_infer=False
+            )
         # due to CPU kernel not implement calculate 'SummedIds'
         # so cannot check 'SummedIds'
         del self.outputs['SummedIds']
-        self.check_output_with_place(core.CPUPlace(), check_pir=True)
+        self.check_output_with_place(
+            core.CPUPlace(), check_pir=True, check_symbol_infer=False
+        )
 
 
 class TestSegmentMean2(TestSegmentMean):
@@ -274,7 +277,9 @@ class TestSegmentSumBF16Op(TestSegmentOps):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place, check_pir=True)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(self.place, ["X"], "Out", check_pir=True)
@@ -292,7 +297,9 @@ class TestSegmentMaxBF16Op(TestSegmentMax):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place, check_pir=True)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(
@@ -316,7 +323,9 @@ class TestSegmentMinBF16Op(TestSegmentMin):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place, check_pir=True)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(
@@ -340,14 +349,89 @@ class TestSegmentMeanBF16Op(TestSegmentMean):
         self.np_dtype = np.float32
 
     def test_check_output(self):
-        self.check_output_with_place(self.place, check_pir=True)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(self.place, ["X"], "Out", check_pir=True)
 
 
+# default SUM
+class TestSegmentOps_ZeroSize(OpTest):
+    def set_data(self):
+        x = np.random.uniform(-1, 1, self.shape).astype(self.dtype)
+        segment_ids = self.set_segment(self.shape[0])
+        return x, segment_ids
+
+    def set_segment(self, len):
+        segment = np.random.randint(0, len, size=[len])
+        segment = np.sort(segment)
+        return segment.astype('int64')
+
+    def compute(self, x, segment_ids):
+        return compute_segment_sum(x, segment_ids)
+
+    def prepare(self):
+        self.op_type = "segment_pool"
+        self.python_api = segment_pool_split
+        self.python_out_sig = ["Out"]
+        self.dtype = np.float64
+        self.shape = [30, 0]
+        self.attrs = {"pooltype": "SUM"}
+
+    def setUp(self):
+        self.prepare()
+        x, segment_ids = self.set_data()
+        result = self.compute(x, segment_ids)
+        self.inputs = {
+            'X': x,
+            'SegmentIds': segment_ids.astype(np.int64),
+        }
+        self.outputs = {'Out': result.astype(self.dtype)}
+
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
+    def test_check_grad(self):
+        self.check_grad(["X"], "Out", check_pir=True)
+
+
+class TestSegmentOps_Min_ZeroSize(TestSegmentOps_ZeroSize):
+    def compute(self, x, segment_ids):
+        result, self.gradient = compute_segment_min_max(
+            x, segment_ids, pooltype="MIN"
+        )
+        return result
+
+    def prepare(self):
+        super().prepare()
+        self.attrs = {'pooltype': "MIN"}
+
+
+class TestSegmentOps_Max_ZeroSize(TestSegmentOps_ZeroSize):
+    def compute(self, x, segment_ids):
+        result, self.gradient = compute_segment_min_max(
+            x, segment_ids, pooltype="MAX"
+        )
+        return result
+
+    def prepare(self):
+        super().prepare()
+        self.attrs = {'pooltype': "MAX"}
+
+
+class TestSegmentOps_Mean_ZeroSize(TestSegmentOps_ZeroSize):
+    def compute(self, x, segment_ids):
+        return compute_segment_mean(x, segment_ids)
+
+    def prepare(self):
+        super().prepare()
+        self.attrs = {'pooltype': "MEAN"}
+
+
 class API_SegmentOpsTest(unittest.TestCase):
-    @test_with_pir_api
+
     def test_static(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data(name="x", shape=[3, 3], dtype="float32")
@@ -401,7 +485,7 @@ class API_SegmentOpsTest(unittest.TestCase):
 
 
 class API_GeometricSegmentOpsTest(unittest.TestCase):
-    @test_with_pir_api
+
     def test_static(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data(name="x", shape=[3, 3], dtype="float32")

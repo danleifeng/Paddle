@@ -26,6 +26,7 @@
 #include "paddle/cinn/ir/ir_base.h"
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/lang/compute.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace hlir {
@@ -42,12 +43,19 @@ std::shared_ptr<framework::OpStrategy> StrategyForTriangularSolve(
     const Target &target) {
   framework::CINNCompute triangular_solve_compute(
       [=](lang::Args args, lang::RetValue *ret) {
-        CHECK(!args.empty())
-            << "The input argument of triangular_solve is empty! Please check.";
+        PADDLE_ENFORCE_EQ(!args.empty(),
+                          true,
+                          ::common::errors::InvalidArgument(
+                              "The input argument of triangular_solve is "
+                              "empty. Please check the arguments."));
         CINNValuePack pack_args = args[0];
-        CHECK_GE(pack_args.size(), 2U)
-            << "Two input tensors are required for the computation of "
-               "triangular_solve.";
+        PADDLE_ENFORCE_GE(
+            pack_args.size(),
+            2U,
+            ::common::errors::InvalidArgument(
+                "Two input tensors are required for the computation of "
+                "triangular_solve, but received %d.",
+                pack_args.size()));
         Expr a_expr = pack_args[0];
         Expr b_expr = pack_args[1];
         ir::Tensor a = a_expr.as_tensor_ref();
@@ -59,7 +67,7 @@ std::shared_ptr<framework::OpStrategy> StrategyForTriangularSolve(
       });
   auto strategy = std::make_shared<framework::OpStrategy>();
   strategy->AddImpl(triangular_solve_compute,
-                    GetInjectiveScheduleFunc(output_shapes, target),
+
                     "strategy.triangular_solve.x86",
                     1);
   return strategy;

@@ -14,12 +14,23 @@
 
 #pragma once
 #include "paddle/fluid/pir/serialize_deserialize/include/third_party.h"
+#include "paddle/phi/common/data_type.h"
 
 namespace pir {
 
 Json GetAttrJson(const YAML::Node &action);
 
 Json GetTypeJson(const YAML::Node &action);
+
+std::string GetTypeName(const YAML::Node &action);
+
+std::string GetAttrName(const YAML::Node &action);
+
+Json BuildScalarAttribute(const YAML::Node &action);
+
+phi::DataType YamlStringToDataType(const std::string &type);
+
+std::string YamlStringToDataLayoutString(const std::string &layout);
 
 Json BuildAttrJsonPatch(const YAML::Node &action);
 
@@ -31,6 +42,7 @@ Json ParseAttrPatches(const YAML::Node &root);
 
 Json ParseTypePatches(const YAML::Node &root);
 
-Json YamlParser(const std::string &yaml_file);
+/* Yaml file is set to be empty by default. It's only used for testing. */
+Json YamlParser(const std::string &version, const std::string &yaml_file = "");
 
 }  // namespace pir

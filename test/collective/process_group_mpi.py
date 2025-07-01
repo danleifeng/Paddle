@@ -237,14 +237,14 @@ def test_all2all(pg, shape, dtype):
     raw_tensor_x_2 = paddle.slice(tensor_x, [0], [shape[0] // 2], [shape[0]])
     raw_tensor_y_1 = paddle.slice(tensor_y, [0], [0], [shape[0] // 2])
     if pg.rank() == 0:
-        task = pg.alltoall(tensor_x, tensor_out1)
+        task = pg.alltoall(tensor_out1, tensor_x)
         task.wait()
     # rank 1
     else:
         in_1, in_2 = paddle.split(tensor_y, 2)
         out_1, out_2 = paddle.split(tensor_out2, 2)
         out_tensor_list = [out_1, out_2]
-        task = dist.alltoall([in_1, in_2], out_tensor_list)
+        task = dist.alltoall(out_tensor_list, [in_1, in_2])
         tensor_out2 = paddle.concat(out_tensor_list)
     out1_2 = paddle.slice(tensor_out1, [0], [shape[0] // 2], [shape[0]])
     out2_1 = paddle.slice(tensor_out2, [0], [0], [shape[0] // 2])
@@ -265,14 +265,14 @@ def test_all2all(pg, shape, dtype):
     raw_tensor_x_2 = paddle.slice(tensor_x, [0], [shape[0] // 2], [shape[0]])
     raw_tensor_y_1 = paddle.slice(tensor_y, [0], [0], [shape[0] // 2])
     if pg.rank() == 0:
-        task = pg.alltoall(tensor_x, tensor_out1)
+        task = pg.alltoall(tensor_out1, tensor_x)
         task.wait()
     # rank 1
     else:
         in_1, in_2 = paddle.split(tensor_y, 2)
         out_1, out_2 = paddle.split(tensor_out2, 2)
         out_tensor_list = []
-        task = dist.alltoall([in_1, in_2], out_tensor_list)
+        task = dist.alltoall(out_tensor_list, [in_1, in_2])
         tensor_out2 = paddle.concat(out_tensor_list)
     out1_2 = paddle.slice(tensor_out1, [0], [shape[0] // 2], [shape[0]])
     out2_1 = paddle.slice(tensor_out2, [0], [0], [shape[0] // 2])

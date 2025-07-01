@@ -38,22 +38,22 @@ class SumOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GT(
         x_vars.size(),
         0,
-        phi::errors::InvalidArgument("Input[X] should not be empty"));
+        common::errors::InvalidArgument("Input[X] should not be empty"));
 
     PADDLE_ENFORCE_NOT_NULL(
         x_vars[0],
-        phi::errors::NotFound("Input var[%s] should not be nullptr",
-                              x_vars_name[0]));
+        common::errors::NotFound("Input var[%s] should not be nullptr",
+                                 x_vars_name[0]));
 
     if (x_vars[0]->IsType<phi::DenseTensor>()) {
       int dtype = -1;
       for (size_t idx = 0; idx < x_vars.size(); ++idx) {
         PADDLE_ENFORCE_NOT_NULL(
             x_vars[idx],
-            phi::errors::NotFound("Input var[%s] should not be nullptr",
-                                  x_vars_name[idx]));
+            common::errors::NotFound("Input var[%s] should not be nullptr",
+                                     x_vars_name[idx]));
         auto tensor =
-            framework::GetLoDTensorOrSelectedRowsValueFromVar(*x_vars[idx]);
+            framework::GetDenseTensorOrSelectedRowsValueFromVar(*x_vars[idx]);
         if (!tensor->IsInitialized()) {
           continue;
         }
@@ -62,13 +62,13 @@ class SumOp : public framework::OperatorWithKernel {
         } else {
           PADDLE_ENFORCE_EQ(dtype,
                             framework::TransToProtoVarType(tensor->dtype()),
-                            phi::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "The inputs type of sum op must be same"));
         }
       }
       PADDLE_ENFORCE_NE(dtype,
                         -1,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Sum operator should have at least one tensor"));
 
       auto data_type = static_cast<framework::proto::VarType::Type>(dtype);
@@ -98,9 +98,9 @@ class SumOp : public framework::OperatorWithKernel {
       }
       // if input sparse vars are not initialized, use an default kernel type.
       return phi::KernelKey(framework::proto::VarType::FP32, ctx.GetPlace());
-    } else if (x_vars[0]->IsType<framework::LoDTensorArray>()) {
+    } else if (x_vars[0]->IsType<phi::TensorArray>()) {
       for (auto& x_var : x_vars) {
-        auto& array = x_var->Get<framework::LoDTensorArray>();
+        auto& array = x_var->Get<phi::TensorArray>();
         for (auto& each : array) {
           if (each.numel() != 0 && each.IsInitialized()) {
             return phi::KernelKey(framework::TransToProtoVarType(each.dtype()),
@@ -108,16 +108,16 @@ class SumOp : public framework::OperatorWithKernel {
           }
         }
       }
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Expected each tensor in Input(x) in sum op has be initialized, but "
           "some tensor in Input(x) is not be initialized, please check your "
           "code.",
           framework::ToTypeName(x_vars[0]->Type())));
     }
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Expected type of Input(X) must be Tensor,  SelectedRows or "
-        "LodTensorArray. But got "
-        "unsupport type: %s.",
+        "DenseTensorArray. But got "
+        "unsupported type: %s.",
         framework::ToTypeName(x_vars[0]->Type())));
   }
 };
@@ -155,22 +155,22 @@ class SumOpVarTypeInference : public framework::VarTypeInference {
       }
 
       if (ctx->InputTypeAnyOf("X",
-                              framework::proto::VarType::LOD_TENSOR_ARRAY)) {
-        if (!ctx->InputTypeAllOf("X",
-                                 framework::proto::VarType::LOD_TENSOR_ARRAY)) {
+                              framework::proto::VarType::DENSE_TENSOR_ARRAY)) {
+        if (!ctx->InputTypeAllOf(
+                "X", framework::proto::VarType::DENSE_TENSOR_ARRAY)) {
           std::ostringstream os;
           for (size_t ind = 0; ind < ctx->InputSize("X"); ++ind) {
             os << "    " << ctx->InputVarName("X", static_cast<int>(ind))
                << " type is " << ctx->GetInputType("X", static_cast<int>(ind))
                << "\n";
           }
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "Not all inputs are tensor array:\n%s", os.str()));
         }
-        var_type = framework::proto::VarType::LOD_TENSOR_ARRAY;
+        var_type = framework::proto::VarType::DENSE_TENSOR_ARRAY;
       } else if (ctx->InputTypeAnyOf("X",
-                                     framework::proto::VarType::LOD_TENSOR)) {
-        var_type = framework::proto::VarType::LOD_TENSOR;
+                                     framework::proto::VarType::DENSE_TENSOR)) {
+        var_type = framework::proto::VarType::DENSE_TENSOR;
       }
 
       ctx->SetOutputType("Out", var_type);

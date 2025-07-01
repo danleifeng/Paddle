@@ -21,21 +21,24 @@ from op_test import OpTest
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestDiagEmbedOp(OpTest):
     def setUp(self):
         self.op_type = "diag_embed"
         self.python_api = paddle.diag_embed
+        self.init_shape()
         self.init_config()
         self.outputs = {'Out': self.target}
 
     def test_check_output(self):
         self.check_output(check_pir=True)
 
+    def init_shape(self):
+        self.shape = (2, 3)
+
     def init_config(self):
-        self.case = np.random.randn(2, 3).astype('float32')
+        self.case = np.random.randn(*self.shape).astype('float32')
         self.inputs = {'Input': self.case}
         self.attrs = {'offset': 0, 'dim1': -2, 'dim2': -1}
         self.target = np.stack([np.diag(r, 0) for r in self.inputs['Input']], 0)
@@ -51,8 +54,13 @@ class TestDiagEmbedOpCase1(TestDiagEmbedOp):
         )
 
 
+class TestDiagEmbedOp_ZeroSize(TestDiagEmbedOp):
+    def init_shape(self):
+        self.shape = (2, 0)
+
+
 class TestDiagEmbedAPICase(unittest.TestCase):
-    @test_with_pir_api
+
     def test_case1(self):
         paddle.enable_static()
         main = paddle.static.Program()

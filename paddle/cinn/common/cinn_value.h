@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/types/any.h>
-#include <glog/logging.h>
 
+#include <glog/logging.h>
+#include <any>
 #include <vector>
 
 #include "paddle/cinn/common/common.h"
@@ -32,6 +32,7 @@ namespace ir {
 
 class Expr;
 class Var;
+class LoweredFunc;
 
 }  // namespace ir
 
@@ -95,7 +96,7 @@ struct CINNValuePack : public Shared<_CINNValuePack_> {
   CINNValue& back() {
     PADDLE_ENFORCE_GT((*operator->()).size(),
                       0,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The size of the array should greater than 0."));
     return (*operator->())[size() - 1];
   }
@@ -103,7 +104,7 @@ struct CINNValuePack : public Shared<_CINNValuePack_> {
   const CINNValue& back() const {
     PADDLE_ENFORCE_GT((*operator->()).size(),
                       0,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The size of the array should greater than 0."));
     return (*operator->())[size() - 1];
   }
@@ -152,6 +153,7 @@ class CINNValue : public cinn_pod_value_t {
   explicit CINNValue(const std::string&);
   explicit CINNValue(const ir::Var& value);
   explicit CINNValue(const ir::Expr& value);
+  explicit CINNValue(const ir::LoweredFunc& value);
   explicit CINNValue(const CINNValuePack& value);
 
   bool defined() const { return type_code_ != kNull; }
@@ -232,7 +234,7 @@ class CINNValue : public cinn_pod_value_t {
   static int TypeCode();
 
  protected:
-  absl::any shared_;
+  std::any shared_;
 };
 
 }  // namespace common

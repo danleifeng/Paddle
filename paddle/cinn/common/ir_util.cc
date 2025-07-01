@@ -15,12 +15,18 @@
 #include "paddle/cinn/common/ir_util.h"
 
 #include <algorithm>
+#include <stack>
 #include <unordered_set>
 
-#include "paddle/cinn/common/cas.h"
+#include "paddle/cinn/common/const_fold.h"
+#include "paddle/cinn/common/simplify_special_pattern.h"
 #include "paddle/cinn/ir/ir_mutator.h"
 #include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
+#include "paddle/cinn/ir/utils/ir_compare.h"
+#include "paddle/cinn/ir/utils/ir_copy.h"
+#include "paddle/cinn/optim/ir_simplify.h"
+#include "paddle/cinn/utils/string.h"
 #include "paddle/common/enforce.h"
 namespace cinn {
 namespace common {
@@ -32,20 +38,20 @@ Expr RampRelatedMul(ir::Ramp *ramp, Expr other) {
   PADDLE_ENFORCE_EQ(
       other.type().ElementOf(),
       Int(32),
-      phi::errors::InvalidArgument("The type of other should be int32."));
-  PADDLE_ENFORCE_EQ(
-      ramp->base.type(),
-      Int(32),
-      phi::errors::InvalidArgument("The type of ramp->base should be int32."));
+      ::common::errors::InvalidArgument("The type of other should be int32."));
+  PADDLE_ENFORCE_EQ(ramp->base.type(),
+                    Int(32),
+                    ::common::errors::InvalidArgument(
+                        "The type of ramp->base should be int32."));
   PADDLE_ENFORCE_EQ(ramp->stride.type(),
                     Int(32),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "The type of ramp->stride should be int32."));
   auto *other_broadcast = other.As<ir::Broadcast>();
   if (other_broadcast) {
     PADDLE_ENFORCE_EQ(ramp->lanes,
                       other_broadcast->lanes,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The lanes of ramp and other should be equal."));
     other = other_broadcast->value;
   }
@@ -56,7 +62,7 @@ Expr RampRelatedMul(ir::Broadcast *broadcast, Expr other) {
   PADDLE_ENFORCE_EQ(
       other.type().lanes(),
       1,
-      phi::errors::InvalidArgument("The lanes of other should be 1."));
+      ::common::errors::InvalidArgument("The lanes of other should be 1."));
   return ir::Broadcast::Make(broadcast->value * other, broadcast->lanes);
 }
 // ramp * ramp
@@ -69,13 +75,13 @@ Expr RampRelatedAdd(ir::Ramp *ramp, Expr other) {
   PADDLE_ENFORCE_EQ(
       other.type().ElementOf(),
       Int(32),
-      phi::errors::InvalidArgument("The type of other should be int32."));
+      ::common::errors::InvalidArgument("The type of other should be int32."));
 
   auto *other_broadcast = other.As<ir::Broadcast>();
   if (other_broadcast) {
     PADDLE_ENFORCE_EQ(ramp->lanes,
                       other_broadcast->lanes,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The lanes of ramp and other should be equal."));
     other = other_broadcast->value;
   }
@@ -85,16 +91,20 @@ Expr RampRelatedAdd(ir::Broadcast *broadcast, Expr other) {
   PADDLE_ENFORCE_EQ(
       other.type().lanes(),
       1,
-      phi::errors::InvalidArgument("The lanes of other should be 1."));
+      ::common::errors::InvalidArgument("The lanes of other should be 1."));
   return ir::Broadcast::Make(broadcast->value + other, broadcast->lanes);
 }
 // ramp + ramp
 Expr RampRelatedAdd(ir::Ramp *ramp, ir::Ramp *other) {
-  CHECK(ramp);
-  CHECK(other);
+  PADDLE_ENFORCE_NOT_NULL(
+      ramp,
+      ::common::errors::InvalidArgument("Ramp pointer should not be null."));
+  PADDLE_ENFORCE_NOT_NULL(other,
+                          ::common::errors::InvalidArgument(
+                              "Other ramp pointer should not be null."));
   if (ramp->lanes == other->lanes) {
-    Expr base_add = cinn::common::AutoSimplify(ramp->base + other->base);
-    Expr stride_add = cinn::common::AutoSimplify(ramp->stride + other->stride);
+    Expr base_add = optim::ArithSimplify(ramp->base + other->base);
+    Expr stride_add = optim::ArithSimplify(ramp->stride + other->stride);
     VLOG(2) << base_add;
     VLOG(2) << stride_add;
     return ir::Ramp::Make(base_add, stride_add, ramp->lanes);
@@ -125,7 +135,7 @@ Expr RampRelatedAdd(Expr a, Expr b) {
     PADDLE_ENFORCE_EQ(
         a_broadcast->lanes,
         b_broadcast->lanes,
-        phi::errors::InvalidArgument(
+        ::common::errors::InvalidArgument(
             "The lanes of a_broadcast and b_broadcast should be equal."));
     return ir::Broadcast::Make(a_broadcast->value + b_broadcast->value,
                                a_broadcast->lanes);
@@ -156,7 +166,7 @@ Expr RampRelatedMul(Expr a, Expr b) {
     PADDLE_ENFORCE_EQ(
         a_broadcast->lanes,
         b_broadcast->lanes,
-        phi::errors::InvalidArgument(
+        ::common::errors::InvalidArgument(
             "The lanes of a_broadcast and b_broadcast should be equal."));
     return ir::Broadcast::Make(a_broadcast->value * b_broadcast->value,
                                a_broadcast->lanes);
@@ -173,30 +183,35 @@ Expr IndiceToAbsOffset(const std::vector<Expr> &shape,
   VLOG(3) << "Begin IndiceToAbsOffset";
   VLOG(3) << "shape is : " << utils::Join(shape, ",");
   VLOG(3) << "indices is : " << utils::Join(indices, ",");
-  PADDLE_ENFORCE_LE(
-      shape.size(),
-      indices.size(),
-      phi::errors::InvalidArgument("The size of shape should be less than or "
-                                   "equal to the size of indices."));
-  Expr res;
-  ir::TryElevateInt32ToInt64(shape);
-  for (int i = 0; i < shape.size(); i++) {
-    CHECK(shape[i].type() == Int(64) || shape[i].type() == Int(32))
-        << "The shape data type currently supports only int32 or int64, but "
-           "the current data type of shape["
-        << i << "] is " << shape[i].type();
-    Expr indice_prod = indices[i];
-    optim::SimplifyCast(&indice_prod);
-    for (int j = i + 1; j < shape.size(); j++) {
-      indice_prod = RampRelatedMul(indice_prod, shape[j]);
-    }
-    if (res.defined()) {
-      res = RampRelatedAdd(res, indice_prod);
+  PADDLE_ENFORCE_LE(shape.size(),
+                    indices.size(),
+                    ::common::errors::InvalidArgument(
+                        "The size of shape should be less than or "
+                        "equal to the size of indices."));
+  Expr res(0);
+
+  for (int32_t i = 0; i < shape.size(); i++) {
+    PADDLE_ENFORCE_EQ(
+        shape[i].type() == Int(64) || shape[i].type() == Int(32),
+        true,
+        ::common::errors::InvalidArgument(
+            "The shape data type currently supports only int32 or int64, but "
+            "the current data type of shape[{}] is {}",
+            i,
+            shape[i].type()));
+
+    Expr indice_cast = indices[i];
+    optim::SimplifyCast(&indice_cast);
+    res = RampRelatedAdd(RampRelatedMul(res, shape[i]), indice_cast);
+    if (res.is_index()) {
+      res = res.as_index().Normalize(ir::IndexExpr::OptLevel::kLevel2);
     } else {
-      res = indice_prod;
+      VLOG(8) << "**** expr is not index ****: " << res;
     }
   }
-  return cinn::common::AutoSimplify(res);
+  VLOG(3) << "End IndiceToAbsOffset";
+
+  return res;
 }
 
 Expr IndiceToAbsOffset(const std::vector<int> &shape,
@@ -246,12 +261,12 @@ void Substitute(Expr *expr, const std::map<const ir::_Var_ *, Expr> &var_map) {
 }
 
 bool is_zero(Expr v) {
-  v = AutoSimplify(v);
+  v = optim::ArithSimplify(v);
   auto *int_n = v.As<ir::IntImm>();
   auto *float_n = v.As<ir::FloatImm>();
 
   if (int_n) return int_n->value == 0;
-  if (float_n) return float_n->value = 0.f;
+  if (float_n) return float_n->value == 0.f;
   return false;
 }
 
@@ -262,7 +277,7 @@ Expr CastIfNeeded(Expr body, Type type) {
 
 bool MathEqual(const Expr &a, const Expr &b) {
   auto c = a - b;
-  c = AutoSimplify(c);
+  c = optim::ArithSimplify(c);
   return is_zero(c);
 }
 
@@ -271,7 +286,10 @@ Expr select(Expr cond, Expr true_value, Expr false_value) {
 }
 
 Expr and_all(const std::vector<Expr> &conds) {
-  CHECK(!conds.empty());
+  PADDLE_ENFORCE_NE(conds.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The conditions vector should not be empty."));
   Expr res = conds.front();
   for (int i = 1; i < conds.size(); i++) {
     res = ir::And::Make(res, conds[i]);
@@ -280,7 +298,10 @@ Expr and_all(const std::vector<Expr> &conds) {
 }
 
 Expr or_all(const std::vector<Expr> &conds) {
-  CHECK(!conds.empty());
+  PADDLE_ENFORCE_NE(conds.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The conditions vector should not be empty."));
   Expr res = conds.front();
   for (int i = 1; i < conds.size(); i++) {
     res = ir::Or::Make(res, conds[i]);
@@ -291,7 +312,7 @@ Expr or_all(const std::vector<Expr> &conds) {
 void CheckTensorUniqueInExpr(Expr expr) {
   auto tensor_uniq = ir::ir_utils::CollectIRNodes(
       expr, [](const Expr *x) { return x->as_tensor(); });
-  absl::flat_hash_map<std::string, const ir::_Tensor_ *> tensor_names;
+  paddle::flat_hash_map<std::string, const ir::_Tensor_ *> tensor_names;
   for (auto &t : tensor_uniq) {
     auto *tp = t.as_tensor();
     if (!tensor_names.count(tp->name)) {
@@ -300,46 +321,8 @@ void CheckTensorUniqueInExpr(Expr expr) {
       PADDLE_ENFORCE_EQ(
           tensor_names[tp->name],
           tp,
-          phi::errors::InvalidArgument(
+          ::common::errors::InvalidArgument(
               "Found tensor not unique, The original express is %d .", expr));
-    }
-  }
-}
-
-void CheckBufferUniqueInExpr(Expr expr) {
-  // the buffers exists in tensor and lowered functions.
-  CheckTensorUniqueInExpr(expr);
-
-  auto tensors = ir::ir_utils::CollectIRNodes(
-      expr, [](const Expr *x) { return x->as_tensor(); });
-  auto funcs = ir::ir_utils::CollectIRNodes(
-      expr, [](const Expr *x) { return x->as_lowered_func(); });
-
-  absl::flat_hash_map<std::string, const ir::_Buffer_ *> buffer_name;
-  auto check_buffer_uniq = [&](const ir::_Buffer_ *b) {
-    if (buffer_name.count(b->name)) {
-      PADDLE_ENFORCE_EQ(
-          buffer_name[b->name],
-          b,
-          phi::errors::InvalidArgument(
-              "Found buffer not unique, The original express is %d .", expr));
-    } else {
-      buffer_name[b->name] = b->const_self();
-    }
-  };
-  for (auto &e : tensors) {
-    auto *t = e.as_tensor();
-    if (t->buffer.defined()) {
-      check_buffer_uniq(t->buffer->const_self());
-    }
-  }
-
-  for (auto &e : funcs) {
-    auto *f = e.as_lowered_func();
-    for (auto &b : f->temp_bufs) {
-      if (b.defined()) {
-        check_buffer_uniq(b->const_self());
-      }
     }
   }
 }
@@ -396,7 +379,10 @@ std::vector<std::string> GatherItersToTensorProducer(
 
     void Visit(const ir::Store *op, Expr *expr) {
       if (op->tensor.as_tensor()->name == target_tensor_name) {
-        CHECK(iters.empty());
+        PADDLE_ENFORCE_EQ(iters.empty(),
+                          true,
+                          ::common::errors::InvalidArgument(
+                              "The iterators vector should be empty."));
         for (auto &e : for_stack) {
           auto *for_n = e->As<ir::For>();
           auto *polyfor_n = e->As<ir::PolyFor>();
@@ -467,20 +453,102 @@ std::vector<Expr *> GetForloopStackToStore(Expr *expr,
 }
 
 Expr max(Expr a, Expr b) {
-  PADDLE_ENFORCE_EQ(
-      a.type(),
-      b.type(),
-      phi::errors::InvalidArgument("The type of a and b should be equal."));
+  PADDLE_ENFORCE_EQ(a.type(),
+                    b.type(),
+                    ::common::errors::InvalidArgument(
+                        "The type of a and b should be equal."));
   return ir::Max::Make(a, b);
 }
 
 Expr min(Expr a, Expr b) {
-  PADDLE_ENFORCE_EQ(
-      a.type(),
-      b.type(),
-      phi::errors::InvalidArgument("The type of a and b should be equal."));
+  PADDLE_ENFORCE_EQ(a.type(),
+                    b.type(),
+                    ::common::errors::InvalidArgument(
+                        "The type of a and b should be equal."));
   return ir::Min::Make(a, b);
 }
 
+void OpDataTypePromote(Expr *expr) {
+  struct TypePromote : public ir::IRMutator<> {
+    void operator()(Expr *expr) { ir::IRMutator<>::Visit(expr, expr); }
+    // type promote for operand of binary op
+#define __(op__)                                            \
+  void Visit(const ir::op__ *op, ir::Expr *expr) override { \
+    ir::TryElevateInt32ToInt64_((*expr)->operands);         \
+    IRMutator::Visit(op, expr);                             \
+  };
+    __(Sum)
+    __(Product)
+    NODETY_BINARY_OP_FOR_EACH(__)
+#undef __
+
+    void Visit(const ir::Select *op, ir::Expr *expr) override {
+      auto node = expr->As<ir::Select>();
+
+      auto promote_args = std::move(
+          ir::TryElevateInt32ToInt64({node->true_value, node->false_value}));
+      node->true_value = promote_args.at(0);
+      node->false_value = promote_args.at(1);
+
+      IRMutator::Visit(op, expr);
+    }
+
+    void Visit(const ir::Load *op, ir::Expr *expr) {
+      auto node = expr->As<ir::Load>();
+      ir::TryElevateInt32ToInt64_(node->indices);
+      IRMutator::Visit(op, expr);
+    }
+
+    void Visit(const ir::Store *op, ir::Expr *expr) {
+      auto node = expr->As<ir::Store>();
+      ir::TryElevateInt32ToInt64_(node->indices);
+      IRMutator::Visit(op, expr);
+    }
+
+    void Visit(const ir::Let *op, ir::Expr *expr) {
+      auto node = expr->As<ir::Let>();
+      // For Symbol of LetOp, we need to insert a cast to convert its type, but
+      // inside LetOp, we should directly convert the Symbol type instead of
+      // inserting a cast.so we set the flag to false before the conversion and
+      // set it to true after the conversion, e.g.
+      // inside LetOp: type of v, v1 are int32.
+      //   int32 v = v1 * 2   ==TypePromote==>  int64 v = v1 * 2ll
+      // outside LetOp: type of v, v2 are int32 and v is defined by LetOp.
+      //   v2 = v * 2         ==TypePromote==>  v2 = (int64)v * 2ll
+      if (node->symbol.is_var()) {
+        node->symbol.as_var()->is_let_symbol = false;
+      }
+      auto promote_args =
+          std::move(ir::TryElevateInt32ToInt64({node->symbol, node->body}));
+      node->symbol = promote_args.at(0);
+      node->body = promote_args.at(1);
+      if (node->symbol.is_var()) {
+        node->symbol.as_var()->is_let_symbol = true;
+      }
+      IRMutator::Visit(op, expr);
+    }
+  };
+
+  TypePromote visitor;
+  visitor(expr);
+}
+
+void OpDataTypePromote(ir::Module *module) {
+  auto node = module->As<ir::_Module_>();
+  for (auto &func : node->functions) {
+    OpDataTypePromote(&func->body);
+  }
+  for (auto &buffer : node->buffers) {
+    OpDataTypePromote(&buffer);
+  }
+  for (auto &submodule : node->submodules) {
+    OpDataTypePromote(&submodule);
+  }
+}
+
+void OpDataTypePromote(ir::LoweredFunc *func) {
+  auto node = func->As<ir::_LoweredFunc_>();
+  OpDataTypePromote(&node->body);
+}
 }  // namespace common
 }  // namespace cinn

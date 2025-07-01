@@ -56,10 +56,6 @@ void FusedBatchNormActKernel(const Context &dev_ctx,
 #if defined(PADDLE_WITH_CUDA) and CUDNN_VERSION >= 7401
   using CudnnDataType = phi::backends::gpu::CudnnDataType<T>;
   using BatchNormParamType = typename CudnnDataType::BatchNormParamType;
-  bool is_gpu_place = dev_ctx.GetPlace().GetType() == phi::AllocationType::GPU;
-  PADDLE_ENFORCE_EQ(is_gpu_place,
-                    true,
-                    phi::errors::PreconditionNotMet("It must use CUDAPlace."));
   double epsilon1 = static_cast<double>(epsilon);
 
   if (epsilon1 <= CUDNN_BN_MIN_EPSILON - FLT_EPSILON) {
@@ -74,7 +70,7 @@ void FusedBatchNormActKernel(const Context &dev_ctx,
   const auto &x_dims = x.dims();
   PADDLE_ENFORCE_EQ(x_dims.size() >= 2 && x_dims.size() <= 5,
                     true,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "The Input dim size should be between 2 and 5"));
 
   // Run training mode.
@@ -101,7 +97,8 @@ void FusedBatchNormActKernel(const Context &dev_ctx,
     if (act_type == "relu") {
       phi::funcs::ReluCUDAFunctor<T>()(dev, x_v, y_v);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented("Unsupported activation type"));
+      PADDLE_THROW(
+          common::errors::Unimplemented("Unsupported activation type"));
     }
     return;
   }
@@ -144,7 +141,7 @@ void FusedBatchNormActKernel(const Context &dev_ctx,
 
   PADDLE_ENFORCE_NOT_NULL(
       reserve_space,
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "The argument ReserveSpace of batch_norm op is not found."));
 
   // --------------- cudnn batchnorm workspace ---------------
@@ -212,7 +209,7 @@ void FusedBatchNormActKernel(const Context &dev_ctx,
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::cudnnDestroyTensorDescriptor(bn_param_desc_));
 #else
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "The fused_batch_norm_act operator is not supported on GPU "
       "when CUDNN version < 7.4.1"));
 #endif

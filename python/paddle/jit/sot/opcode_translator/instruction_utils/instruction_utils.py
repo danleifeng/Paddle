@@ -57,6 +57,13 @@ class Instruction:
         return id(self) == id(instr)
 
 
+def get_instruction_size(instr: Instruction) -> int:
+    cache_size = 0
+    if sys.version_info >= (3, 11):
+        cache_size = PYOPCODE_CACHE_SIZE.get(instr.opname, 0)
+    return 2 * (cache_size + 1)
+
+
 def gen_instr(name, arg=None, argval=None, gened=True, jump_to=None):
     return Instruction(
         opcode=dis.opmap[name],
@@ -84,11 +91,91 @@ def convert_instruction(instr: dis.Instruction) -> Instruction:
         instr.arg,
         instr.argval,
         instr.offset,
-        instr.starts_line,
+        instr.line_number if sys.version_info >= (3, 13) else instr.starts_line,
         instr.is_jump_target,
         jump_to=None,
         is_generated=False,
     )
+
+
+def expand_super_instrs(instructions: list[Instruction]) -> list[Instruction]:
+
+    expanded_instrs = []
+
+    def replace_jump_target(instrs, old_target, new_target):
+        for instr in instrs:
+            if instr.jump_to == old_target:
+                instr.jump_to = new_target
+
+    def copy_instruction(
+        instr, opname, argval, arg, is_jump_target, is_generated
+    ):
+        return Instruction(
+            opcode=dis.opmap[opname],
+            opname=opname,
+            arg=arg,
+            argval=argval,
+            is_jump_target=is_jump_target,
+            is_generated=is_generated,
+            jump_to=instr.jump_to,
+        )
+
+    FUSED_INSTS: dict[str, tuple[str, str]] = {
+        "LOAD_FAST_LOAD_FAST": ("LOAD_FAST", "LOAD_FAST"),
+        "STORE_FAST_STORE_FAST": ("STORE_FAST", "STORE_FAST"),
+        "STORE_FAST_LOAD_FAST": ("STORE_FAST", "LOAD_FAST"),
+    }
+
+    for instr in instructions:
+        if instr.opname in FUSED_INSTS:
+            instr1 = copy_instruction(
+                instr,
+                FUSED_INSTS[instr.opname][0],
+                instr.argval[0],
+                instr.arg >> 4,
+                instr.is_jump_target,
+                True,
+            )
+            instr2 = copy_instruction(
+                instr,
+                FUSED_INSTS[instr.opname][1],
+                instr.argval[1],
+                instr.arg & 15,
+                False,
+                False,
+            )
+            replace_jump_target(instructions, instr, instr1)
+            expanded_instrs.append(instr1)
+            expanded_instrs.append(instr2)
+        # If the LOAD_ATTR opcode will lead to load_method in 3.13+, we manually split it into two instructions,
+        # to avoid Uncontrollable specialization that changes the behavior of LOAD_ATTR,
+        # which can lead to incorrect results when the current graph is smaller than the MIN_GRAPH_SIZE
+        elif (
+            sys.version_info >= (3, 13)
+            and instr.opname == "LOAD_ATTR"
+            and instr.arg & 1
+        ):
+            instr1 = copy_instruction(
+                instr,
+                "LOAD_ATTR",
+                instr.argval,
+                instr.arg & ~1,
+                instr.is_jump_target,
+                True,
+            )
+            instr2 = Instruction(
+                dis.opmap["PUSH_NULL"],
+                "PUSH_NULL",
+                None,
+                None,
+                is_generated=True,
+            )
+            replace_jump_target(instructions, instr, instr1)
+            expanded_instrs.append(instr1)
+            expanded_instrs.append(instr2)
+        else:
+            expanded_instrs.append(instr)
+    return expanded_instrs
 
 
 def get_instructions(code: types.CodeType) -> list[Instruction]:
@@ -134,7 +221,7 @@ def get_instructions(code: types.CodeType) -> list[Instruction]:
     #         XX 388    <-  256 + 132
     # filter all EXTENDED_ARG here
     instrs = [x for x in instrs if x.opname != "EXTENDED_ARG"]
-    return instrs
+    return expand_super_instrs(instrs)
 
 
 def modify_instrs(instructions: list[Instruction]) -> None:
@@ -154,8 +241,10 @@ def modify_instrs(instructions: list[Instruction]) -> None:
     modify_completed = False
     while not modify_completed:
         reset_offset(instructions)
-        relocate_jump_target(instructions)
-        modify_completed = modify_extended_args(instructions)
+        has_inverted_jump = relocate_jump_target(instructions)
+        modify_completed = (
+            modify_extended_args(instructions) and not has_inverted_jump
+        )
 
 
 def reset_offset(instructions: list[Instruction]) -> None:
@@ -180,7 +269,9 @@ def reset_offset(instructions: list[Instruction]) -> None:
         instr.offset = idx * 2
 
 
-def correct_jump_direction(instr: Instruction, arg: int) -> Instruction:
+def correct_jump_direction(
+    instr: Instruction, arg: int
+) -> tuple[Instruction, bool]:
     """
     Corrects the jump direction of the given instruction.
     NOTE(zrr1999): In Python 3.11, JUMP_ABSOLUTE is removed, so python generates JUMP_FORWARD or JUMP_BACKWARD instead,
@@ -188,10 +279,11 @@ def correct_jump_direction(instr: Instruction, arg: int) -> Instruction:
 
     Args:
         instr (Instruction): The instruction to be corrected.
+        invert_jump (bool): Whether to invert the jump direction.
     """
     if instr.opname in ABS_JUMP:
         instr.arg = arg
-        return instr
+        return instr, False
     elif instr.opname in REL_JUMP:
         if arg < 0:
             if instr.opname in REL_BWD_JUMP:
@@ -207,14 +299,16 @@ def correct_jump_direction(instr: Instruction, arg: int) -> Instruction:
                 instr.opname = backward_op_name
                 instr.opcode = dis.opmap[backward_op_name]
             instr.arg = -arg
+            invert_jump = True
         else:
             instr.arg = arg
-        return instr
+            invert_jump = False
+        return instr, invert_jump
     else:
         raise ValueError(f"unknown jump type: {instr.opname}")
 
 
-def relocate_jump_target(instructions: list[Instruction]) -> None:
+def relocate_jump_target(instructions: list[Instruction]) -> bool:
     """
     If a jump instruction is found, this function will adjust the jump targets based on the presence of EXTENDED_ARG instructions.
     If an EXTENDED_ARG instruction exists for the jump target, use its offset as the new target.
@@ -223,8 +317,9 @@ def relocate_jump_target(instructions: list[Instruction]) -> None:
         instructions (list): The list of Instruction objects representing bytecode instructions.
 
     Returns:
-        None
+        bool: True if the jump direction is inverted, False otherwise.
     """
+    has_inverted_jump = False
     extended_arg = []
     for instr in instructions:
         if instr.opname == "EXTENDED_ARG":
@@ -252,7 +347,8 @@ def relocate_jump_target(instructions: list[Instruction]) -> None:
 
             if sys.version_info >= (3, 10):
                 new_arg //= 2
-            correct_jump_direction(instr, new_arg)
+            _, invert_jump = correct_jump_direction(instr, new_arg)
+            has_inverted_jump = has_inverted_jump or invert_jump
             assert instr.arg is not None
             if extended_arg:
                 instr.arg &= 0xFF
@@ -266,6 +362,7 @@ def relocate_jump_target(instructions: list[Instruction]) -> None:
                 if new_arg > 0:
                     extended_arg[0].arg += new_arg << 8
         extended_arg.clear()
+    return has_inverted_jump
 
 
 def modify_extended_args(instructions: list[Instruction]) -> bool:
@@ -323,11 +420,15 @@ def modify_extended_args(instructions: list[Instruction]) -> bool:
 
 
 def modify_vars(instructions: list[Instruction], code_options):
-    co_names = code_options['co_names']
     co_varnames = code_options['co_varnames']
     co_freevars = code_options['co_freevars']
     for instrs in instructions:
-        if instrs.opname in ['LOAD_FAST', 'LOAD_FAST_CHECK', 'STORE_FAST']:
+        if instrs.opname in [
+            'LOAD_FAST',
+            'LOAD_FAST_CHECK',
+            'STORE_FAST',
+            'DELETE_FAST',
+        ]:
             assert (
                 instrs.argval in co_varnames
             ), f"`{instrs.argval}` not in {co_varnames}"
@@ -339,6 +440,20 @@ def modify_vars(instructions: list[Instruction], code_options):
                     instrs.argval in namemap
                 ), f"`{instrs.argval}` not in {namemap}"
                 instrs.arg = namemap.index(instrs.argval)
+        elif instrs.opname in [
+            'LOAD_FAST_LOAD_FAST',
+            'STORE_FAST_STORE_FAST',
+            'STORE_FAST_LOAD_FAST',
+        ]:
+            assert (
+                instrs.argval[0] in co_varnames
+            ), f"`{instrs.argval[0]}` not in {co_varnames}"
+            assert (
+                instrs.argval[1] in co_varnames
+            ), f"`{instrs.argval[1]}` not in {co_varnames}"
+            instrs.arg = (
+                co_varnames.index(instrs.argval[0]) << 4
+            ) + co_varnames.index(instrs.argval[1])
 
 
 def calc_offset_from_bytecode_offset(
@@ -382,9 +497,9 @@ def instrs_info(instrs, mark=None, range=None, want_str=True):
             "{line:<8s}{is_jump_target:>2s}{offset:>4d} {opname:<30s}{arg:<4s}{argval:<40s}{mark}".format(
                 line=str(instr.starts_line) if instr.starts_line else "",
                 is_jump_target=">>" if instr.is_jump_target else "  ",
-                offset=instr.offset
-                if instr.offset or instr.offset == 0
-                else -1,
+                offset=(
+                    instr.offset if instr.offset or instr.offset == 0 else -1
+                ),
                 opname=instr.opname,
                 arg=str(instr.arg) if instr.arg is not None else "",
                 argval=f"({instr.argval})" if instr.argval else "",

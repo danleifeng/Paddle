@@ -25,7 +25,6 @@ import paddle
 from paddle import base
 from paddle.base import core
 from paddle.framework import in_pir_mode
-from paddle.pir_utils import test_with_pir_api
 
 
 def sample_output_one_dimension(out, dim):
@@ -385,11 +384,6 @@ class TestMultinomialError(unittest.TestCase):
         with self.assertRaises(ValueError):
             y = paddle.multinomial(paddle.to_tensor([1.0, 2.0, -3.0]))
 
-        with self.assertRaises(ValueError):
-            prob = paddle.rand([20, 1000])
-            prob[1:0] = 0
-            y = paddle.multinomial(prob)
-
 
 class TestRandomValue(unittest.TestCase):
     def test_fixed_random_number(self):
@@ -458,7 +452,6 @@ class TestMultinomialTensorNumSamples(UnittestBase):
         out = paddle.multinomial(x, num_samples)
         return out
 
-    @test_with_pir_api
     def test_static(self):
         paddle.enable_static()
         main_prog = paddle.static.Program()

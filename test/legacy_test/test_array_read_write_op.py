@@ -22,7 +22,6 @@ from paddle.base import Program, core, program_guard
 from paddle.base.backward import append_backward
 from paddle.base.executor import Executor
 from paddle.base.framework import default_main_program
-from paddle.pir_utils import test_with_pir_api
 
 
 def _test_read_write(x):
@@ -199,7 +198,6 @@ class TestPirArrayOp(unittest.TestCase):
             fetched_out1, np.ones([1, 3], dtype="float32") * 6
         )
 
-    @test_with_pir_api
     def test_array_backward(self):
         np.random.seed(2013)
         main_program = paddle.static.Program()
@@ -246,7 +244,7 @@ class TestPirArrayOp(unittest.TestCase):
                     feed={'d0': d},
                     fetch_list=[mean.name, d0.grad_name, mem_array.grad_name],
                 )
-                # this ans is wrong array is empty at begining ,so it no grad.
+                # this ans is wrong array is empty at beginning ,so it no grad.
                 np.testing.assert_allclose(res[2], [[0.1] * 10], rtol=1e-05)
 
             mean = 0.6097253

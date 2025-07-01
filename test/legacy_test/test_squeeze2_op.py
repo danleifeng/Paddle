@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -176,6 +175,14 @@ class TestSqueezeOp3(TestSqueezeOp):
         self.new_shape = (6, 5, 1, 4)
 
 
+# Correct: Just not change shape.
+class TestSqueezeOp4(TestSqueezeOp):
+    def init_test_case(self):
+        self.ori_shape = (3, 1, 5, 2)
+        self.axes = (2, 3)
+        self.new_shape = (3, 1, 5, 2)
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
@@ -205,7 +212,6 @@ class TestSqueezeAPI(unittest.TestCase):
 
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_error(self):
         def test_axes_type():
             with paddle.static.program_guard(
@@ -222,6 +228,27 @@ class TestSqueezeAPI(unittest.TestCase):
 class TestSqueezeInplaceAPI(TestSqueezeAPI):
     def executed_api(self):
         self.squeeze = paddle.squeeze_
+
+
+class TestSqueezeAPI_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.executed_api()
+
+    def executed_api(self):
+        self.squeeze = paddle.squeeze
+
+    def test_api(self):
+        paddle.disable_static()
+        input_data = np.random.random([3, 2, 1]).astype("float32")
+        x = paddle.to_tensor(input_data)
+        x.stop_gradient = False
+        # axis set to 0-size
+        out = self.squeeze(x, axis=paddle.to_tensor([], dtype=paddle.int32))
+        np.testing.assert_allclose(out.numpy(), x.numpy())
+
+        out.backward()
+        np.testing.assert_allclose(x.grad.shape, x.shape)
+        paddle.enable_static()
 
 
 if __name__ == "__main__":

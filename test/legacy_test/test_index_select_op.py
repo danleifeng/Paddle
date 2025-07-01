@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 from paddle import base
 from paddle.base import Program, core, program_guard
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(1024)
 
@@ -34,7 +33,9 @@ class TestIndexSelectOp(OpTest):
         self.init_dtype_type()
 
         index_np = np.random.randint(
-            low=0, high=self.x_shape[self.dim], size=self.index_size
+            low=-self.x_shape[self.dim],
+            high=self.x_shape[self.dim],
+            size=self.index_size,
         )
         x_np = np.random.random(self.x_shape).astype(self.x_type)
         if self.dtype == np.complex64 or self.dtype == np.complex128:
@@ -45,7 +46,7 @@ class TestIndexSelectOp(OpTest):
         self.inputs = {'X': x_np, 'Index': index_np}
         self.attrs = {'dim': self.dim}
         outer_loop = np.prod(self.x_shape[: self.dim])
-        x_reshape = [outer_loop] + list(self.x_shape[self.dim :])
+        x_reshape = [outer_loop, *self.x_shape[self.dim :]]
         x_np_reshape = np.reshape(x_np, tuple(x_reshape))
         out_list = []
         for i in range(outer_loop):
@@ -91,6 +92,55 @@ class TestIndexSelectOpCase2(TestIndexSelectOp):
         self.index_size = 10
 
 
+class TestIndexSelectOp_ZeroSize(OpTest):
+    def setUp(self):
+        self.python_api = paddle.index_select
+        self.public_python_api = paddle.index_select
+        self.op_type = "index_select"
+        self.init_dtype_type()
+
+        index_np = np.random.randint(
+            low=-self.x_shape[self.dim],
+            high=self.x_shape[self.dim],
+            size=self.index_size,
+        )
+        x_np = np.random.random(self.x_shape).astype(self.x_type)
+        if self.dtype == np.complex64 or self.dtype == np.complex128:
+            x_np = (
+                np.random.random(self.x_shape)
+                + 1j * np.random.random(self.x_shape)
+            ).astype(self.x_type)
+        self.inputs = {'X': x_np, 'Index': index_np}
+        self.attrs = {'dim': self.dim}
+        outer_loop = np.prod(self.x_shape[: self.dim])
+        x_reshape = [outer_loop, *self.x_shape[self.dim :]]
+        x_np_reshape = np.reshape(x_np, tuple(x_reshape))
+        out_list = []
+        for i in range(outer_loop):
+            for j in range(self.index_size):
+                out_list.append(x_np_reshape[i, index_np[j]])
+        self.out_shape = list(self.x_shape)
+        self.out_shape[self.dim] = self.index_size
+        self.out_shape = tuple(self.out_shape)
+
+        out = np.reshape(out_list, self.out_shape)
+        self.outputs = {'Out': out}
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_check_grad_normal(self):
+        self.check_grad(['X'], 'Out', check_pir=True)
+
+    def init_dtype_type(self):
+        self.x_type = np.float64
+        self.index_type = np.int64
+        self.dim = 1
+        # shape[dim] can not be 0.
+        self.x_shape = (0, 10, 0, 0)
+        self.index_size = 10
+
+
 class TestIndexSelectOpCaseSingleThread(TestIndexSelectOp):
     def init_dtype_type(self):
         if base.is_compiled_with_cuda():
@@ -111,6 +161,18 @@ class TestIndexSelectFP16OP(TestIndexSelectOp):
         self.index_size = 100
 
 
+class TestIndexSelectBoolOP(TestIndexSelectOp):
+    def init_dtype_type(self):
+        self.dim = 1
+        self.x_type = bool
+        self.index_type = np.int64
+        self.x_shape = (100, 4, 5)
+        self.index_size = 100
+
+    def test_check_grad_normal(self):
+        pass
+
+
 # no scatter op (the backward op of index_select/gather) for bf16
 @unittest.skipIf(
     not paddle.is_compiled_with_cuda(), "paddle is not compiled with cuda"
@@ -124,13 +186,15 @@ class TestIndexSelectBF16Op(OpTest):
         self.init_dtype_type()
         self.if_skip_cinn()
         index_np = np.random.randint(
-            low=0, high=self.x_shape[self.dim], size=self.index_size
+            low=-self.x_shape[self.dim],
+            high=self.x_shape[self.dim],
+            size=self.index_size,
         )
         x_np = np.random.random(self.x_shape).astype(np.float32)
         self.inputs = {'X': convert_float_to_uint16(x_np), 'Index': index_np}
         self.attrs = {'dim': self.dim}
         outer_loop = np.prod(self.x_shape[: self.dim])
-        x_reshape = [outer_loop] + list(self.x_shape[self.dim :])
+        x_reshape = [outer_loop, *self.x_shape[self.dim :]]
         x_np_reshape = np.reshape(x_np, tuple(x_reshape))
         out_list = []
         for i in range(outer_loop):
@@ -193,7 +257,6 @@ class TestIndexSelectAPI(unittest.TestCase):
         ).astype("float32")
         self.data_index = np.array([0, 1, 1]).astype('int32')
 
-    @test_with_pir_api
     def test_index_select_api(self):
         paddle.enable_static()
         self.input_data()

@@ -98,14 +98,19 @@ cinn_buffer_t *CreateBufferFromNumpyImpl(common::NVGPUArch, py::array data) {
       buffer->memory, data.data(), data.nbytes(), cudaMemcpyHostToDevice));
   return buffer;
 #else
-  PADDLE_THROW(phi::errors::Fatal(
+  PADDLE_THROW(::common::errors::Fatal(
       "To use CUDA backends, you need to set WITH_CUDA ON!"));
 #endif
 }
 
 cinn_buffer_t *CreateBufferFromNumpyImpl(common::HygonDCUArchHIP,
                                          py::array data) {
-  PADDLE_THROW(phi::errors::Unimplemented("CINN old obsolete code!"));
+  PADDLE_THROW(::common::errors::Unimplemented("CINN old obsolete code!"));
+}
+
+cinn_buffer_t *CreateBufferFromNumpyImpl(common::HygonDCUArchSYCL,
+                                         py::array data) {
+  PADDLE_THROW(::common::errors::Unimplemented("CINN old obsolete code!"));
 }
 
 cinn_buffer_t *InterfaceCreateBufferFromNumpy(common::Arch arch,
@@ -131,7 +136,7 @@ void BufferCopyTo(const cinn_buffer_t &buffer, py::array array) {
     CUDA_CALL(cudaMemcpy(
         array_data, buffer.memory, array.nbytes(), cudaMemcpyDeviceToHost));
 #else
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(::common::errors::Fatal(
         "To use CUDA backends, you need to set WITH_CUDA ON!"));
 #endif
 
@@ -159,7 +164,7 @@ py::array BufferHostMemoryToNumpy(cinn_buffer_t &buffer) {  // NOLINT
   } else if (buffer.type == cinn_bool_t()) {
     dt = py::dtype::of<bool>();
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument("Not supported type found"));
+    PADDLE_THROW(::common::errors::InvalidArgument("Not supported type found"));
   }
 
   py::array::ShapeContainer shape(buffer.dims, buffer.dims + buffer.dimensions);
@@ -363,9 +368,6 @@ void BindCinnRuntime(py::module *m) {
       .def("cinn_pod_value_to_void_p", &cinn_pod_value_to_void_p)
       .def("cinn_pod_value_to_buffer_p", &cinn_pod_value_to_buffer_p);
 
-  m->def("set_cinn_cudnn_deterministic",
-         &cinn::runtime::SetCinnCudnnDeterministic,
-         py::arg("state") = true);
   m->def("seed", &cinn::runtime::RandomSeed::GetOrSet, py::arg("seed") = 0);
   m->def("clear_seed", &cinn::runtime::RandomSeed::Clear);
 }

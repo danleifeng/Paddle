@@ -14,15 +14,17 @@
 
 from __future__ import annotations
 
+import functools
 import math
-from typing import TYPE_CHECKING, Literal, Sequence, overload
+import operator
+from typing import TYPE_CHECKING, Literal, overload
 
 import paddle
 from paddle import _C_ops, base, in_dynamic_mode
 from paddle.static.nn.control_flow import Assert
 from paddle.utils import deprecated
 
-from ...base.data_feeder import check_variable_and_dtype
+from ...base.data_feeder import check_type, check_variable_and_dtype
 from ...base.framework import (
     _current_expected_place,
     core,
@@ -34,6 +36,7 @@ from ...common_ops_import import Variable
 from ...tensor.manipulation import reshape
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from typing import Callable, TypeAlias
 
     from paddle import Tensor
@@ -98,18 +101,18 @@ def dice_loss(
     ), "The rank of input should be greater than or equal to 2."
     assert len(input.shape) == len(label.shape), (
         "The rank of input and label should be equal, "
-        "but received input: %d, label: %d."
-        % (len(input.shape), len(label.shape))
+        f"but received input: {len(input.shape)}, label: {len(label.shape)}."
     )
     assert label.shape[-1] == 1, (
         "The last dimension of label should be 1, "
-        "but received %d." % label.shape[-1]
+        f"but received {label.shape[-1]}."
     )
     assert (
         input.shape[:-1] == label.shape[:-1]
     ), "All dimensions should be equal except the last one."
     assert (
-        input.numel() > 0 and label.numel() > 0
+        functools.reduce(operator.mul, input.shape) != 0
+        and functools.reduce(operator.mul, label.shape) != 0
     ), "Any dimension of input and label cannot be equal to 0."
 
     label = paddle.squeeze(label, [-1])
@@ -288,7 +291,19 @@ def base_softmax_with_cross_entropy(
              (got input_dims{input_dims}, label_dims{label_dims})'
         )
     if input_dims - 1 == label_dims:
-        label = paddle.unsqueeze(label, axis=axis)
+        batch_size = label.shape[0]
+        new_shape = [batch_size, logits.shape[1]]
+        label = paddle.reshape(label, new_shape)
+
+        # origin function
+        # -------
+        # label = paddle.unsqueeze(label, axis)
+        # ------
+
+        # notice : dim of label [-1,2,10] while logits is [-1,1] ,if use unsquezee
+        # logits [-1,1]->[-1,1,1], but input need 1 != 2 so change
+        # the modified function make logits [-1,1] -> [-1,2] (uncertain)
+        # another possible modify [-1,1] -> [-1,2,1]
     if in_dynamic_or_pir_mode():
         softmax, loss = _C_ops.cross_entropy_with_softmax(
             logits,
@@ -559,24 +574,9 @@ def edit_distance(
 
     # remove some tokens from input and labels
     if ignored_tokens is not None and len(ignored_tokens) > 0:
-        erased_input = helper.create_variable_for_type_inference(dtype="int64")
-        erased_label = helper.create_variable_for_type_inference(dtype="int64")
-
-        helper.append_op(
-            type="sequence_erase",
-            inputs={"X": [input]},
-            outputs={"Out": [erased_input]},
-            attrs={"tokens": ignored_tokens},
+        raise ValueError(
+            f'Expected ignored_tokens is None (got {ignored_tokens})'
         )
-        input = erased_input
-
-        helper.append_op(
-            type="sequence_erase",
-            inputs={"X": [label]},
-            outputs={"Out": [erased_label]},
-            attrs={"tokens": ignored_tokens},
-        )
-        label = erased_label
 
     if in_dynamic_mode():
         return _C_ops.edit_distance(
@@ -642,7 +642,7 @@ def binary_cross_entropy(
     Parameters:
         input (Tensor): The input predications tensor. 2-D tensor with shape: [N, *],
             N is batch_size, `*` means number of additional dimensions. The ``input``
-            should always be the output of sigmod.  Available dtype is float16, float32, float64.
+            should always be the output of sigmoid.  Available dtype is float16, float32, float64.
         label (Tensor): The target labels tensor. 2-D tensor with the same shape as
             ``input``. The target labels which values should be numbers between 0 and 1.
             Available dtype is float16, float32, float64.
@@ -829,6 +829,19 @@ def binary_cross_entropy_with_logits(
         )
 
     if in_dynamic_or_pir_mode():
+        if in_pir_mode():
+            check_type(
+                logit,
+                'logit',
+                paddle.pir.Value,
+                'binary_cross_entropy_with_logits',
+            )
+            check_type(
+                label,
+                'label',
+                paddle.pir.Value,
+                'binary_cross_entropy_with_logits',
+            )
         one = _C_ops.full(
             [1],
             1.0,
@@ -1092,6 +1105,7 @@ def smooth_l1_loss(
     label: Tensor,
     reduction: _ReduceMode = 'mean',
     delta: float = 1.0,
+    is_huber: bool = True,
     name: str | None = None,
 ) -> Tensor:
     r"""
@@ -1130,6 +1144,7 @@ def smooth_l1_loss(
             The value determines how large the errors need to be to use L1. Errors
             smaller than delta are minimized with L2. Parameter is ignored for
             negative/zero values. Default = 1.0
+        is_huber (bool, optional): If True, use the Huber loss, otherwise use a modified version where the Huber loss is divided by delta. Default is True.
         name (str|None, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
 
     Returns:
@@ -1178,6 +1193,9 @@ def smooth_l1_loss(
             outputs={'Out': out, 'Residual': residual},
             attrs={'delta': delta},
         )
+
+    if not is_huber:
+        out = out / delta
 
     if reduction not in ['sum', 'mean', 'none']:
         raise ValueError(
@@ -1507,7 +1525,7 @@ def nll_loss(
         if input_dims != 2 and input_dims != 4:
             input = _C_ops.reshape(input, [n, c, 1, -1])
             label = _C_ops.reshape(label, [n, 1, -1])
-            out_shape = [n] + input_shape[2:]
+            out_shape = [n, *input_shape[2:]]
         out, total_weight = _C_ops.nll_loss(
             input, label, weight, ignore_index, reduction
         )
@@ -1520,7 +1538,7 @@ def nll_loss(
         if input_dims != 2 and input_dims != 4:
             input = reshape(input, shape=[n, c, 1, -1])
             label = reshape(label, shape=[n, 1, -1])
-            out_shape = [n] + input_shape[2:]
+            out_shape = [n, *input_shape[2:]]
 
         check_variable_and_dtype(
             input, 'input', ['float32', 'float64'], 'nll_loss'
@@ -1904,7 +1922,7 @@ def ctc_loss(
     An operator integrating the open source Warp-CTC library (https://github.com/baidu-research/warp-ctc)
     to compute Connectionist Temporal Classification (CTC) loss.
     It can be aliased as softmax with CTC, since a native softmax activation
-    is interated to the Warp-CTC library to normalize values for each row of the input tensor.
+    is integrated to the Warp-CTC library to normalize values for each row of the input tensor.
 
     Parameters:
         log_probs (Tensor): The unscaled probability sequence with padding, which is a 3-D Tensor. The tensor shape is [max_logit_length, batch_size, num_classes + 1], where max_logit_length is the longest length of input logit sequence. The data type should be float32 or float64.
@@ -2176,8 +2194,7 @@ def margin_cross_entropy(
     group=...,
     return_softmax: Literal[True] = ...,
     reduction: _ReduceMode | None = ...,
-) -> tuple[Tensor, Tensor]:
-    ...
+) -> tuple[Tensor, Tensor]: ...
 
 
 @overload
@@ -2191,8 +2208,7 @@ def margin_cross_entropy(
     group=...,
     return_softmax: Literal[False] = ...,
     reduction: _ReduceMode | None = ...,
-) -> Tensor:
-    ...
+) -> Tensor: ...
 
 
 @overload
@@ -2206,8 +2222,7 @@ def margin_cross_entropy(
     group=...,
     return_softmax: bool = ...,
     reduction: _ReduceMode | None = ...,
-) -> Tensor | tuple[Tensor, Tensor]:
-    ...
+) -> Tensor | tuple[Tensor, Tensor]: ...
 
 
 def margin_cross_entropy(
@@ -2519,8 +2534,7 @@ def softmax_with_cross_entropy(
     numeric_stable_mode: bool = ...,
     return_softmax: Literal[True] = ...,
     axis: int = ...,
-) -> tuple[Tensor, Tensor]:
-    ...
+) -> tuple[Tensor, Tensor]: ...
 
 
 @overload
@@ -2532,8 +2546,7 @@ def softmax_with_cross_entropy(
     numeric_stable_mode: bool = ...,
     return_softmax: Literal[False] = ...,
     axis: int = ...,
-) -> Tensor:
-    ...
+) -> Tensor: ...
 
 
 @overload
@@ -2545,8 +2558,7 @@ def softmax_with_cross_entropy(
     numeric_stable_mode: bool = ...,
     return_softmax: bool = ...,
     axis: int = ...,
-) -> Tensor | tuple[Tensor, Tensor]:
-    ...
+) -> Tensor | tuple[Tensor, Tensor]: ...
 
 
 @deprecated(
@@ -3442,13 +3454,11 @@ def multi_label_soft_margin_loss(
     For each sample in the mini-batch:
 
     .. math::
-        \text{loss}(x, y) = \sum_{ij}\frac{\max(0, 1 - (x[y[j]] - x[i]))}{\text{x.size}(0)}
+        \text{loss}(x, y) = - \frac{1}{C} * \sum_i y[i] * \log((1 + \exp(-x[i]))^{-1})
+            + (1-y[i]) * \log\left(\frac{\exp(-x[i])}{(1 + \exp(-x[i]))}\right)
 
-    where :math:`x \in \left\{0, \; \cdots , \; \text{x.size}(0) - 1\right\}`, \
-    :math:`y \in \left\{0, \; \cdots , \; \text{y.size}(0) - 1\right\}`, \
-    :math:`0 \leq y[j] \leq \text{x.size}(0)-1`, \
-    and :math:`i \neq y[j]` for all :math:`i` and :math:`j`.
-    :math:`y` and :math:`x` must have the same size.
+    where :math:`i \in \left\{0, \; \cdots , \; \text{x.nElement}() - 1\right\}`,
+    :math:`y[i] \in \left\{0, \; 1\right\}`.
 
     Parameters:
         input (Tensor): Input tensor, the data type is float32 or float64. Shape is (N, C), where C is number of classes, and if shape is more than 2D, this is (N, C, D1, D2,..., Dk), k >= 1.
@@ -4473,7 +4483,7 @@ def adaptive_log_softmax_with_loss(
         name (str|None, optional): Name for the operation (optional, default is ``None``). For more information, please refer to :ref:`api_guide_Name`.
 
     Returns:
-        - output (Tensor). The tensor sotring adaptive logsoftmax result, the shape of output is ``[N]``
+        - output (Tensor). The tensor storing adaptive logsoftmax result, the shape of output is ``[N]``
         - loss (Tensor). The tensor variable storing the adaptive_log_softmax_loss of input and label.
 
     Examples:
@@ -4505,9 +4515,9 @@ def adaptive_log_softmax_with_loss(
             Tensor(shape=[], dtype=float32, place=Place(cpu), stop_gradient=True,
             1.14779019)
     """
-    targt_dim = label.dim()
+    target_dim = label.dim()
 
-    if targt_dim == 1:
+    if target_dim == 1:
         if input.shape[0] != label.shape[0]:
             raise ValueError(
                 'Input and label should have the same size '
@@ -4518,7 +4528,7 @@ def adaptive_log_softmax_with_loss(
                 '1D label tensor expects 2D input tensors, '
                 f'but found inputs with size {input.shape}'
             )
-    elif targt_dim == 0:
+    elif target_dim == 0:
         if input.dim() != 1:
             raise ValueError(
                 '0D label tensor expects 1D input tensors, '
@@ -4529,7 +4539,7 @@ def adaptive_log_softmax_with_loss(
             '0D or 1D label tensor expected, ' 'multi-label not supported'
         )
 
-    is_batched = targt_dim > 0
+    is_batched = target_dim > 0
     input = input if is_batched else input.unsqueeze(0)
     label = label if is_batched else label.unsqueeze(0)
 
@@ -4539,13 +4549,16 @@ def adaptive_log_softmax_with_loss(
     output = paddle.zeros([batch_size], dtype=input.dtype)
     gather_inds = paddle.empty([batch_size], dtype=label.dtype)
 
-    cutoff_values = [0] + cutoffs
+    cutoff_values = [0, *cutoffs]
     for i in range(len(cutoff_values) - 1):
         low_idx = cutoff_values[i]
         high_idx = cutoff_values[i + 1]
 
         label_mask = (label >= low_idx) & (label < high_idx)
         row_indices = label_mask.nonzero().squeeze()
+
+        if row_indices.dim() == 0:
+            row_indices.unsqueeze_(0)
 
         if row_indices.numel() == 0:
             continue

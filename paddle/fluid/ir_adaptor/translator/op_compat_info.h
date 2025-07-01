@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "glog/logging.h"
+#include "paddle/pir/include/core/dll_decl.h"
 
 #pragma once
 
@@ -30,7 +31,7 @@ using MutableAttributeInfo = std::vector<std::string>;
 static constexpr char kPhiGradSuffix[] = "_grad";
 static constexpr char kFluidVarGradSuffix[] = "@GRAD";
 
-class OpNameNormalizer {
+class IR_API OpNameNormalizer {
  private:
   OpNameNormalizer();  // Disallow instantiation outside of the class.
   std::unordered_map<std::string, std::string> op_name_mappings;
@@ -52,6 +53,26 @@ class OpNameNormalizer {
   static auto& instance() {
     static OpNameNormalizer OpNameNormalizer;
     return OpNameNormalizer;
+  }
+
+  std::unordered_map<std::string, std::string> GetOpNameMappings() const {
+    return op_name_mappings;
+  }
+
+  std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
+  GetOpArgNameMappings() const {
+    return op_arg_name_mappings;
+  }
+
+  std::unordered_map<std::string,
+                     std::unordered_map<std::string, MutableAttributeInfo>>
+  GetOpMutableAttributeInfos() const {
+    return op_mutable_attribute_infos;
+  }
+
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+  GetOpMutableAttributes() const {
+    return op_mutable_attributes;
   }
 
   std::string operator[](const std::string& op_type) {

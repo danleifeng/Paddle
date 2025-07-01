@@ -286,7 +286,7 @@ struct DirectStore {
 
 template <typename T>
 inline __device__ void WelfordCombine(T val, T* mean, T* m2, T* count) {
-  // Use Welford Online algorithem to compute mean and variance
+  // Use Welford Online algorithm to compute mean and variance
   // For more details you can refer to:
   // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
   *count += 1;
@@ -568,7 +568,7 @@ inline GPU(Error_t)
     }
   }
 
-  static const bool max_smem_configed = [=]() {
+  static const bool max_smem_configured = [=]() {
     int max_smem_size = 0;
     GPU(Error_t)
     err = GPU(DeviceGetAttribute)(
@@ -1097,26 +1097,26 @@ void RmsNormKernel(const Context& dev_ctx,
       out->dtype() == phi::DataType::FLOAT8_E4M3FN) {
     PADDLE_ENFORCE_EQ(quant_scale != 0.0f,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant rms_norm'output, must has quant_scale, "
                           "quant_scale!=0, but quant_scale = %f ",
                           quant_scale));
     PADDLE_ENFORCE_EQ(quant_round_type == 0 || quant_round_type == 1,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant rms_norm'output, must has quant_round_type, "
                           "quant_round_type = 0 or quant_round_type = 1, but "
                           "quant_scale = %d ",
                           quant_scale));
     PADDLE_ENFORCE_EQ(quant_max_bound != 0.0f,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant rms_norm'output, must has quant_max_bound and "
                           "quant_max_bound!=0, but quant_max_bound = %f ",
                           quant_scale));
     PADDLE_ENFORCE_EQ(quant_min_bound != 0.0f,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant rms_norm'output, must has quant_min_bound and "
                           "quant_min_bound!=0, but quant_min_bound = %f ",
                           quant_scale));
@@ -1229,7 +1229,7 @@ void RmsNormKernel(const Context& dev_ctx,
 }
 
 template <typename T, typename Context>
-void ResidualAddRmsNormWrapper(const Context& ctx,
+void ResidualAddRmsNormWrapper(const Context& dev_ctx,
                                const T* x,
                                const T* residual,
                                const T* bias,
@@ -1245,10 +1245,10 @@ void ResidualAddRmsNormWrapper(const Context& ctx,
       x, residual, bias, residual_output, cols);
   AffineStore<ComputeType, T> store(output, cols, norm_weight, norm_bias);
   DispatchRmsNorm<decltype(load), decltype(store), ComputeType>(
-      ctx.stream(), load, store, rows, cols, epsilon, nullptr);
+      dev_ctx.stream(), load, store, rows, cols, epsilon, nullptr);
 }
 
-template void ResidualAddRmsNormWrapper(const phi::GPUContext& ctx,
+template void ResidualAddRmsNormWrapper(const phi::GPUContext& dev_ctx,
                                         const phi::dtype::float16* x,
                                         const phi::dtype::float16* residual,
                                         const phi::dtype::float16* bias,
@@ -1260,7 +1260,7 @@ template void ResidualAddRmsNormWrapper(const phi::GPUContext& ctx,
                                         phi::dtype::float16* residual_output,
                                         phi::dtype::float16* output);
 
-template void ResidualAddRmsNormWrapper(const phi::GPUContext& ctx,
+template void ResidualAddRmsNormWrapper(const phi::GPUContext& dev_ctx,
                                         const phi::dtype::bfloat16* x,
                                         const phi::dtype::bfloat16* residual,
                                         const phi::dtype::bfloat16* bias,
@@ -1272,7 +1272,7 @@ template void ResidualAddRmsNormWrapper(const phi::GPUContext& ctx,
                                         phi::dtype::bfloat16* residual_output,
                                         phi::dtype::bfloat16* output);
 
-template void ResidualAddRmsNormWrapper(const phi::GPUContext& ctx,
+template void ResidualAddRmsNormWrapper(const phi::GPUContext& dev_ctx,
                                         const float* x,
                                         const float* residual,
                                         const float* bias,
@@ -1285,7 +1285,7 @@ template void ResidualAddRmsNormWrapper(const phi::GPUContext& ctx,
                                         float* output);
 
 template <typename T, typename Context>
-void RmsNormWrapper(const Context& ctx,
+void RmsNormWrapper(const Context& dev_ctx,
                     const T* x,
                     const T* weight,
                     const T* bias,
@@ -1298,10 +1298,10 @@ void RmsNormWrapper(const Context& ctx,
   DirectLoad<T, ComputeType> load(x, cols);
   AffineStore<ComputeType, T> store(output, cols, weight, bias);
   DispatchRmsNorm<decltype(load), decltype(store), ComputeType>(
-      ctx.stream(), load, store, rows, cols, epsilon, nullptr);
+      dev_ctx.stream(), load, store, rows, cols, epsilon, nullptr);
 }
 
-template void RmsNormWrapper(const phi::GPUContext& ctx,
+template void RmsNormWrapper(const phi::GPUContext& dev_ctx,
                              const phi::dtype::float16* x,
                              const phi::dtype::float16* weight,
                              const phi::dtype::float16* bias,
@@ -1310,7 +1310,7 @@ template void RmsNormWrapper(const phi::GPUContext& ctx,
                              const int cols,
                              phi::dtype::float16* output);
 
-template void RmsNormWrapper(const phi::GPUContext& ctx,
+template void RmsNormWrapper(const phi::GPUContext& dev_ctx,
                              const phi::dtype::bfloat16* x,
                              const phi::dtype::bfloat16* weight,
                              const phi::dtype::bfloat16* bias,
@@ -1319,7 +1319,7 @@ template void RmsNormWrapper(const phi::GPUContext& ctx,
                              const int cols,
                              phi::dtype::bfloat16* output);
 
-template void RmsNormWrapper(const phi::GPUContext& ctx,
+template void RmsNormWrapper(const phi::GPUContext& dev_ctx,
                              const float* x,
                              const float* weight,
                              const float* bias,

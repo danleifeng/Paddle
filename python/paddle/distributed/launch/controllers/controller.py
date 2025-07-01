@@ -325,14 +325,17 @@ class Controller(ControllerBase):
     def _save_container_env(self, container, is_init=False):
         f = os.path.join(
             self.ctx.args.log_dir,
-            f'envlog.init.{container.rank}'
-            if is_init
-            else f'envlog.{container.rank}',
+            (
+                f'envlog.init.{container.rank}'
+                if is_init
+                else f'envlog.{container.rank}'
+            ),
         )
         try:
             os.makedirs(os.path.dirname(f), exist_ok=True)
             with open(f, container.log_mode) as fd:
-                for k, v in sorted(container.env.items()):
-                    fd.write(str(f"{k}={v}\n"))
+                fd.writelines(
+                    f"{k}={v}\n" for k, v in sorted(container.env.items())
+                )
         except Exception as e:
             self.ctx.logger.error(f"save pod env log failed because {e}")

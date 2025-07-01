@@ -45,7 +45,7 @@ class TestLabelSmoothOp(OpTest):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(["X"], "Out", check_pir=True)
@@ -77,7 +77,9 @@ class TestLabelSmoothOpBF16(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
@@ -169,6 +171,18 @@ class TestLabelSmoothBF16OpWithPriorDist3D(TestLabelSmoothBF16OPWithPriorDist):
         self.outputs['Out'] = self.outputs['Out'].reshape(
             self.inputs['X'].shape
         )
+
+
+class TestLabelSmoothOp_ZeroSize(TestLabelSmoothOp):
+    def config(self):
+        self.op_type = "label_smooth"
+        self.python_api = paddle.nn.functional.label_smooth
+        self.init_dtype()
+        self.epsilon = 0.1
+        batch_size, self.label_dim = 0, 12
+        self.label = np.zeros((batch_size, self.label_dim)).astype(self.dtype)
+        nonzero_index = np.random.randint(self.label_dim, size=(batch_size))
+        self.label[np.arange(batch_size), nonzero_index] = 1
 
 
 if __name__ == '__main__':

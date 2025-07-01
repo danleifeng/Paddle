@@ -20,7 +20,6 @@ from op_test import OpTest
 import paddle
 from paddle import static
 from paddle.base import dygraph
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -46,7 +45,7 @@ class TestComplexOp(OpTest):
         self.outputs = {'Out': out_ref}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -93,6 +92,34 @@ class TestComplexOpBroadcast3(TestComplexOp):
         self.dtype = "float32"
 
 
+class TestComplexOpZeroSize1(TestComplexOp):
+    def init_spec(self):
+        self.x_shape = [1, 0]
+        self.y_shape = [0]
+        self.dtype = "float32"
+
+
+class TestComplexOpZeroSize2(TestComplexOp):
+    def init_spec(self):
+        self.x_shape = [100, 1]
+        self.y_shape = [10, 0, 1, 4]
+        self.dtype = "float32"
+
+
+class TestComplexOpZeroSize3(TestComplexOp):
+    def init_spec(self):
+        self.x_shape = [10, 3, 1, 0]
+        self.y_shape = [100, 1]
+        self.dtype = "float32"
+
+
+class TestComplexOpZeroSize4(TestComplexOp):
+    def init_spec(self):
+        self.x_shape = [10, 3, 1, 0]
+        self.y_shape = [0, 1]
+        self.dtype = "float32"
+
+
 class TestComplexAPI(unittest.TestCase):
     def setUp(self):
         self.x = np.random.randn(10, 10)
@@ -106,7 +133,6 @@ class TestComplexAPI(unittest.TestCase):
             out_np = paddle.complex(x, y).numpy()
         np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static(self):
         mp, sp = static.Program(), static.Program()
         with static.program_guard(mp, sp):

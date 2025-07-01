@@ -32,8 +32,6 @@ FusedMultiTransformer.
 namespace phi {
 namespace fusion {
 
-namespace {  // NOLINT
-
 template <typename T>
 class BiasActHelper {
  public:
@@ -90,7 +88,7 @@ class BiasActHelper {
             dev_ctx_, bias_data, rows_, cols_, load_func, store_func);
       }
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently Only Support GeGLU, SwiGLU, GeLU"));
     }
   }
@@ -143,7 +141,7 @@ class GEMMHelper {
                                                            compute_bias);
       ffn_linear_compute.ComputeForward(weight, input, bias, output, output);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently GemmHelper only support `None`. "));
     }
   }
@@ -162,8 +160,8 @@ class NormHelper {
  public:
   NormHelper(const phi::GPUContext &dev_ctx,
              const std::string &norm_type,
-             const int rows,
-             const int cols,
+             const int64_t rows,
+             const int64_t cols,
              const float epsilon,
              const float residual_alpha)
       : dev_ctx_(dev_ctx),
@@ -185,7 +183,7 @@ class NormHelper {
 
   /*
   Note(Zhengzekang):
-  Since input `X` and `Residual` in FusedMT will be swaped by preallocated
+  Since input `X` and `Residual` in FusedMT will be swapped by preallocated
   buffer, I have no choice but to pass the data pointer instead of
   phi::DenseTensor.
   */
@@ -241,7 +239,7 @@ class NormHelper {
                                                          bias_residual_out_data,
                                                          output_data);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently NormHelper only support `layernorm` and `rmsnorm`. "));
     }
   }
@@ -283,7 +281,7 @@ class NormHelper {
                                               cols_,
                                               output_data);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently NormHelper only support `layernorm` and `rmsnorm`. "));
     }
   }
@@ -291,8 +289,8 @@ class NormHelper {
  private:
   const phi::GPUContext &dev_ctx_;
   std::string norm_type_;
-  int rows_;
-  int cols_;
+  int64_t rows_;
+  int64_t cols_;
   float epsilon_;
   float residual_alpha_;
   phi::fusion::FusedDropoutLayerNormHelper<T, uint8_t>
@@ -348,8 +346,6 @@ class FFNHelper {
   int dim_embed_;
   std::string gemm_method_;
 };
-
-}  // namespace
 
 }  // namespace fusion
 }  // namespace phi

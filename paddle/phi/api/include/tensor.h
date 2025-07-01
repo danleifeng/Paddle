@@ -29,6 +29,10 @@ using gpuStream_t = cudaStream_t;
 using gpuStream_t = hipStream_t;
 #endif
 
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+#include "paddle/phi/backends/stream.h"
+#endif
+
 #include "paddle/common/layout.h"
 #include "paddle/common/macros.h"
 #include "paddle/phi/common/data_type.h"
@@ -311,6 +315,13 @@ class PADDLE_API Tensor final {
   bool is_xpu() const;
 
   /**
+   * @brief Determine whether the tensor device is XPU_PINNED
+   *
+   * @return bool
+   */
+  bool is_xpu_pinned() const;
+
+  /**
    * @brief Determine whether the tensor device is CustomDevice
    *
    * @return bool
@@ -423,6 +434,14 @@ class PADDLE_API Tensor final {
    * @return gpuStream_t
    */
   gpuStream_t stream() const;
+#elif defined(PADDLE_WITH_CUSTOM_DEVICE)
+  /**
+   * @brief Get the stream where the tensor is currently located
+   * This is a deprecated method and may be removed in the future!
+   *
+   * @return stream_t
+   */
+  phi::stream::stream_t stream() const;
 #endif
 
   /**
@@ -497,6 +516,13 @@ class PADDLE_API Tensor final {
    * @return bool
    */
   bool defined() const;
+
+  /**
+   * @brief Determine whether Tensor has allocation
+   *
+   * @return bool
+   */
+  bool has_allocation() const;
 
   /**
    * @brief Determine whether Tensor is initialized.
@@ -629,6 +655,24 @@ class PADDLE_API Tensor final {
    * @return Tensor
    */
   Tensor to_dense() const;
+
+  /* Part 12: Contiguous methods */
+
+  /**
+   * @brief Determine whether tensor is contiguous
+   *
+   * @return bool
+   */
+  bool is_contiguous() const;
+
+  /**
+   * @brief Returns a contiguous in memory tensor containing the same data as
+   * current Tensor. If self tensor is already contiguous, this function returns
+   * the current Tensor.
+   *
+   * @return Tensor
+   */
+  Tensor contiguous();
 
  private:
   /**

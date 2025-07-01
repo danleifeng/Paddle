@@ -15,10 +15,10 @@
 #include "paddle/fluid/pir/dialect/operator/ir/op_attribute.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
 #include "paddle/fluid/pir/dialect/operator/utils/utils.h"
-#include "paddle/fluid/primitive/composite/composite.h"
-#include "paddle/fluid/primitive/rule/vjp/details.h"
-#include "paddle/fluid/primitive/rule/vjp/generated/generated_vjp.h"
-#include "paddle/fluid/primitive/type/lazy_tensor.h"
+#include "paddle/fluid/primitive/base/lazy_tensor.h"
+#include "paddle/fluid/primitive/decomp_rule/decomp_rule/composite.h"
+#include "paddle/fluid/primitive/decomp_rule/decomp_vjp/details.h"
+#include "paddle/fluid/primitive/vjp_interface/generated/generated_vjp.h"
 #include "paddle/phi/api/include/tensor.h"
 #include "paddle/phi/common/int_array.h"
 #include "paddle/pir/include/core/builtin_op.h"
@@ -135,7 +135,7 @@ std::vector<std::vector<pir::Value>> ConcatGradOp::DecompVjp(
           ->value()
           .defining_op();
   if (axis_define_op->name() != "pd_op.full") {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "We don't support dynamic tensors "
         "attribute axis for concat_grad decomposition "
         "for now. "));
@@ -230,7 +230,7 @@ std::vector<std::vector<pir::Value>> SliceGradOp::DecompVjp(
       }
 
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "attr is not vector of pir::Int64Attribute "));
     }
   }
@@ -242,7 +242,7 @@ std::vector<std::vector<pir::Value>> SliceGradOp::DecompVjp(
           ->value()
           .defining_op();
   if (starts_define_op->name() != "pd_op.full_int_array") {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "We don't support dynamic tensors "
         "attribute starts for slice_grad decomposition "
         "for now. "));
@@ -257,7 +257,7 @@ std::vector<std::vector<pir::Value>> SliceGradOp::DecompVjp(
           ->value()
           .defining_op();
   if (ends_define_op->name() != "pd_op.full_int_array") {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "We don't support dynamic tensors "
         "attribute ends for slice_grad decomposition "
         "for now. "));
@@ -276,7 +276,7 @@ std::vector<std::vector<pir::Value>> SliceGradOp::DecompVjp(
       }
 
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "attr is not vector of pir::Int64Attribute "));
     }
   }
@@ -291,7 +291,7 @@ std::vector<std::vector<pir::Value>> SliceGradOp::DecompVjp(
       }
 
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "attr is not vector of pir::Int64Attribute "));
     }
   }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/framework/reader.h"
+#include "paddle/phi/core/framework/reader.h"
 
 #include <memory>
 
@@ -24,7 +24,7 @@ class StubDecoratedReader : public paddle::framework::DecoratedReader {
   explicit StubDecoratedReader(const std::shared_ptr<ReaderBase> &reader)
       : DecoratedReader(reader) {}
 
-  void ReadNextImpl(paddle::framework::LoDTensorArray *out) override {}
+  void ReadNextImpl(phi::TensorArray *out) override {}
 };
 
 class StubRootReader : public paddle::framework::ReaderBase {
@@ -34,7 +34,7 @@ class StubRootReader : public paddle::framework::ReaderBase {
       const std::vector<paddle::framework::proto::VarType::Type> &var_types,
       const std::vector<bool> &need_check_feed)
       : paddle::framework::ReaderBase(dims, var_types, need_check_feed) {}
-  void ReadNextImpl(paddle::framework::LoDTensorArray *out) override {}
+  void ReadNextImpl(phi::TensorArray *out) override {}
 };
 
 TEST(READER, decorate_chain) {

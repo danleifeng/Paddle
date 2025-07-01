@@ -160,6 +160,10 @@ paddle.enable_static()
     (parameterize.TEST_CASE_NAME, 'probs'),
     [
         (
+            'zero-dim',
+            np.array(0.7).astype("float32"),
+        ),
+        (
             'multi-dim',
             parameterize.xrand((1, 3), min=0.0, max=1.0).astype("float32"),
         ),

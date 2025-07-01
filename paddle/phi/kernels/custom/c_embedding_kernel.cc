@@ -14,7 +14,7 @@
 
 #include "paddle/phi/kernels/c_embedding_kernel.h"
 #include "glog/logging.h"
-#include "paddle/phi/api/backward/backward_api.h"
+#include "paddle/phi/api/backward/backward_api_base.h"
 #include "paddle/phi/api/include/api.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/common/float16.h"
@@ -66,7 +66,7 @@ void CEmbeddingKernel(const Context& dev_ctx,
            *reinterpret_cast<phi::DenseTensor*>(out_tensor.impl().get()))
         .Resize(out_dims);
   } else {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Custom Device c_embedding ids only support int32 or int64."));
   }
 }

@@ -12,19 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import collections
 import re
-from typing import List
 
 PREFIX_TENSOR_NAME = 'input_'
 PREFIX_META_TENSOR_NAME = 'meta_'
+ORIGIN_PREFIX_TENSOR_NAME = 'origin_input_'
 
 
-def parse_plain_list(s: str, sep=",") -> List[str]:
+def parse_plain_list(s: str, sep=",") -> list[str]:
     """Copy from `paddle/fluid/operators/generator/parse_utils.py`"""
     if sep == ",":
-        patten = re.compile(r',(?![^{]*\})')  # support "int[] a={1,2}"
-        items = re.split(patten, s.strip())
+        pattern = re.compile(r',(?![^{]*\})')  # support "int[] a={1,2}"
+        items = re.split(pattern, s.strip())
         items = [x.strip() for x in items]
         return items
     else:
@@ -54,6 +56,8 @@ class BaseAPI:
 
         self.is_base_api = True
         self.is_only_composite_api = False
+        # Whether to generate code for inplace API
+        self.is_inplace_context = False
         if 'invoke' in api_item_yaml:
             self.is_base_api = False
             self.invoke = api_item_yaml['invoke']
@@ -87,10 +91,21 @@ class BaseAPI:
         }
 
     def get_api_name(self, api_item_yaml):
-        return api_item_yaml['op']
+        if 'op' in api_item_yaml:
+            return api_item_yaml['op']
+        elif 'backward_op' in api_item_yaml:
+            return api_item_yaml['backward_op']
+        else:
+            raise ValueError("op or backward_op are not in api_yaml.")
 
     def get_api_func_name(self):
         return self.api
+
+    def is_inplace_input(self, input_name):
+        is_inplace_api = (
+            self.get_api_func_name()[-1] == "_" or self.is_inplace_context
+        )
+        return is_inplace_api and input_name in self.inplace_map.values()
 
     def get_input_tensor_args(self, inplace_flag=False):
         input_args = []
@@ -111,6 +126,73 @@ class BaseAPI:
             else:
                 input_args.append(self.inputs['input_info'][name] + ' ' + name)
         return input_args
+
+    # funcs backward_api.h will use
+    def get_grad_outputs_define(self, inplace_flag=False):
+        define_string = ""
+        for i, out_type in enumerate(self.outputs['types']):
+            out_name = self.outputs['names'][i].split('@')[0]
+            if out_type == "std::vector<Tensor>":
+                if inplace_flag and out_name in self.inplace_map:
+                    out_name = self.inplace_map[out_name]
+                    define_string = " "
+                else:
+                    define_string += "    " + out_type + " " + out_name + ";\n"
+
+                vec_tensor_string = f"""    std::vector<Tensor*> {out_name}_x;
+    for (size_t i = 0; i < {out_name}.size(); i++){{
+        {out_name}_x.push_back(&({out_name}[i]));
+    }}"""
+                define_string += vec_tensor_string
+            else:
+                if inplace_flag and out_name in self.inplace_map:
+                    continue
+                define_string += "    " + out_type + " " + out_name + ";\n"
+        return define_string
+
+    def get_grad_api_call_args(self, inplace_flag):
+        args = []
+        for name in self.inputs['names']:
+            name = name.split('@')[0]
+            args.append(name)
+
+        for name in self.attrs['names']:
+            args.append(name)
+
+        for i, name in enumerate(self.outputs['names']):
+            name = name.split('@')[0]
+            out_type = self.outputs['types'][i]
+            if out_type == "std::vector<Tensor>":
+                if inplace_flag and name in self.inplace_map:
+                    name = self.inplace_map[name]
+
+                out_string = name + "_x"
+            else:
+                if inplace_flag and name in self.inplace_map:
+                    name = self.inplace_map[name]
+                    if name in self.optional_vars:
+                        out_string = name + ".get_ptr()"
+                    else:
+                        out_string = "&" + name
+                else:
+                    out_string = "&" + name
+
+            args.append(out_string)
+        return ", ".join(args)
+
+    def get_grad_output(self, inplace_flag):
+        args = []
+        for i, name in enumerate(self.outputs['names']):
+            name = name.split('@')[0]
+            if inplace_flag and name in self.inplace_map:
+                args.append("std::ref(" + self.inplace_map[name] + ")")
+            else:
+                args.append(name)
+
+        if len(args) == 1:
+            return args[0]
+        else:
+            return f"""std::make_tuple({", ".join(args)})"""
 
     def get_declare_args(self, inplace_flag=False):
         declare_args = self.get_input_tensor_args(inplace_flag)
@@ -162,8 +244,8 @@ class BaseAPI:
             ')'
         ), f"Args declaration should start with '(' and end with ')', please check the args of {api_name} in yaml."
         args_str = args_str[1:-1]
-        patten = re.compile(r',(?![^{]*\})')  # support int[] a={1,3}
-        args_list = re.split(patten, args_str.strip())
+        pattern = re.compile(r',(?![^{]*\})')  # support int[] a={1,3}
+        args_list = re.split(pattern, args_str.strip())
         args_list = [x.strip() for x in args_list]
         input_types_map = {
             'Tensor': 'const Tensor&',
@@ -598,13 +680,25 @@ PADDLE_API {self.get_return_type(inplace_flag=True)} {api_func_name}({self.get_d
         for param in infer_meta_params:
             if param in input_names:
                 if self.inputs['input_info'][param] == "const Tensor&":
-                    param_code = (
-                        param_code
-                        + "MakeMetaTensor(*"
-                        + PREFIX_TENSOR_NAME
-                        + param
-                        + "), "
-                    )
+                    if self.is_inplace_input(param):
+                        meta_tensor_code += f"""
+{code_indent}  auto {ORIGIN_PREFIX_TENSOR_NAME}{param} = *{PREFIX_TENSOR_NAME}{param};
+"""
+                        param_code = (
+                            param_code
+                            + "MakeMetaTensor("
+                            + ORIGIN_PREFIX_TENSOR_NAME
+                            + param
+                            + "), "
+                        )
+                    else:
+                        param_code = (
+                            param_code
+                            + "MakeMetaTensor(*"
+                            + PREFIX_TENSOR_NAME
+                            + param
+                            + "), "
+                        )
                 elif (
                     self.inputs['input_info'][param]
                     == "const std::vector<Tensor>&"
@@ -650,7 +744,7 @@ PADDLE_API {self.get_return_type(inplace_flag=True)} {api_func_name}({self.get_d
             elif param in attr_names:
                 param_code = param_code + param + ", "
             elif isinstance(param, str):
-                param_code = param_code + "\"" + param + "\", "
+                param_code = f'{param_code}"{param}", '
             elif isinstance(param, bool):
                 param_code = param_code + str(param).lower() + ", "
             else:
@@ -1158,6 +1252,12 @@ PADDLE_API {self.get_return_type(inplace_flag=True)} {api_func_name}({self.get_d
             )
         )
 
+        infer_meta_params = (
+            self.infer_meta['param']
+            if self.infer_meta['param'] is not None
+            else self.inputs['names'] + self.attrs['names']
+        )
+
         kernel_args = ["*dev_ctx"]
         for param in kernel_param:
             if param in input_names:
@@ -1165,7 +1265,16 @@ PADDLE_API {self.get_return_type(inplace_flag=True)} {api_func_name}({self.get_d
                     kernel_args.append(PREFIX_TENSOR_NAME + param)
                 else:
                     if self.inputs['input_info'][param] == "const Tensor&":
-                        kernel_args.append("*" + PREFIX_TENSOR_NAME + param)
+                        if self.is_inplace_input(param):
+                            if param not in infer_meta_params:
+                                input_tensor_code += f"""
+{code_indent}  auto {ORIGIN_PREFIX_TENSOR_NAME}{param} = *{PREFIX_TENSOR_NAME}{param};
+"""
+                            kernel_args.append(
+                                ORIGIN_PREFIX_TENSOR_NAME + param
+                            )
+                        else:
+                            kernel_args.append("*" + PREFIX_TENSOR_NAME + param)
                     elif (
                         self.inputs['input_info'][param]
                         == "const std::vector<Tensor>&"
@@ -1322,9 +1431,13 @@ PADDLE_API {self.get_return_type(inplace_flag=True)} {api_func_name}({self.get_d
 {code_indent}  auto* kernel_fn = kernel.GetVariadicKernelFn<kernel_signature>();
 {code_indent}  phi::RecordEvent* kernel_record_event = nullptr;
 {code_indent}  if(phi::RecordEvent::IsEnabled()){{
-{code_indent}    kernel_record_event = new phi::RecordEvent(\"{self.api} compute\", phi::TracerEventType::OperatorInner, 1);
+{code_indent}    kernel_record_event = new phi::RecordEvent(\"{kernel_name} kernel launch\", phi::TracerEventType::DygraphKernelLaunch, 1);
 {code_indent}  }}
 {code_indent}    (*kernel_fn)({kernel_args}, {", ".join(outputs_args)});
+{code_indent}  if (FLAGS_benchmark) {{
+{code_indent}      dev_ctx->Wait();
+{code_indent}      std::cout << \"{kernel_name} kernel run finish.\" << std::endl;
+{code_indent}  }}
 {code_indent}  if(kernel_record_event != nullptr){{
 {code_indent}    delete kernel_record_event;
 {code_indent}  }}
@@ -1370,6 +1483,12 @@ PADDLE_API {self.get_return_type(inplace_flag=True)} {api_func_name}({self.get_d
   }}
 """
 
+    def gene_base_api_code_for_inplace(self):
+        self.is_inplace_context = True
+        code = self.gene_base_api_code(inplace_flag=True)
+        self.is_inplace_context = False
+        return code
+
     def gene_base_api_code(self, inplace_flag=False):
         api_func_name = self.get_api_func_name()
         if inplace_flag and api_func_name[-1] != '_':
@@ -1389,7 +1508,7 @@ PADDLE_API {self.get_return_type(inplace_flag)} {api_func_name}({self.get_define
                 api_code
                 + f"""
 {kernel_dispatch_code}
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
           "The kernel of ({self.api}) for input tensors is unimplemented, please check the type of input tensors."));
 }}
 """
@@ -1415,7 +1534,7 @@ PADDLE_API {self.get_return_type()} {self.api}({params_code}) {{
             if len(self.inplace_map) > 0:
                 if self.api[-1] == '_':
                     api_code = ""
-                api_code = api_code + self.gene_base_api_code(inplace_flag=True)
+                api_code = api_code + self.gene_base_api_code_for_inplace()
             return api_code
         elif self.is_only_composite_api:
             # for composite and invoke api, dygraph use prim::xxx_grad method

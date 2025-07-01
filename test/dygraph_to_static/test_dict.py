@@ -18,7 +18,6 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
@@ -139,9 +138,8 @@ class TestNetWithDict(Dy2StTestBase):
             ret = net(self.x)
             return ret.numpy()
 
-    @test_legacy_and_pt_and_pir
     def test_ast_to_func(self):
-        self.assertTrue((self._run_dygraph() == self._run_static()).all())
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 # Tests for dict pop
@@ -175,23 +173,18 @@ class TestDictPop(Dy2StTestBase):
             if paddle.is_compiled_with_cuda()
             else paddle.CPUPlace()
         )
-        self._set_test_func()
 
-    def _set_test_func(self):
-        self.dygraph_func = paddle.jit.to_static(test_dict_pop)
+    def get_test_func(self):
+        return test_dict_pop
 
     def _run_static(self):
-        return self._run(to_static=True)
+        static_fn = paddle.jit.to_static(self.get_test_func())
+        return static_fn(self.input)
 
     def _run_dygraph(self):
-        return self._run(to_static=False)
+        fn = self.get_test_func()
+        return fn(self.input)
 
-    def _run(self, to_static):
-        with enable_to_static_guard(to_static):
-            result = self.dygraph_func(self.input)
-            return result.numpy()
-
-    @test_legacy_and_pt_and_pir
     def test_transformed_result(self):
         dygraph_res = self._run_dygraph()
         static_res = self._run_static()
@@ -204,8 +197,8 @@ class TestDictPop(Dy2StTestBase):
 
 
 class TestDictPop2(TestDictPop):
-    def _set_test_func(self):
-        self.dygraph_func = paddle.jit.to_static(test_dict_pop_2)
+    def get_test_func(self):
+        return test_dict_pop_2
 
 
 class NetWithDictPop(paddle.nn.Layer):
@@ -233,19 +226,11 @@ class TestDictPop3(TestNetWithDict):
             ret = net(z=0, x=self.x, y=True)
             return ret.numpy()
 
-    @test_legacy_and_pt_and_pir
     def test_ast_to_func(self):
-        dygraph_result = self._run_dygraph()
-        static_result = self._run_static()
-
-        self.assertTrue(
-            (dygraph_result == static_result).all(),
-            msg=f"dygraph result: {dygraph_result}\nstatic result: {static_result}",
-        )
+        np.testing.assert_allclose(self._run_dygraph(), self._run_static())
 
 
 class TestDictCmpInFor(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_with_for(self):
         def func():
             pos = [1, 3]
@@ -262,7 +247,6 @@ class TestDictCmpInFor(Dy2StTestBase):
 
         self.assertEqual(paddle.jit.to_static(func)()['minus'], 8)
 
-    @test_legacy_and_pt_and_pir
     def test_with_for_enumerate(self):
         def func():
             pos = [1, 3]

@@ -49,7 +49,7 @@ static int BuildFusion(Graph* graph, const std::string& name_scope) {
 
   multihead_pattern();
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* mul0,
                           Node* mul1,
                           Node* mul2,
@@ -195,7 +195,7 @@ static int BuildFusion(Graph* graph, const std::string& name_scope) {
     GET_IR_NODE_FROM_SUBGRAPH(
         transpose2_qkv_out, transpose2_qkv_out, multihead_pattern);
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  mul0,
                  mul1,
                  mul2,
@@ -861,7 +861,7 @@ int MultiHeadMatmulV2FusePass::BuildFusionV2(Graph* graph,
 
   multihead_pattern();
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* mul0,
                           Node* mul1,
                           Node* mul2,
@@ -911,7 +911,7 @@ int MultiHeadMatmulV2FusePass::BuildFusionV2(Graph* graph,
       QKVWeightsProcess<phi::dtype::float16>(
           wq_tensor, wk_tensor, wv_tensor, bq_tensor, bk_tensor, bv_tensor);
     } else {
-      PADDLE_THROW(phi::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "multihead_matmul not supported weight dtype. we now only support "
           "fp32 and fp16."));
     }
@@ -1081,7 +1081,7 @@ int MultiHeadMatmulV2FusePass::BuildFusionV2(Graph* graph,
     if (is_fc_params_shared) {
       return;
     }
-    fuse_creater(input0,
+    fuse_creator(input0,
                  mul0,
                  mul1,
                  mul2,
@@ -1160,7 +1160,7 @@ void MultiHeadMatmulV2FusePass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      phi::errors::Fatal(
+      common::errors::Fatal(
           "During the multiheadMatmul pass, The scope should not be null."));
 
   int fusion_count = BuildFusionV2(graph, name_scope_, scope);
@@ -1312,7 +1312,7 @@ int MultiHeadMatmulV3FusePass::BuildFusionV3(Graph* graph,
 
   multihead_pattern();
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* mul0,
                           Node* mul1,
                           Node* mul2,
@@ -1528,7 +1528,7 @@ int MultiHeadMatmulV3FusePass::BuildFusionV3(Graph* graph,
     if (is_fc_params_shared) {
       return;
     }
-    fuse_creater(input0,
+    fuse_creator(input0,
                  mul0,
                  mul1,
                  mul2,
@@ -1599,7 +1599,7 @@ void MultiHeadMatmulV3FusePass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      phi::errors::Fatal(
+      common::errors::Fatal(
           "During the multiheadMatmul pass, The scope should not be null."));
 
   int fusion_count = BuildFusionV3(graph, name_scope_, scope);

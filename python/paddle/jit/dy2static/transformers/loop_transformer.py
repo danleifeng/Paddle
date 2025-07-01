@@ -583,10 +583,11 @@ class LoopTransformer(BaseTransformer):
                 kwarg=None,
                 defaults=[],
             ),
-            body=nonlocal_stmt_node + [gast.Return(value=cond_stmt)],
+            body=[*nonlocal_stmt_node, gast.Return(value=cond_stmt)],
             decorator_list=[],
             returns=None,
             type_comment=None,
+            type_params=[],
         )
         new_stmts.append(condition_func_node)
 
@@ -607,6 +608,7 @@ class LoopTransformer(BaseTransformer):
             decorator_list=[],
             returns=None,
             type_comment=None,
+            type_params=[],
         )
         new_stmts.append(body_func_node)
 
@@ -665,10 +667,11 @@ class LoopTransformer(BaseTransformer):
                 kwarg=None,
                 defaults=[],
             ),
-            body=nonlocal_stmt_node + [gast.Return(value=node.test)],
+            body=[*nonlocal_stmt_node, gast.Return(value=node.test)],
             decorator_list=[],
             returns=None,
             type_comment=None,
+            type_params=[],
         )
 
         new_stmts.append(condition_func_node)
@@ -689,6 +692,7 @@ class LoopTransformer(BaseTransformer):
             decorator_list=[],
             returns=None,
             type_comment=None,
+            type_params=[],
         )
         new_stmts.append(body_func_node)
 

@@ -15,8 +15,12 @@
 #pragma once
 
 #include "paddle/common/flags.h"
-#include "paddle/fluid/distributed/ps/table/depends/rocksdb_warpper.h"
+#include "paddle/fluid/distributed/ps/table/depends/rocksdb_wrapper.h"
 #include "paddle/fluid/distributed/ps/table/memory_sparse_table.h"
+
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_PSCORE)
+#include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
+#endif
 
 namespace paddle {
 namespace distributed {
@@ -137,6 +141,10 @@ class SSDSparseTable : public MemorySparseTable {
   std::vector<paddle::framework::Channel<std::string>> _fs_channel;
   std::mutex _table_mutex;
   int _day_id = 0;
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_PSCORE)
+  paddle::framework::AfsWrapper _afs_wrapper;  // afs api wrapper
+#endif
+  bool _use_afs_api = false;
 };
 
 }  // namespace distributed

@@ -130,7 +130,7 @@ TEST(op_test, op_traits_test) {
   pir::Type dtype = pir::Float32Type::get(ctx);
   phi::DDim dims = {2, 2};
   phi::DataLayout data_layout = phi::DataLayout::NCHW;
-  phi::LoD lod = {{0, 1, 2}};
+  phi::LegacyLoD lod = {{0, 1, 2}};
   size_t offset = 0;
 
   pir::DenseTensorType dense_tensor_dtype =
@@ -183,7 +183,7 @@ TEST(op_test, same_operands_shape_trait_test2) {
   phi::DDim dims2 = {2, 2, 2};
 
   phi::DataLayout data_layout = phi::DataLayout::NCHW;
-  phi::LoD lod = {{0, 1, 2}};
+  phi::LegacyLoD lod = {{0, 1, 2}};
   size_t offset = 0;
 
   pir::DenseTensorType dense_tensor_dtype =
@@ -256,7 +256,7 @@ TEST(op_test, same_operands_and_result_shape_trait_test3) {
   phi::DDim dims2 = {2, 2, 2};
 
   phi::DataLayout data_layout = phi::DataLayout::NCHW;
-  phi::LoD lod = {{0, 1, 2}};
+  phi::LegacyLoD lod = {{0, 1, 2}};
   size_t offset = 0;
 
   pir::DenseTensorType dense_tensor_dtype =
@@ -301,7 +301,7 @@ TEST(op_test, same_operands_element_type_trait_test2) {
 
   phi::DDim dims = {2, 2};
   phi::DataLayout data_layout = phi::DataLayout::NCHW;
-  phi::LoD lod = {{0, 1, 2}};
+  phi::LegacyLoD lod = {{0, 1, 2}};
   size_t offset = 0;
 
   pir::DenseTensorType dense_tensor_dtype =
@@ -372,7 +372,7 @@ TEST(op_test, same_operands_and_result_element_type_trait_test3) {
   phi::DDim dims2 = {2, 2, 2};
 
   phi::DataLayout data_layout = phi::DataLayout::NCHW;
-  phi::LoD lod = {{0, 1, 2}};
+  phi::LegacyLoD lod = {{0, 1, 2}};
   size_t offset = 0;
 
   pir::DenseTensorType dense_tensor_dtype1 =
@@ -454,7 +454,7 @@ TEST(op_test, same_operands_and_result_type_trait_test3) {
   phi::DDim dims2 = {2, 2, 2};
 
   phi::DataLayout data_layout = phi::DataLayout::NCHW;
-  phi::LoD lod = {{0, 1, 2}};
+  phi::LegacyLoD lod = {{0, 1, 2}};
   size_t offset = 0;
 
   pir::DenseTensorType dense_tensor_dtype1 =
@@ -530,11 +530,11 @@ TEST(printer_test, custom_hooks) {
     printer.os << " [extra info]";
   };
   // this one overrides old printing
-  hooks.op_print_hook = [](pir::Operation *op, pir::IrPrinter &printer) {
+  hooks.op_print_hook = [](const pir::Operation &op, pir::IrPrinter &printer) {
     printer.PrintOpResult(op);
     printer.os << " :=";
 
-    printer.os << " \"" << op->name() << "\"";
+    printer.os << " \"" << op.name() << "\"";
     printer.PrintOpOperands(op);
     printer.PrintAttributeMap(op);
     printer.os << " :";

@@ -22,6 +22,8 @@ for example, you can run cpu version testing like this:
 
 """
 
+from __future__ import annotations
+
 import collections
 import functools
 import multiprocessing
@@ -78,7 +80,7 @@ def _patch_tensor_place():
         (.*?)                   # Place=(XXX)
         (\,.*?\))
         """,
-        re.X | re.S,
+        re.VERBOSE | re.DOTALL,
     )
 
     _check_output = checker.check_output
@@ -126,7 +128,7 @@ def _patch_float_precision(digits):
             )?
         )
         """,
-        re.X | re.S,
+        re.VERBOSE | re.DOTALL,
     )
 
     _check_output = checker.check_output
@@ -176,7 +178,7 @@ class Directive:
 
     pattern: typing.Pattern
 
-    def parse_directive(self, docstring: str) -> typing.Tuple[str, typing.Any]:
+    def parse_directive(self, docstring: str) -> tuple[str, typing.Any]:
         pass
 
 
@@ -199,7 +201,7 @@ class TimeoutDirective(Directive):
             )
         )
         """,
-        re.X | re.S,
+        re.VERBOSE | re.DOTALL,
     )
 
     def __init__(self, timeout):
@@ -237,7 +239,7 @@ class SingleProcessDirective(Directive):
             \s
         )
         """,
-        re.X | re.S,
+        re.VERBOSE | re.DOTALL,
     )
 
     def parse_directive(self, docstring):
@@ -274,7 +276,7 @@ class Fluid(BadStatement):
         .*
         (\bfluid\b)
         """,
-        re.X,
+        re.VERBOSE,
     )
 
     def check(self, docstring):
@@ -298,7 +300,7 @@ class SkipNoReason(BadStatement):
         [+]SKIP
         (?P<reason>.*)
         """,
-        re.X,
+        re.VERBOSE,
     )
 
     def check(self, docstring):
@@ -322,7 +324,7 @@ class DeprecatedRequired(BadStatement):
         (?P<directive>require[sd]?\s*:)
         (?P<env>.+)
         """,
-        re.X,
+        re.VERBOSE,
     )
 
     def check(self, docstring):
@@ -345,14 +347,12 @@ class DeprecatedRequired(BadStatement):
 class Xdoctester(DocTester):
     """A Xdoctest doctester."""
 
-    directives: typing.Dict[str, typing.Tuple[typing.Type[Directive], ...]] = {
+    directives: dict[str, tuple[type[Directive], ...]] = {
         'timeout': (TimeoutDirective, TEST_TIMEOUT),
         'solo': (SingleProcessDirective,),
     }
 
-    bad_statements: typing.Dict[
-        str, typing.Tuple[typing.Type[BadStatement], ...]
-    ] = {
+    bad_statements: dict[str, tuple[type[BadStatement], ...]] = {
         'fluid': (Fluid,),
         'skip': (SkipNoReason,),
         'require': (DeprecatedRequired,),
@@ -377,7 +377,7 @@ class Xdoctester(DocTester):
         self.target = target
         self.mode = mode
         self.verbose = verbose
-        self.config = {**XDOCTEST_CONFIG, **(config or {})}
+        self.config = XDOCTEST_CONFIG | (config or {})
         self._test_capacity = set()
 
         self._patch_global_state = patch_global_state
@@ -398,7 +398,7 @@ class Xdoctester(DocTester):
             (doctest)       # directive prefix, which should be replaced
             (?=(:\s*.*\n))  # positive lookahead, directive content
             """,
-            re.X,
+            re.VERBOSE,
         )
 
         self.directive_prefix = 'xdoctest'
@@ -415,7 +415,7 @@ class Xdoctester(DocTester):
 
     def _parse_directive(
         self, docstring: str
-    ) -> typing.Tuple[str, typing.Dict[str, Directive]]:
+    ) -> tuple[str, dict[str, Directive]]:
         directives = {}
         for name, directive_cls in self.directives.items():
             docstring, direct = directive_cls[0](
@@ -462,7 +462,7 @@ class Xdoctester(DocTester):
 
         self._test_capacity = test_capacity
 
-    def _check_bad_statements(self, docstring: str) -> typing.Set[BadStatement]:
+    def _check_bad_statements(self, docstring: str) -> set[BadStatement]:
         bad_results = set()
         for _, statement_cls in self.bad_statements.items():
             bad_statement = statement_cls[0](*statement_cls[1:])
@@ -471,7 +471,7 @@ class Xdoctester(DocTester):
 
         return bad_results
 
-    def run(self, api_name: str, docstring: str) -> typing.List[TestResult]:
+    def run(self, api_name: str, docstring: str) -> list[TestResult]:
         """Run the xdoctest with a docstring."""
         # check bad statements
         bad_results = self._check_bad_statements(docstring)
@@ -543,12 +543,12 @@ class Xdoctester(DocTester):
         if self._use_multiprocessing:
             _ctx = multiprocessing.get_context('spawn')
             result_queue = _ctx.Queue()
-            exec_processer = functools.partial(_ctx.Process, daemon=True)
+            exec_processor = functools.partial(_ctx.Process, daemon=True)
         else:
             result_queue = queue.Queue()
-            exec_processer = functools.partial(threading.Thread, daemon=True)
+            exec_processor = functools.partial(threading.Thread, daemon=True)
 
-        processer = exec_processer(
+        processor = exec_processor(
             target=self._execute_with_queue,
             args=(
                 result_queue,
@@ -557,11 +557,11 @@ class Xdoctester(DocTester):
             ),
         )
 
-        processer.start()
+        processor.start()
         result = result_queue.get(
             timeout=directives.get('timeout', TEST_TIMEOUT)
         )
-        processer.join()
+        processor.join()
 
         return result
 

@@ -62,19 +62,18 @@ void TakeAlongAxisKernel(const Context& dev_ctx,
   }
 
   using XPUType = typename XPUTypeTrait<T>::Type;
-  int r = XPU_SUCCESS;
+  int r = 0;
 #ifndef PADDLE_WITH_XPU_PLUGIN
   if (index_dtype == DataType::INT32) {
-    r = xpu::gather_element<XPUType, int>(
-        dev_ctx.x_context(),
-        reinterpret_cast<const XPUType*>(x.data<T>()),
-        index.data<int>(),
-        reinterpret_cast<XPUType*>(out->data<T>()),
-        x_shape,
-        index_shape,
-        axis);
+    r = xpu::gather<XPUType, int>(dev_ctx.x_context(),
+                                  reinterpret_cast<const XPUType*>(x.data<T>()),
+                                  index.data<int>(),
+                                  reinterpret_cast<XPUType*>(out->data<T>()),
+                                  x_shape,
+                                  index_shape,
+                                  axis);
   } else {
-    r = xpu::gather_element<XPUType, int64_t>(
+    r = xpu::gather<XPUType, int64_t>(
         dev_ctx.x_context(),
         reinterpret_cast<const XPUType*>(x.data<T>()),
         index.data<int64_t>(),
@@ -83,7 +82,7 @@ void TakeAlongAxisKernel(const Context& dev_ctx,
         index_shape,
         axis);
   }
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather_element");
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
 #else
   if (index_dtype == DataType::INT32) {
     r = xpu::plugin::take_along_axis<XPUType, int>(
@@ -115,4 +114,5 @@ PD_REGISTER_KERNEL(take_along_axis,
                    ALL_LAYOUT,
                    phi::TakeAlongAxisKernel,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    float) {}

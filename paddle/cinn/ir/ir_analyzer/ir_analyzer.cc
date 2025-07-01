@@ -34,8 +34,10 @@
 #include "paddle/cinn/ir/schedule/schedule_desc.h"
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/ir/utils/ir_nodes_collector.h"
+#include "paddle/cinn/ir/utils/stmt_converter.h"
 #include "paddle/cinn/utils/random_engine.h"
 #include "paddle/common/enforce.h"
+#include "paddle/fluid/platform/enforce.h"
 namespace cinn {
 namespace ir {
 namespace analyzer {
@@ -47,7 +49,7 @@ bool HasBlock(const std::vector<Expr>& exprs, const std::string& block_name) {
     if (!find_blocks.empty()) {
       PADDLE_ENFORCE_EQ(find_blocks.size(),
                         1U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "There should not be more than 1 block with "
                             "identical name!"));
       return true;
@@ -65,9 +67,15 @@ std::vector<Expr> GetLoops(const std::vector<Expr>& exprs,
 
 std::vector<Expr> GetLoops(const std::vector<Expr>& exprs, const Expr& block) {
   std::vector<Expr> result;
-  CHECK(block.As<ir::ScheduleBlockRealize>());
-  CHECK(block.As<ir::ScheduleBlockRealize>()
-            ->schedule_block.As<ir::ScheduleBlock>());
+  PADDLE_ENFORCE_NOT_NULL(
+      block.As<ir::ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "The block must be convertible to ir::ScheduleBlockRealize."));
+  PADDLE_ENFORCE_NOT_NULL(
+      block.As<ir::ScheduleBlockRealize>()
+          ->schedule_block.As<ir::ScheduleBlock>(),
+      ::common::errors::InvalidArgument(
+          "Cannot cast block to ir::ScheduleBlockRealize."));
   std::string block_name = block.As<ir::ScheduleBlockRealize>()
                                ->schedule_block.As<ir::ScheduleBlock>()
                                ->name;
@@ -80,15 +88,12 @@ std::vector<Expr> GetLoops(const std::vector<Expr>& exprs, const Expr& block) {
         std::stringstream ss;
         ss << "Find block with name: \n"
            << block_name << " appeared in more than one AST!";
-        PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+        PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
       }
       result = find_loops;
     }
   }
 
-  if (result.empty()) {
-    result.push_back(AddUnitLoop(exprs, block));
-  }
   return result;
 }
 
@@ -99,15 +104,41 @@ std::vector<Expr> GetAllBlocks(const std::vector<Expr>& exprs) {
     auto find_blocks = visitor(&it_expr);
     result.insert(result.end(), find_blocks.begin(), find_blocks.end());
   }
+  PADDLE_ENFORCE_EQ(
+      result.empty(),
+      false,
+      ::common::errors::InvalidArgument("Didn't find blocks in expr."));
+  return result;
+}
+
+std::vector<stmt::StmtRef> GetAllSchedules(const std::vector<Expr>& exprs) {
+  std::vector<stmt::StmtRef> result;
   for (auto& it_expr : exprs) {
-    VLOG(3) << "it_expr is : " << it_expr;
+    stmt::BlockRef stmt_block;
+    if (it_expr.As<ir::Block>()) {
+      stmt_block = ConvertExprBlockToStmtBlock(it_expr);
+    } else {
+      stmt_block = ConvertExprBlockToStmtBlock(
+          ir::Block::Make(std::vector<ir::Expr>{it_expr}));
+    }
+    FindSchedulesVisitor visitor;
+    auto find_blocks = visitor(stmt_block);
+    result.insert(result.end(), find_blocks.begin(), find_blocks.end());
   }
-  CHECK(!result.empty()) << "Didn't find blocks in expr.";
+  PADDLE_ENFORCE_EQ(
+      result.empty(),
+      false,
+      ::common::errors::InvalidArgument("Didn't find schedules in expr."));
   return result;
 }
 
 std::vector<Expr> GetChildBlocks(const Expr& expr) {
-  CHECK(expr.As<ir::ScheduleBlockRealize>() || expr.As<ir::For>());
+  if (!expr.As<ir::ScheduleBlockRealize>()) {
+    PADDLE_ENFORCE_NOT_NULL(expr.As<ir::For>(),
+                            ::common::errors::InvalidArgument(
+                                "The expression must be convertible to either "
+                                "ir::ScheduleBlockRealize or ir::For."));
+  }
   FindBlocksVisitor visitor;
   std::vector<Expr> result = visitor(&expr);
   return result;
@@ -121,7 +152,7 @@ Expr GetBlock(const std::vector<Expr>& exprs, const std::string& block_name) {
     if (!find_blocks.empty()) {
       PADDLE_ENFORCE_EQ(find_blocks.size(),
                         1U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "There should not be more than 1 block with "
                             "identical name!"));
       result = find_blocks[0];
@@ -131,7 +162,23 @@ Expr GetBlock(const std::vector<Expr>& exprs, const std::string& block_name) {
   std::stringstream ss;
   ss << "Didn't find a block with name " << block_name
      << " in this ModuleExpr!";
-  PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+  PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
+}
+
+Expr GetRootSBlock(const Expr& expr) {
+  PADDLE_ENFORCE_NOT_NULL(expr.As<ir::Block>(),
+                          ::common::errors::InvalidArgument(
+                              "The root of ModuleExpr must be a Block."));
+  PADDLE_ENFORCE_EQ(expr.As<ir::Block>()->stmts.size(),
+                    1U,
+                    ::common::errors::InvalidArgument(
+                        "The root block must have exactly one stmt."));
+  auto& root = expr.As<ir::Block>()->stmts[0];
+  PADDLE_ENFORCE_NOT_NULL(
+      root.As<ir::ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "The first stmt in the block must be ScheduleBlockRealize."));
+  return root;
 }
 
 Expr GetRootBlock(const std::vector<Expr>& exprs, const Expr& expr) {
@@ -143,31 +190,36 @@ Expr GetRootBlock(const std::vector<Expr>& exprs, const Expr& expr) {
         },
         true);
     if (!find_expr.empty()) {
-      CHECK(it_expr.As<ir::Block>());
-      PADDLE_ENFORCE_EQ(it_expr.As<ir::Block>()->stmts.size(),
-                        1U,
-                        phi::errors::InvalidArgument(
-                            "The root block should only have one stmt!"));
-      CHECK(it_expr.As<ir::Block>()->stmts[0].As<ir::ScheduleBlockRealize>());
-      return it_expr.As<ir::Block>()->stmts[0];
+      return GetRootSBlock(it_expr);
     }
   }
   std::stringstream ss;
   ss << "Didn't find expr \n" << expr << "in StScheduleImpl:\n" << exprs[0];
-  PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+  PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
 }
 
 DeviceAPI GetDeviceAPI(const std::vector<Expr>& exprs) {
   auto find_for_nodes = ir::ir_utils::CollectIRNodesWithoutTensor(
       exprs.front(), [&](const Expr* x) { return x->As<ir::For>(); }, true);
-  CHECK(!find_for_nodes.empty());
+  PADDLE_ENFORCE_EQ(
+      find_for_nodes.empty(),
+      false,
+      ::common::errors::InvalidArgument(
+          "The find_for_nodes container is empty. It must not be empty."));
   return (*find_for_nodes.begin()).As<ir::For>()->device_api;
 }
 
 Expr AddUnitLoop(const std::vector<Expr>& exprs, const Expr& block) {
-  CHECK(block.As<ir::ScheduleBlockRealize>());
-  CHECK(block.As<ir::ScheduleBlockRealize>()
-            ->schedule_block.As<ir::ScheduleBlock>());
+  PADDLE_ENFORCE_NOT_NULL(
+      block.As<ir::ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "The block is not convertible to ir::ScheduleBlockRealize. It must "
+          "be convertible to ir::ScheduleBlockRealize."));
+  PADDLE_ENFORCE_NOT_NULL(
+      block.As<ir::ScheduleBlockRealize>()
+          ->schedule_block.As<ir::ScheduleBlock>(),
+      ::common::errors::InvalidArgument(
+          "The schedule_block must be convertible to ir::ScheduleBlock."));
   std::string block_name = block.As<ir::ScheduleBlockRealize>()
                                ->schedule_block.As<ir::ScheduleBlock>()
                                ->name;
@@ -180,7 +232,10 @@ Expr AddUnitLoop(const std::vector<Expr>& exprs, const Expr& block) {
     }
   }
 
-  CHECK(visitor.target_) << ", block name : " << block_name << "\n" << exprs;
+  PADDLE_ENFORCE_NOT_NULL(visitor.target_,
+                          ::common::errors::InvalidArgument(
+                              "The visitor target is nullptr. It must not be "
+                              "nullptr."));
   if (visitor.target_->As<ir::Block>()) {
     for (auto& stmt : visitor.target_->As<ir::Block>()->stmts) {
       if (stmt.As<ir::ScheduleBlockRealize>()) {
@@ -221,34 +276,47 @@ Expr AddUnitLoop(const std::vector<Expr>& exprs, const Expr& block) {
     visitor.target_->As<ir::ScheduleBlock>()->body = loop;
     return loop;
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument("Can't find block's parent!"));
+    PADDLE_THROW(
+        ::common::errors::InvalidArgument("Can't find block's parent!"));
   }
-  PADDLE_THROW(
-      phi::errors::InvalidArgument("Shouldn't reach code here in AddUnitLoop"));
+  PADDLE_THROW(::common::errors::InvalidArgument(
+      "Shouldn't reach code here in AddUnitLoop"));
   return Expr{nullptr};
 }
 
 Expr GetStoreOfSBlock(const Expr& block) {
-  CHECK(block.As<ScheduleBlockRealize>());
-  std::set<Expr> find_store = ir_utils::CollectIRNodesWithoutTensor(
+  PADDLE_ENFORCE_NOT_NULL(block.As<ScheduleBlockRealize>(),
+                          ::common::errors::InvalidArgument(
+                              "Failed to cast block to ScheduleBlockRealize."));
+  std::vector<Expr> find_store = ir_utils::CollectIRNodesWithoutTensor(
       block, [&](const Expr* x) { return x->As<Store>(); }, true);
   PADDLE_ENFORCE_EQ(find_store.size(),
                     1U,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "One block should only have one Store node!"));
   return *find_store.begin();
 }
 
 Tensor GetStoreTensorOfSBlock(const Expr& block) {
-  CHECK(block.As<ScheduleBlockRealize>());
+  PADDLE_ENFORCE_NOT_NULL(block.As<ScheduleBlockRealize>(),
+                          ::common::errors::InvalidArgument(
+                              "Failed to cast block to ScheduleBlockRealize."));
   Expr find_store = GetStoreOfSBlock(block);
-  CHECK(find_store.As<Store>()->tensor.as_tensor());
+  PADDLE_ENFORCE_NOT_NULL(
+      find_store.As<Store>()->tensor.as_tensor(),
+      ::common::errors::InvalidArgument(
+          "The tensor must be convertible to Tensor type."));
   return find_store.As<Store>()->tensor.as_tensor_ref();
 }
 
 std::vector<Expr> GetConsumerSBlocks(const Expr& block, const Expr& root) {
-  CHECK(block.As<ScheduleBlockRealize>());
-  CHECK(root.As<ScheduleBlockRealize>());
+  PADDLE_ENFORCE_NOT_NULL(block.As<ScheduleBlockRealize>(),
+                          ::common::errors::InvalidArgument(
+                              "Failed to cast block to ScheduleBlockRealize."));
+  PADDLE_ENFORCE_NOT_NULL(
+      root.As<ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "Failed to cast 'root' to ScheduleBlockRealize."));
   std::vector<Expr> consumers;
   std::string store_tensor_name = GetStoreTensorOfSBlock(block)->name;
   if (IsReduceInitTensorName(store_tensor_name)) {
@@ -262,7 +330,7 @@ std::vector<Expr> GetConsumerSBlocks(const Expr& block, const Expr& root) {
         });
     PADDLE_ENFORCE_EQ(consumer.size(),
                       1,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The reduce tensor should have only one consumer!"));
     return {*consumer.begin()};
   }
@@ -272,8 +340,12 @@ std::vector<Expr> GetConsumerSBlocks(const Expr& block, const Expr& root) {
         return x->As<ScheduleBlockRealize>() && *x != block && *x != root;
       });
   for (auto& find_block : find_blocks) {
-    CHECK(find_block.As<ScheduleBlockRealize>()
-              ->schedule_block.As<ScheduleBlock>());
+    PADDLE_ENFORCE_NOT_NULL(
+        find_block.As<ScheduleBlockRealize>()
+            ->schedule_block.As<ScheduleBlock>(),
+        ::common::errors::InvalidArgument(
+            "The schedule_block within ScheduleBlockRealize must be "
+            "convertible to ScheduleBlock type."));
     auto block_body = find_block.As<ScheduleBlockRealize>()
                           ->schedule_block.As<ScheduleBlock>()
                           ->body;
@@ -298,8 +370,13 @@ std::vector<Expr> GetConsumerSBlocks(const Expr& block, const Expr& root) {
 
 std::vector<std::pair<Expr, Expr>> GetConsumerLoadsAndSBlocks(
     const Expr& block, const Expr& root) {
-  CHECK(block.As<ScheduleBlockRealize>());
-  CHECK(root.As<ScheduleBlockRealize>());
+  PADDLE_ENFORCE_NOT_NULL(block.As<ScheduleBlockRealize>(),
+                          ::common::errors::InvalidArgument(
+                              "Failed to cast block to ScheduleBlockRealize."));
+  PADDLE_ENFORCE_NOT_NULL(
+      root.As<ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "Failed to cast 'root' to ScheduleBlockRealize."));
 
   Expr store = GetStoreOfSBlock(block);
   std::vector<Expr> consumer_blocks = GetConsumerSBlocks(block, root);
@@ -339,18 +416,18 @@ std::unordered_map<ir::Var, ir::Expr> GetIterVarToValueOfSBlock(
     ir::Expr block) {
   ir::ScheduleBlockRealize* s_block_realize =
       block.As<ir::ScheduleBlockRealize>();
-  PADDLE_ENFORCE_NOT_NULL(
-      s_block_realize,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlockRealize"));
+  PADDLE_ENFORCE_NOT_NULL(s_block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
   ir::ScheduleBlock* s_block =
       s_block_realize->schedule_block.As<ir::ScheduleBlock>();
   PADDLE_ENFORCE_NOT_NULL(
       s_block,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlock"));
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
   PADDLE_ENFORCE_EQ(
       s_block_realize->iter_values.size(),
       s_block->iter_vars.size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "The size of iter_values should be equal to the size of "
           "iter_vars in the block!"));
   std::unordered_map<ir::Var, ir::Expr> iter_var2iter_values;
@@ -367,7 +444,7 @@ ir::Expr ReplaceVarWithExpr(const ir::Expr& source,
   PADDLE_ENFORCE_EQ(
       candidates.size(),
       targets.size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "In ReplaceExpr, the size of Vars to be replaces must "
           "be equal to the size of targets Exprs! Please check."));
   ir::Expr copied = ir::ir_utils::IRCopy(source);
@@ -384,28 +461,66 @@ ir::Expr ReplaceVarWithExpr(const ir::Expr& source,
   return copied;
 }
 
+ir::Expr ExpandIterVar(const ir::Expr& expr, const ir::Expr& block) {
+  auto* s_block_realize = block.As<ir::ScheduleBlockRealize>();
+  PADDLE_ENFORCE_NOT_NULL(s_block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
+  auto* s_block = s_block_realize->schedule_block.As<ScheduleBlock>();
+  PADDLE_ENFORCE_NOT_NULL(
+      s_block,
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
+  return ReplaceVarWithExpr(
+      expr, s_block->iter_vars, s_block_realize->iter_values);
+}
+
+ir::Expr CanonicalizeLoopVar(const ir::Expr& expr,
+                             const std::vector<ir::Expr>& loops) {
+  std::vector<ir::Var> loop_vars;
+  std::vector<ir::Expr> new_loop_vars;
+
+  for (int i = 0; i < loops.size(); i++) {
+    PADDLE_ENFORCE_NOT_NULL(
+        loops[i].As<ir::For>(),
+        ::common::errors::InvalidArgument("The loop is not an ir::For"));
+
+    auto& loop_var = loops[i].As<ir::For>()->loop_var;
+    loop_vars.push_back(loop_var);
+
+    ir::Var new_loop_var = ir::ir_utils::IRCopy(loop_var);
+    new_loop_var->name = kLoopVar + std::to_string(i);
+    new_loop_vars.push_back(new_loop_var);
+  }
+
+  return ReplaceVarWithExpr(expr, loop_vars, new_loop_vars);
+}
+
 std::vector<ir::Expr> GetIterValuesOfAccess(ir::Expr load_or_store,
                                             ir::Expr block) {
-  CHECK(load_or_store.As<ir::Load>() || load_or_store.As<ir::Store>());
+  if (!load_or_store.As<ir::Load>())
+    PADDLE_ENFORCE_NOT_NULL(
+        load_or_store.As<ir::Store>(),
+        ::common::errors::InvalidArgument(
+            "Failed to cast 'load_or_store' to ir::Store type."));
   std::vector<ir::Expr> indices = load_or_store.As<ir::Load>()
                                       ? load_or_store.As<ir::Load>()->indices
                                       : load_or_store.As<ir::Store>()->indices;
   ir::ScheduleBlockRealize* s_block_realize =
       block.As<ir::ScheduleBlockRealize>();
-  PADDLE_ENFORCE_NOT_NULL(
-      s_block_realize,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlockRealize"));
+  PADDLE_ENFORCE_NOT_NULL(s_block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
   ir::ScheduleBlock* s_block =
       s_block_realize->schedule_block.As<ir::ScheduleBlock>();
   PADDLE_ENFORCE_NOT_NULL(
       s_block,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlock"));
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
 
   std::vector<ir::Expr> iter_values;
   for (ir::Expr index : indices) {
     ir::Expr index_value = ReplaceVarWithExpr(
         index, s_block->iter_vars, s_block_realize->iter_values);
-    iter_values.push_back(common::AutoSimplify(index_value));
+    iter_values.push_back(optim::ArithSimplify(index_value));
   }
   return iter_values;
 }
@@ -413,14 +528,14 @@ std::vector<ir::Expr> GetIterValuesOfAccess(ir::Expr load_or_store,
 std::unordered_set<ir::Var> GetReduceIterVars(ir::Expr block) {
   ir::ScheduleBlockRealize* schedule_block_realize =
       block.As<ir::ScheduleBlockRealize>();
-  PADDLE_ENFORCE_NOT_NULL(
-      schedule_block_realize,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlockRealize"));
+  PADDLE_ENFORCE_NOT_NULL(schedule_block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
   ir::ScheduleBlock* schedule_block =
       schedule_block_realize->schedule_block.As<ir::ScheduleBlock>();
   PADDLE_ENFORCE_NOT_NULL(
       schedule_block,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlock"));
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
   std::vector<ir::Var>& iter_vars = schedule_block->iter_vars;
   std::unordered_set<ir::Var> reduce_vars;
   for (int i = 0; i < iter_vars.size(); ++i) {
@@ -434,14 +549,14 @@ std::unordered_set<ir::Var> GetReduceIterVars(ir::Expr block) {
 bool IsReductionSBlock(ir::Expr block) {
   ir::ScheduleBlockRealize* s_block_realize =
       block.As<ir::ScheduleBlockRealize>();
-  PADDLE_ENFORCE_NOT_NULL(
-      s_block_realize,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlockRealize"));
+  PADDLE_ENFORCE_NOT_NULL(s_block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
   ir::ScheduleBlock* s_block =
       s_block_realize->schedule_block.As<ir::ScheduleBlock>();
   PADDLE_ENFORCE_NOT_NULL(
       s_block,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlock"));
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
   for (const ir::Var& var : s_block->iter_vars) {
     if (var->is_reduce_axis) {
       return true;
@@ -453,18 +568,19 @@ bool IsReductionSBlock(ir::Expr block) {
 bool IsBroadcastSBlock(ir::Expr block) {
   ir::ScheduleBlockRealize* s_block_realize =
       block.As<ir::ScheduleBlockRealize>();
-  PADDLE_ENFORCE_NOT_NULL(
-      s_block_realize,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlockRealize"));
+  PADDLE_ENFORCE_NOT_NULL(s_block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
   ir::ScheduleBlock* s_block =
       s_block_realize->schedule_block.As<ir::ScheduleBlock>();
   PADDLE_ENFORCE_NOT_NULL(
       s_block,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlock"));
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
   ir::Expr e_store = GetStoreOfSBlock(block);
   ir::Store* store = e_store.As<ir::Store>();
   PADDLE_ENFORCE_NOT_NULL(
-      store, phi::errors::InvalidArgument("The block is not a Store node"));
+      store,
+      ::common::errors::InvalidArgument("The block is not a Store node"));
   ir::Load* load = store->value.As<ir::Load>();
   if (load == nullptr) {
     return false;
@@ -475,7 +591,8 @@ bool IsBroadcastSBlock(ir::Expr block) {
   };
   int num_load_index_zero = 0;
   for (size_t i = 0; i < load->indices.size(); ++i) {
-    if (IsIndexZero(load->indices[i]) && !IsIndexZero(store->indices[i])) {
+    if (IsIndexZero(load->indices[i]) && i < store->indices.size() &&
+        !IsIndexZero(store->indices[i])) {
       ++num_load_index_zero;
       continue;
     }
@@ -559,14 +676,14 @@ void AnalyzeScheduleBlockReadWriteBuffer(ir::ScheduleBlock* sche_block) {
 std::string GetBlockName(const ir::Expr block) {
   const ir::ScheduleBlockRealize* block_realize =
       block.As<ir::ScheduleBlockRealize>();
-  PADDLE_ENFORCE_NOT_NULL(
-      block_realize,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlockRealize"));
+  PADDLE_ENFORCE_NOT_NULL(block_realize,
+                          ::common::errors::InvalidArgument(
+                              "The block is not a ScheduleBlockRealize"));
   const ir::ScheduleBlock* block_node =
       block_realize->schedule_block.As<ir::ScheduleBlock>();
   PADDLE_ENFORCE_NOT_NULL(
       block_node,
-      phi::errors::InvalidArgument("The block is not a ScheduleBlock"));
+      ::common::errors::InvalidArgument("The block is not a ScheduleBlock"));
   return block_node->name;
 }
 

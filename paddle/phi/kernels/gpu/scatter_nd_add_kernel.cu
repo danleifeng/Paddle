@@ -23,27 +23,27 @@
 namespace phi {
 
 template <typename T, typename Context>
-void ScatterNdAddKernel(const Context &ctx,
+void ScatterNdAddKernel(const Context &dev_ctx,
                         const DenseTensor &x,
                         const DenseTensor &index,
                         const DenseTensor &updates,
                         DenseTensor *out) {
-  Copy(ctx, x, ctx.GetPlace(), false, out);
+  Copy(dev_ctx, x, dev_ctx.GetPlace(), false, out);
   const auto &index_type = index.dtype();
   bool index_type_match =
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
   PADDLE_ENFORCE_EQ(index_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Index holds the wrong type, it holds [%s], but "
                         "desires to be [%s] or [%s].",
                         index_type,
                         phi::DataType::INT32,
                         phi::DataType::INT64));
   if (index_type == phi::DataType::INT32) {
-    phi::funcs::GPUScatterNdAdd<T, int32_t>(ctx, updates, index, out);
+    phi::funcs::GPUScatterNdAdd<T, int32_t>(dev_ctx, updates, index, out);
   } else {
-    phi::funcs::GPUScatterNdAdd<T, int64_t>(ctx, updates, index, out);
+    phi::funcs::GPUScatterNdAdd<T, int64_t>(dev_ctx, updates, index, out);
   }
 }
 

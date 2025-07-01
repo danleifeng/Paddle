@@ -37,8 +37,6 @@
 #include <execinfo.h>
 #endif
 
-// msvc conflict logging with windows.h
-#define GLOG_NO_ABBREVIATED_SEVERITIES
 #include "paddle/utils/string/printf.h"
 #include "paddle/utils/string/to_string.h"
 #include "paddle/utils/variant.h"
@@ -362,5 +360,5 @@ inline bool is_error(const T& stat) {
 }
 
 namespace pir {
-#define IR_THROW(...) PADDLE_THROW(phi::errors::Fatal(__VA_ARGS__))
+#define IR_THROW(...) PADDLE_THROW(common::errors::Fatal(__VA_ARGS__))
 }  // namespace pir

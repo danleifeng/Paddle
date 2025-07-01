@@ -70,7 +70,7 @@ class CompatMetaTensor : public phi::MetaTensor {
   bool operator!() const override { return !initialized_; }
 
  private:
-  const LoD& GetRuntimeLoD() const {
+  const LegacyLoD& GetRuntimeLoD() const {
     auto* var = PADDLE_GET_CONST(Variable*, var_);
     return var->Get<phi::DenseTensor>().lod();
   }
@@ -84,13 +84,13 @@ class CompatMetaTensor : public phi::MetaTensor {
     PADDLE_ENFORCE_EQ(
         is_runtime_,
         true,
-        phi::errors::Unavailable(
+        common::errors::Unavailable(
             "Only can get phi::DenseTensor from MetaTensor in runtime."));
     auto* var = PADDLE_GET_CONST(Variable*, var_);
     PADDLE_ENFORCE_EQ(
         var->IsType<phi::SelectedRows>(),
         true,
-        phi::errors::Unavailable(
+        common::errors::Unavailable(
             "The phi::DenseTensor in MetaTensor is not SelectedRows."));
     return var->Get<phi::SelectedRows>();
   }

@@ -19,7 +19,6 @@
 #include "paddle/cinn/hlir/dialect/operator/transforms/group_merge/op_with_group_merge_util.h"
 #include "paddle/cinn/hlir/dialect/operator/transforms/refresh_combine_pattern.h"
 #include "paddle/cinn/hlir/framework/pir/utils.h"
-#include "paddle/common/ddim.h"
 #include "paddle/fluid/pir/dialect/operator/interface/infer_symbolic_shape/infer_sym_utils.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_attribute.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
@@ -41,7 +40,11 @@ bool RemoveOp(pir::Operation* op,
               pir::PatternRewriter* rewriter,
               bool check_dtype = false) {
   const auto& IsDynamicShape = [](const pir::Value& value) -> bool {
-    return value.type().dyn_cast<pir::ShapedTypeInterface>().IsDynamicShape();
+    auto shape_type = value.type().dyn_cast<pir::ShapedTypeInterface>();
+    if (shape_type && shape_type.IsDynamicShape()) {
+      return true;
+    }
+    return false;
   };
   const auto& GetDims = [](const pir::Value& value) -> decltype(auto) {
     return value.type().dyn_cast<paddle::dialect::DenseTensorType>().dims();
@@ -63,14 +66,6 @@ bool RemoveOp(pir::Operation* op,
     }
     return GetDims(input) == GetDims(output);
   };
-  const auto& UsedByShadowOutput = [&](const pir::Value& value) -> bool {
-    for (auto it = value.use_begin(); it != value.use_end(); ++it) {
-      if (it->owner()->isa<pir::ShadowOutputOp>()) {
-        return true;
-      }
-    }
-    return false;
-  };
 
   const auto& IsSameDataType = [&]() -> bool {
     return paddle::dialect::TransToPhiDataType(
@@ -86,7 +81,6 @@ bool RemoveOp(pir::Operation* op,
   const auto CanRemove = [&]() -> bool {
     if (!IsSameShape()) return false;
     if (check_dtype && !IsSameDataType()) return false;
-    if (UsedByShadowOutput(input) && UsedByShadowOutput(output)) return false;
     return true;
   };
 

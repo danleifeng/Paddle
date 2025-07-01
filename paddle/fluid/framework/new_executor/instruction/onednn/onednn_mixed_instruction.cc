@@ -22,10 +22,10 @@
 #include "paddle/fluid/pir/dialect/operator/interface/op_yaml_info.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
-#include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/core/meta_tensor.h"
+#include "paddle/phi/core/platform/collective_helper.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/core/type_defs.h"
 
 #include "paddle/pir/include/core/builtin_attribute.h"
@@ -40,8 +40,9 @@
 #include "paddle/phi/backends/onednn/onednn_helper.h"
 #include "paddle/phi/kernels/funcs/data_layout_transform.h"
 
-namespace paddle {
-namespace framework {
+COMMON_DECLARE_bool(check_cuda_error);
+
+namespace paddle::framework {
 
 OneDNNMixedPhiKernelInstruction::OneDNNMixedPhiKernelInstruction(
     size_t id,
@@ -58,6 +59,11 @@ OneDNNMixedPhiKernelInstruction::OneDNNMixedPhiKernelInstruction(
 }
 
 void OneDNNMixedPhiKernelInstruction::Run() {
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("OneDNNMixedPhiKernelInstruction " + phi_op_name_ +
+                   " begin");
+  }
+
   std::vector<std::shared_ptr<phi::DenseTensor>> tmp_holders;
   // Step1. Mixed Dynamic Choose Kernel
   if (!has_choose_kernel_) {
@@ -154,7 +160,11 @@ void OneDNNMixedPhiKernelInstruction::Run() {
     (*(phi_kernel_))(&(tmp_kernel_context));
     VLOG(6) << "End run op " << phi_op_name_ << " kernel.";
   }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("OneDNNMixedPhiKernelInstruction " + phi_op_name_ +
+                   " finish");
+  }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

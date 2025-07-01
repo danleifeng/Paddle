@@ -85,7 +85,7 @@ class ElementwiseMulCompositeGradOpMaker
     PADDLE_ENFORCE_EQ(
         axis,
         -1,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "We only support axis = -1 in composite mul_grad but we got: ",
             axis));
     prim::multiply_grad<prim::DescTensor>(
@@ -135,12 +135,12 @@ class ElementwiseMulCompositeDoubleGradOpMaker
 
     // get attr
     int axis = static_cast<int>(this->Attr<int>("axis"));
-    PADDLE_ENFORCE_EQ(
-        axis,
-        -1,
-        phi::errors::InvalidArgument("We only support axis = -1 in composite "
-                                     "add_doubel_grad but we got: ",
-                                     axis));
+    PADDLE_ENFORCE_EQ(axis,
+                      -1,
+                      common::errors::InvalidArgument(
+                          "We only support axis = -1 in composite "
+                          "add_double_grad but we got: ",
+                          axis));
 
     // get output
     paddle::Tensor x_grad_t = this->GetSingleInputGrad("X");
@@ -152,7 +152,7 @@ class ElementwiseMulCompositeDoubleGradOpMaker
     paddle::Tensor* x_grad = this->GetOutputPtr(&x_grad_t);
     paddle::Tensor* y_grad = this->GetOutputPtr(&y_grad_t);
     paddle::Tensor* grad_out_grad = this->GetOutputPtr(&grad_out_grad_t);
-    // get output orginal name
+    // get output original name
     std::string x_grad_name = this->GetOutputName(x_grad_t);
     std::string y_grad_name = this->GetOutputName(y_grad_t);
     std::string grad_out_grad_name = this->GetOutputName(grad_out_grad_t);

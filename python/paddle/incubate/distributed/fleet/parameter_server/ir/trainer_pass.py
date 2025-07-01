@@ -1264,7 +1264,7 @@ def insert_communicate_op(
         outputs={"Out": []},
         attrs={
             "mode": "forward" if is_forward else "backward",
-            "send_var_name": entrance_var + ["microbatch_id"],
+            "send_var_name": [*entrance_var, "microbatch_id"],
             "recv_var_name": [],
             "message_name": comm_info["block_input_var_name"],
             "next_endpoints": next_heter_worker_endpoints,
@@ -1339,7 +1339,7 @@ def replace_ops_by_communicate_op(
             outputs={"Out": []},
             attrs={
                 "mode": "forward",
-                "send_var_name": entrance_var + ["microbatch_id"],
+                "send_var_name": [*entrance_var, "microbatch_id"],
                 "recv_var_name": [],
                 "message_name": comm_info["block_input_var_name"],
                 "next_endpoints": next_heter_worker_endpoints,
@@ -2016,7 +2016,7 @@ def block_append_op(program, origin_program, block, op):
         new_op_desc.copy_from(op_desc)
         new_op_desc._set_attr(op_role_attr_name, backward)
 
-        # set device gard
+        # set device grad
         if op.desc.has_attr(device_attr_name):
             op_device = op_desc.attr(device_attr_name)
             new_op_desc._set_attr(device_attr_name, op_device)

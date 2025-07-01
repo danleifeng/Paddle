@@ -17,6 +17,7 @@ from functools import reduce
 import numpy as np
 
 import paddle
+import paddle.distributed as dist
 from paddle.distributed.fleet.meta_optimizers.common import OP_ROLE_KEY, OpRole
 
 from ..auto_parallel.process_mesh import ProcessMesh
@@ -87,7 +88,7 @@ def _get_dpmp_topology(origin_topology, sharding_group):
     else:
         assert product_topology % product_dp_sharding == 0
         mp_degree = product_topology // product_dp_sharding
-        dpmp_topology = dp_sharding_topology + [mp_degree]
+        dpmp_topology = [*dp_sharding_topology, mp_degree]
 
     return dpmp_topology, sharding_axis
 
@@ -252,10 +253,17 @@ class ClipHelper:
                 return False
 
         for op in self.block.ops:
-            if op.type in [
-                "c_reduce_sum",
-                "c_allreduce_sum",
-            ] and not is_data_parallel_reduce_op(op):
+            if (
+                (
+                    op.type == "reduce"
+                    and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
+                )
+                or (
+                    op.type == "all_reduce"
+                    and op.desc.attr("reduce_type") == dist.ReduceOp.SUM
+                )
+                and not is_data_parallel_reduce_op(op)
+            ):
                 return False
             if op.type in ["send_v2", "recv_v2"]:
                 return False
@@ -474,12 +482,12 @@ class ClipGradByGlobalNormPass(PassBase):
 
                     allreduce_op = block._insert_op(
                         idx + offset,
-                        type='c_allreduce_sum',
-                        inputs={'X': [input_var]},
-                        outputs={'Out': [input_var]},
+                        type='all_reduce',
+                        inputs={'x': [input_var]},
+                        outputs={'out': [input_var]},
                         attrs={
                             'ring_id': 0,
-                            'use_calc_stream': True,
+                            'reduce_type': paddle.distributed.ReduceOp.SUM,
                             OP_ROLE_KEY: OpRole.Optimize,
                         },
                     )
@@ -518,7 +526,7 @@ class ClipGradByGlobalNormPass(PassBase):
                             OpRole.Optimize,
                             process_mesh=[
                                 -1
-                            ],  # hack to avoid initialize the dist attr for coalesc var
+                            ],  # hack to avoid initialize the dist attr for coalesce var
                             is_recompute=False,
                             sync=False,
                             op_namescope="grad_clip_fill_constant_dep",

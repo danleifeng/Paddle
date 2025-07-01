@@ -24,8 +24,8 @@
 #include "paddle/fluid/framework/ir/pass_builder.h"
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
+#include "paddle/phi/core/platform/device_context.h"
 
 namespace paddle {
 namespace framework {
@@ -132,7 +132,7 @@ struct BuildStrategy {
 
   // By default, memory_optimize would be opened if gc is disabled, and
   // be closed if gc is enabled.
-  // Users can forcely enable/disable memory_optimize by setting True/False.
+  // Users can forcibly enable/disable memory_optimize by setting True/False.
   paddle::optional<bool> memory_optimize_{paddle::none};
 
   // Turn on inplace by default.
@@ -145,7 +145,7 @@ struct BuildStrategy {
 
   // Inference pass
   bool enable_inference_pass_{false};  // switch for infernce pass
-  bool delete_dropout_{true};          // delte dropout op
+  bool delete_dropout_{true};          // delete dropout op
 #ifdef PADDLE_WITH_DNNL
   bool use_mkldnn_{true};  // use mkdnn to do inference
 #else
@@ -170,7 +170,7 @@ struct BuildStrategy {
   // Nccl ranks in a node when use hierarchical allreduce, it's set to gpu
   // cards' number in most cases.
   size_t hierarchical_allreduce_inter_nranks_{0};
-  // Nccl ranks bewteen nodes when use hierarchical allreduce, it's set to
+  // Nccl ranks between nodes when use hierarchical allreduce, it's set to
   // nodes number.
   size_t hierarchical_allreduce_exter_nranks_{0};
 

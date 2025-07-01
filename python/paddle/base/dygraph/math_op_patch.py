@@ -74,7 +74,8 @@ def monkey_patch_math_tensor():
     def astype(self: Tensor, dtype: DTypeLike) -> Tensor:
         """
 
-        Cast a Tensor to a specified data type.
+        Cast a Tensor to a specified data type if it differs from the current dtype;
+        otherwise, return the original Tensor.
 
         Args:
             dtype: The target data type.
@@ -97,6 +98,10 @@ def monkey_patch_math_tensor():
         """
         if not isinstance(dtype, (core.VarDesc.VarType, core.DataType)):
             dtype = convert_np_dtype_to_dtype_(dtype)
+
+        if self.dtype == dtype:
+            return self
+
         return _C_ops.cast(self, dtype)
 
     def _scalar_elementwise_op_(
@@ -106,6 +111,19 @@ def monkey_patch_math_tensor():
 
     def _neg_(var: Tensor) -> Tensor:
         return _scalar_elementwise_op_(var, -1.0, 0.0)
+
+    def _abs_(var: Tensor) -> Tensor:
+        return var.abs()
+
+    def _complex_(var: Tensor) -> complex:
+        numel = np.prod(var.shape)
+        assert (
+            numel == 1
+        ), "only one element variable can be converted to complex."
+        assert var._is_initialized(), "variable's tensor is not initialized"
+        if not var.is_complex():
+            var = var.astype('complex64')
+        return complex(np.array(var))
 
     def _float_(var: Tensor) -> float:
         numel = np.prod(var.shape)
@@ -186,8 +204,21 @@ def monkey_patch_math_tensor():
         out = _C_ops.transpose(var, perm)
         return out
 
+    @property
+    def _mT_(var: Tensor) -> Tensor:
+        if len(var.shape) < 2:
+            raise ValueError(
+                f"Tensor.ndim({var.ndim}) is required to be greater than or equal to 2."
+            )
+        perm = list(range(len(var.shape)))
+        perm[-1], perm[-2] = perm[-2], perm[-1]
+        out = _C_ops.transpose(var, perm)
+        return out
+
     eager_methods = [
         ('__neg__', _neg_),
+        ('__abs__', _abs_),
+        ('__complex__', _complex_),
         ('__float__', _float_),
         ('__long__', _long_),
         ('__int__', _int_),
@@ -199,6 +230,7 @@ def monkey_patch_math_tensor():
         ('ndim', _ndim),
         ('size', _size_),
         ('T', _T_),
+        ('mT', _mT_),
         # for logical compare
         ('__array_ufunc__', None),
     ]
@@ -215,12 +247,15 @@ def monkey_patch_math_tensor():
         '__rdiv__',
         '__rtruediv__',
         '__mod__',
+        '__rmod__',
         '__matmul__',
+        '__rmatmul__',
         '__gt__',
         '__ge__',
         '__lt__',
         '__le__',
         '__floordiv__',
+        '__rfloordiv__',
         '__pow__',
         '__rpow__',
         '__eq__',

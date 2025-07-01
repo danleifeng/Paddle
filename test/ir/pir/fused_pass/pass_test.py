@@ -30,7 +30,7 @@ class PassTest(unittest.TestCase):
         self.pir_program = None
         self.places = []
         self.skip_accuracy_verification = False
-        self.pass_attr_list = []  # pass_name:pass_attr(defalut:None)
+        self.pass_attr_list = []  # pass_name:pass_attr(default:None)
 
     def run_pir_pass(self, program):
         pm = pir.PassManager(opt_level=4)
@@ -64,14 +64,12 @@ class PassTest(unittest.TestCase):
         raise NotImplementedError
 
     def run_program(self, executor, startup_program, main_program):
-        with paddle.pir_utils.IrGuard():
-            with paddle.static.program_guard(startup_program, main_program):
-                fetches = executor.run(
-                    main_program,
-                    feed=self.feeds,
-                    fetch_list=main_program.list_vars()[-1],
-                )
-                return fetches
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.static.program_guard(startup_program, main_program),
+        ):
+            fetches = executor.run(main_program, feed=self.feeds)
+            return fetches
 
     def compare_accuracy(
         self, baseline_data, actual_data, atol=1e-5, rtol=1e-5
@@ -103,6 +101,11 @@ class PassTest(unittest.TestCase):
                     ):
                         executor = paddle.static.Executor(place)
                         executor.run(startup_program)
+                    with paddle.static.program_guard(main_program):
+                        out = paddle._pir_ops.fetch(
+                            main_program.list_vars()[-1], "fetch0", 0
+                        )
+                        out.persistable = True
                 baseline_fetch = self.run_program(
                     executor, startup_program, main_program
                 )

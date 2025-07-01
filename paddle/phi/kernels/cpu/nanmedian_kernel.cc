@@ -16,6 +16,7 @@
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/nanmedian_utils.h"
 #include "paddle/phi/kernels/top_k_kernel.h"
 
@@ -148,12 +149,12 @@ void ProcessMedianKernel(const Context& dev_ctx,
   int64_t x_rank = x_dim.size();
   int64_t stride = x_dim[static_cast<int>(x_rank - 1)];
 
-  PADDLE_ENFORCE_NE(
-      stride,
-      0,
-      phi::errors::InvalidArgument("The input Tensor x's shape[-1] should not "
-                                   "be 0, but shape is %s now.",
-                                   x_dim));
+  PADDLE_ENFORCE_NE(stride,
+                    0,
+                    common::errors::InvalidArgument(
+                        "The input Tensor x's shape[-1] should not "
+                        "be 0, but shape is %s now.",
+                        x_dim));
 
   int64_t pre_dim = numel / stride;
   int64_t i = 0;
@@ -218,6 +219,16 @@ void NanmedianKernel(const Context& dev_ctx,
                      const std::string& mode,
                      DenseTensor* out,
                      DenseTensor* median_index) {
+  if (x.numel() == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(out->dims())), NAN, out);
+    phi::Full<int64_t, Context>(
+        dev_ctx,
+        phi::IntArray(common::vectorize(median_index->dims())),
+        0,
+        median_index);
+    return;
+  }
   DenseTensor tmp_x;
   auto rank = x.dims().size();
   if ((axes.size() == 0) || rank <= 1) {

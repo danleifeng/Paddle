@@ -23,6 +23,7 @@ REL_FWD_JUMP = REL_JUMP - REL_BWD_JUMP
 ABS_JUMP = {opcode.opname[x] for x in opcode.hasjabs}
 HAS_LOCAL = {opcode.opname[x] for x in opcode.haslocal}
 HAS_FREE = {opcode.opname[x] for x in opcode.hasfree}
+NEED_TO_BOOL = {"UNARY_NOT", "POP_JUMP_IF_FALSE", "POP_JUMP_IF_TRUE"}
 ALL_JUMP = REL_JUMP | ABS_JUMP
 UNCONDITIONAL_JUMP = {"JUMP_ABSOLUTE", "JUMP_FORWARD"}
 if sys.version_info >= (3, 11):
@@ -46,7 +47,7 @@ class PopJumpCond(Enum):
 
 def _get_pyopcode_cache_size() -> dict[str, int]:
     if sys.version_info >= (3, 11) and sys.version_info < (3, 12):
-        # Cache for some opcodes, it's for Python 3.11+
+        # Cache for some opcodes, it's for Python 3.11
         # https://github.com/python/cpython/blob/3.11/Include/internal/pycore_opcode.h#L41-L53
         return {
             "BINARY_SUBSCR": 4,
@@ -62,7 +63,7 @@ def _get_pyopcode_cache_size() -> dict[str, int]:
             "CALL": 4,
         }
     elif sys.version_info >= (3, 12) and sys.version_info < (3, 13):
-        # Cache for some opcodes, it's for Python 3.12+
+        # Cache for some opcodes, it's for Python 3.12
         # https://github.com/python/cpython/blob/3.12/Include/internal/pycore_opcode.h#L34-L47
         return {
             "BINARY_SUBSCR": 1,
@@ -78,7 +79,31 @@ def _get_pyopcode_cache_size() -> dict[str, int]:
             "LOAD_SUPER_ATTR": 1,
             "CALL": 3,
         }
-    elif sys.version_info >= (3, 13):
+    elif sys.version_info >= (3, 13) and sys.version_info < (3, 14):
+        # Cache for some opcodes, it's for Python 3.13
+        # https://github.com/python/cpython/blob/3.13/Include/internal/pycore_opcode_metadata.h#L1598-L1618
+        return {
+            "JUMP_BACKWARD": 1,
+            "TO_BOOL": 3,
+            "BINARY_SUBSCR": 1,
+            "STORE_SUBSCR": 1,
+            "SEND": 1,
+            "UNPACK_SEQUENCE": 1,
+            "STORE_ATTR": 4,
+            "LOAD_GLOBAL": 4,
+            "LOAD_SUPER_ATTR": 1,
+            "LOAD_ATTR": 9,
+            "COMPARE_OP": 1,
+            "CONTAINS_OP": 1,
+            "POP_JUMP_IF_TRUE": 1,
+            "POP_JUMP_IF_FALSE": 1,
+            "POP_JUMP_IF_NONE": 1,
+            "POP_JUMP_IF_NOT_NONE": 1,
+            "FOR_ITER": 1,
+            "CALL": 3,
+            "BINARY_OP": 1,
+        }
+    elif sys.version_info >= (3, 14):
         raise NotImplementedError(
             f"Need to supplement cache operation code, for Python {sys.version_info}"
         )
@@ -87,3 +112,8 @@ def _get_pyopcode_cache_size() -> dict[str, int]:
 
 
 PYOPCODE_CACHE_SIZE = _get_pyopcode_cache_size()
+
+
+class ExceptionHandler:
+    opcode = 257
+    opname = "EXCEPT_HANDLER"

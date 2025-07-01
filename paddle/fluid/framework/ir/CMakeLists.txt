@@ -19,7 +19,7 @@ cc_library(
 cc_library(
   graph_helper
   SRCS graph_helper.cc
-  DEPS graph program_utils collective_helper) #
+  DEPS graph program_utils phi) #
 cc_library(
   pass
   SRCS pass.cc
@@ -31,7 +31,7 @@ cc_library(
 cc_library(
   cost_model
   SRCS cost_model.cc
-  DEPS executor graph profiler proto_desc phi common)
+  DEPS executor graph proto_desc phi common)
 
 set(GRAPH_PATTERN_DETECTOR_DEPS graph graph_helper graph_traits)
 if(WITH_TESTING)
@@ -305,6 +305,8 @@ if(WITH_XPU)
   pass_library(add_layernorm_xpu_fuse_pass inference DIR xpu DEPS
                ${XPU_PASS_DEPS})
   pass_library(group_norm_silu_xpu_fuse_pass inference DIR xpu DEPS
+               ${XPU_PASS_DEPS})
+  pass_library(layer_norm_relu_xpu_fuse_pass inference DIR xpu DEPS
                ${XPU_PASS_DEPS})
   pass_library(xpu_delete_cast_op_pass inference DIR xpu DEPS ${XPU_PASS_DEPS})
   pass_library(fold_interp_outsize_fuse_pass inference DIR xpu DEPS

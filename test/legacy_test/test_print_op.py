@@ -23,7 +23,6 @@ from paddle import base
 from paddle.autograd.ir_backward import grad
 from paddle.base import core
 from paddle.framework import in_dynamic_or_pir_mode
-from paddle.pir_utils import test_with_pir_api
 from paddle.static import Program, program_guard
 
 paddle.enable_static()
@@ -33,15 +32,12 @@ class TestPrintOpCPU(unittest.TestCase):
     def setUp(self):
         self.dtype = 'float32'
         self.place = paddle.CPUPlace()
-        self.x_tensor = base.core.LoDTensor()
+        self.x_tensor = base.core.DenseTensor()
         tensor_np = np.random.random(size=(2, 3)).astype(self.dtype)
         self.x_tensor.set(tensor_np, self.place)
-        self.x_tensor.set_recursive_sequence_lengths([[1, 1]])
 
     def build_network(self, only_forward, **kargs):
-        x = paddle.static.data(
-            'x', shape=[-1, 3], dtype=self.dtype, lod_level=1
-        )
+        x = paddle.static.data('x', shape=[-1, 3], dtype=self.dtype)
         x.stop_gradient = False
         paddle.static.Print(input=x, **kargs)
         loss = paddle.mean(x)
@@ -52,7 +48,6 @@ class TestPrintOpCPU(unittest.TestCase):
             paddle.static.append_backward(loss=loss)
         return loss
 
-    @test_with_pir_api
     def test_forward(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -65,7 +60,6 @@ class TestPrintOpCPU(unittest.TestCase):
                 return_numpy=False,
             )
 
-    @test_with_pir_api
     def test_backward(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -76,13 +70,10 @@ class TestPrintOpCPU(unittest.TestCase):
                 feed={'x': self.x_tensor}, fetch_list=[loss], return_numpy=False
             )
 
-    @test_with_pir_api
     def test_all_parameters(self):
         prog = paddle.static.Program()
         with paddle.static.program_guard(prog, paddle.static.Program()):
-            x = paddle.static.data(
-                'x', shape=[-1, 3], dtype=self.dtype, lod_level=1
-            )
+            x = paddle.static.data('x', shape=[-1, 3], dtype=self.dtype)
             x.stop_gradient = False
 
             for print_tensor_name in [True, False]:
@@ -106,7 +97,6 @@ class TestPrintOpCPU(unittest.TestCase):
                 feed={'x': self.x_tensor}, fetch_list=[loss], return_numpy=False
             )
 
-    @test_with_pir_api
     def test_no_summarize(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -142,10 +132,9 @@ class TestPrintOpGPU(TestPrintOpCPU):
     def setUp(self):
         self.dtype = 'float32'
         self.place = paddle.CUDAPlace(0)
-        self.x_tensor = base.core.LoDTensor()
+        self.x_tensor = base.core.DenseTensor()
         tensor_np = np.random.random(size=(2, 3)).astype(self.dtype)
         self.x_tensor.set(tensor_np, self.place)
-        self.x_tensor.set_recursive_sequence_lengths([[1, 1]])
 
 
 @unittest.skipIf(
@@ -155,10 +144,9 @@ class TestPrintOpGPUFP16(TestPrintOpCPU):
     def setUp(self):
         self.dtype = 'float16'
         self.place = paddle.CUDAPlace(0)
-        self.x_tensor = base.core.LoDTensor()
+        self.x_tensor = base.core.DenseTensor()
         tensor_np = np.random.random(size=(2, 3)).astype(self.dtype)
         self.x_tensor.set(tensor_np, self.place)
-        self.x_tensor.set_recursive_sequence_lengths([[1, 1]])
 
 
 @unittest.skipIf(
@@ -168,10 +156,9 @@ class TestPrintOpGPUBFP16(TestPrintOpCPU):
     def setUp(self):
         self.dtype = 'bfloat16'
         self.place = paddle.CUDAPlace(0)
-        self.x_tensor = base.core.LoDTensor()
+        self.x_tensor = base.core.DenseTensor()
         tensor_np = convert_float_to_uint16(np.random.random(size=(2, 3)))
         self.x_tensor.set(tensor_np, self.place)
-        self.x_tensor.set_recursive_sequence_lengths([[1, 1]])
 
 
 class TestPrintOpBackward(unittest.TestCase):
@@ -199,7 +186,7 @@ class TestPrintOpBackward(unittest.TestCase):
             exe.run(binary, feed_dict)
 
     # fc is not supported in pir
-    # @test_with_pir_api
+    #
 
     def test_fw_bw(self):
         if paddle.is_compiled_with_cuda():

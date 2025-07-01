@@ -32,7 +32,7 @@ limitations under the License. */
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/allocator.h"
 #include "paddle/phi/core/cuda_stream.h"
-
+#include "paddle/phi/core/memory/allocation/allocator_facade.h"
 #ifdef PADDLE_WITH_CUDA
 #include "paddle/phi/backends/dynload/cublas.h"
 #include "paddle/phi/backends/dynload/cudnn.h"
@@ -284,8 +284,10 @@ struct GPUContext::Impl {
   }
 
   void InitDnnWorkspace() {
-    PD_CHECK(allocator_ != nullptr,
-             "the device allocator for gpu context is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(allocator_,
+                            common::errors::InvalidArgument(
+                                "The device allocator for GPU context is "
+                                "nullptr. It must not be null."));
     workspace_ = new DnnWorkspaceHandle(allocator_, stream());
   }
 
@@ -302,8 +304,10 @@ struct GPUContext::Impl {
   //   return workspace_;
   // }
   DnnWorkspaceHandle GetDnnWorkspace() {
-    PD_CHECK(allocator_ != nullptr,
-             "the device allocator for gpu context is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(allocator_,
+                            common::errors::InvalidArgument(
+                                "The device allocator for GPU context is "
+                                "nullptr. It must not be null."));
     return DnnWorkspaceHandle(allocator_, stream());
   }
 
@@ -327,18 +331,26 @@ struct GPUContext::Impl {
 
   gpuStream_t stream() const {
     auto s = stream_->raw_stream();
-    PD_CHECK(s != nullptr, "the gpu stream is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        s,
+        common::errors::InvalidArgument(
+            "The GPU stream is nullptr. It must not be null."));
     return s;
   }
 
   CUDAStream* cuda_stream() const {
-    PD_CHECK(stream_ != nullptr, "the gpu stream is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        stream_,
+        common::errors::InvalidArgument(
+            "The GPU stream is nullptr. It must not be null."));
     return stream_;
   }
 
   void InitEigenDevice() {
-    PD_CHECK(allocator_ != nullptr,
-             "the allocator for eigen device is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        allocator_,
+        common::errors::InvalidArgument(
+            "The allocator for eigen device is nullptr. It must not be null."));
     eigen_stream_ = std::make_unique<internal::EigenGpuStreamDevice>();
     eigen_stream_->Reinitialize(stream(), allocator_, place_);
     eigen_device_ = new Eigen::GpuDevice(eigen_stream_.get());
@@ -366,7 +378,10 @@ struct GPUContext::Impl {
           eigen_device_ = eigen_device_creator_();
       }
     });
-    PD_CHECK(eigen_device_ != nullptr, "the gpu eigen_device is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        eigen_device_,
+        common::errors::InvalidArgument(
+            "The GPU eigen_device is nullptr. It must not be null."));
     return eigen_device_;
   }
 
@@ -405,7 +420,10 @@ struct GPUContext::Impl {
 #endif
 #endif
     });
-    PD_CHECK(blas_handle_ != nullptr, "the gpu blas handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        blas_handle_,
+        common::errors::InvalidArgument(
+            "The GPU blas handle is nullptr. It must not be null."));
     return blas_handle_;
   }
 
@@ -446,7 +464,10 @@ struct GPUContext::Impl {
           blaslt_handle_ = blaslt_handle_creator_();
       }
     });
-    PD_CHECK(blaslt_handle_ != nullptr, "the gpu blasLt handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        blaslt_handle_,
+        common::errors::InvalidArgument(
+            "The GPU blasLt handle is nullptr. It must not be null."));
     return blaslt_handle_;
   }
 
@@ -460,7 +481,10 @@ struct GPUContext::Impl {
         }
       }
     });
-    PD_CHECK(dnn_handle_ != nullptr, "the gpu dnn handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        dnn_handle_,
+        common::errors::InvalidArgument(
+            "The GPU dnn handle is nullptr. It must not be null."));
     return dnn_handle_;
   }
 
@@ -494,7 +518,10 @@ struct GPUContext::Impl {
         }
       }
     });
-    PD_CHECK(solver_handle_ != nullptr, "the gpu solver handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        solver_handle_,
+        common::errors::InvalidArgument(
+            "The GPU solver handle is nullptr. It must not be null."));
     return solver_handle_;
   }
 
@@ -514,7 +541,10 @@ struct GPUContext::Impl {
         }
       }
     });
-    PD_CHECK(sparse_handle_ != nullptr, "the gpu sparse handle is nullptr.");
+    PADDLE_ENFORCE_NOT_NULL(
+        sparse_handle_,
+        common::errors::InvalidArgument(
+            "The GPU sparse handle is nullptr. It must not be null."));
     return sparse_handle_;
   }
 
@@ -735,10 +765,10 @@ struct GPUContext::Impl {
 
   const Attribute& GetDnnAttr(const std::string& attr_name) const {
     auto iter = dnn_attrs_.find(attr_name);
-    PADDLE_ENFORCE_NE(
-        iter,
-        dnn_attrs_.end(),
-        phi::errors::NotFound("Attribute `%s` is not found in OneDNNContext."));
+    PADDLE_ENFORCE_NE(iter,
+                      dnn_attrs_.end(),
+                      common::errors::NotFound(
+                          "Attribute `%s` is not found in OneDNNContext."));
     return iter->second;
   }
 
@@ -809,7 +839,7 @@ struct GPUContext::Impl {
   mutable std::future<void> last_future_;
 
   Allocator* allocator_{nullptr};  // external resource.
-  // A internal resouce to initinalize eigen_device.
+  // A internal resource to initinalize eigen_device.
   std::unique_ptr<internal::EigenGpuStreamDevice> eigen_stream_{nullptr};
 
   // Holds some attributes only used by the gpudnn kernel calculation
@@ -930,11 +960,21 @@ void GPUContext::Init() {
 }
 
 void GPUContext::SetStream(gpuStream_t stream) {
+#if !defined(_WIN32)
+  this->SetAllocator(paddle::memory::allocation::AllocatorFacade::Instance()
+                         .GetAllocator(impl_->GetPlace(), stream)
+                         .get());
+#endif
   impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());  // NOLINT
   impl_->SetStream(stream);
 }
 
 void GPUContext::SetCUDAStream(CUDAStream* stream, bool clear) {
+#if !defined(_WIN32)
+  this->SetAllocator(paddle::memory::allocation::AllocatorFacade::Instance()
+                         .GetAllocator(stream->place(), stream->raw_stream())
+                         .get());
+#endif
   impl_->allocator_ = const_cast<Allocator*>(&this->GetAllocator());  // NOLINT
   impl_->SetCUDAStream(stream, clear);
 }

@@ -153,13 +153,13 @@ void SetValueCompute(const Context& dev_ctx,
 
   slice_tensor.Resize(slice_dims_for_assign);
   if (value_tensor != nullptr) {
-    CheckIsDimsMatch(slice_dims_for_assign, value_tensor->dims());
+    phi::funcs::CheckIsDimsMatch(slice_dims_for_assign, value_tensor->dims());
     phi::funcs::ElementwiseCompute<SubFunctor<T>, T>(
         dev_ctx, slice_tensor, *value_tensor, SubFunctor<T>(), &slice_tensor);
   } else {
     DenseTensor value_t(dtype);
     auto value_dims = common::make_ddim(shape);
-    CheckIsDimsMatch(slice_dims_for_assign, value_dims);
+    phi::funcs::CheckIsDimsMatch(slice_dims_for_assign, value_dims);
 
     value_t.Resize(value_dims);
     dev_ctx.template Alloc<T>(&value_t);
@@ -213,7 +213,7 @@ void SetValueCompute_dispatch(const Context& dev_ctx,
           dev_ctx, in, value_tensor, out, axes, starts, ends, shape);
       break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "The rank of input should be less than 7, but received %d.", rank));
   }
 }
@@ -269,11 +269,11 @@ void SliceCompute(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       starts.size(),
       axes.size(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of starts must be equal to the size of axes."));
   PADDLE_ENFORCE_EQ(ends.size(),
                     axes.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The size of ends must be equal to the size of axes."));
 
   // Step 2: Compute output
@@ -378,7 +378,7 @@ void Tensor_narrow(const Context& dev_ctx,
           dev_ctx, src, out, axes_int, starts_int, ends_int);
       break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "The rank of input should be less than 7, but received %d.", rank));
   }
 }
@@ -405,7 +405,8 @@ struct OneFunctor {
       : output_(output), idtptr_(idtptr), w_(w), dim_(dim) {}
 
   HOSTDEVICE void operator()(size_t idx) const {
-    output_[w_ * idtptr_[idx] + idx % dim_] = static_cast<T>(1);
+    int64_t addr = static_cast<int64_t>(w_) * idtptr_[idx] + idx % dim_;
+    output_[addr] = static_cast<T>(1);
   }
 
   T* output_;
@@ -504,7 +505,7 @@ void Unpack_Pivot(const Context& dev_ctx,
       PADDLE_ENFORCE_EQ(
           (pdataptr[i * Pnum + j] > 0) && (pdataptr[i * Pnum + j] <= h),
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The data in Pivot must be between (1, x.shape[-2]],"
               "but got %d in Pivot while the x.shape[-2] is %d."
               "Please make sure that the inputs(x and Pivot) is the output of "
@@ -571,7 +572,7 @@ DenseTensor Transpose2DTo6D(const Context& dev_ctx, const DenseTensor& x) {
       break;
     }
     default: {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Invalid Rank number, "
           "currently only support rank between 2~6"));
     }

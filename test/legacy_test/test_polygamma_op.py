@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -20,7 +21,6 @@ from scipy import special
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(100)
 paddle.seed(100)
@@ -61,11 +61,16 @@ class TestPolygammaAPI(unittest.TestCase):
 
     def setUp(self):
         self.x = np.array(self.DATA).astype(self.DTYPE)
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
-    @test_with_pir_api
     def test_api_static(self):
         def run(place):
             paddle.enable_static()
@@ -199,7 +204,7 @@ class TestPolygammaOp(OpTest):
         self.target = ref_polygamma(self.inputs['x'], self.order)
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -208,6 +213,26 @@ class TestPolygammaOp(OpTest):
             user_defined_grads=[
                 ref_polygamma_grad(self.case, 1 / self.case.size, self.order)
             ],
+            check_pir=True,
+        )
+
+
+class TestPolygammaOp_ZeroSize(TestPolygammaOp):
+
+    def init_config(self):
+        self.dtype = np.float64
+        self.order = 1
+        rand_case = np.random.randn(0).astype(self.dtype)
+        int_case = np.random.randint(low=1, high=100, size=0).astype(self.dtype)
+        self.case = np.concatenate([rand_case, int_case])
+        self.inputs = {'x': self.case}
+        self.attrs = {'n': self.order}
+        self.target = ref_polygamma(self.inputs['x'], self.order)
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['x'],
+            'out',
             check_pir=True,
         )
 

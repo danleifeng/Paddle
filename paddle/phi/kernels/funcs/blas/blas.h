@@ -42,7 +42,7 @@ namespace funcs {
  * `batch_size` times of GEMM. The batched GEMM could be faster base on the
  * implementation of the blas library. The batch size could be zero. If any
  * matrix of `matmul` has a batch size, there will be a batched GEMM, too. e.g.,
- * Mat A is [BatchSize, H1, W2], and Mat B [H2, W2], The result matrix wil be
+ * Mat A is [BatchSize, H1, W2], and Mat B [H2, W2], The result matrix will be
  * [BatchSize, H1, W2]
  *
  * The boolean flag, `trans`, describe the memory is the transpose of matrix or
@@ -87,13 +87,25 @@ class Blas {
   template <typename T>
   void GEMM(CBLAS_TRANSPOSE transA,
             CBLAS_TRANSPOSE transB,
-            int M,
-            int N,
-            int K,
+            int64_t M,
+            int64_t N,
+            int64_t K,
             T alpha,
             const T* A,
             const T* B,
             T beta,
+            T* C) const;
+
+  template <typename T, typename U = T>
+  void GEMM(CBLAS_TRANSPOSE transA,
+            CBLAS_TRANSPOSE transB,
+            int64_t M,
+            int64_t N,
+            int64_t K,
+            U alpha,
+            const T* A,
+            const T* B,
+            U beta,
             T* C) const;
 
   template <typename T>
@@ -280,15 +292,30 @@ class Blas {
   template <typename T>
   void BatchedGEMM(CBLAS_TRANSPOSE transA,
                    CBLAS_TRANSPOSE transB,
-                   int M,
-                   int N,
-                   int K,
+                   int64_t M,
+                   int64_t N,
+                   int64_t K,
                    T alpha,
                    const T* A,
                    const T* B,
                    T beta,
                    T* C,
-                   int batchCount,
+                   int64_t batchCount,
+                   int64_t strideA,
+                   int64_t strideB) const;
+
+  template <typename T, typename U = T>
+  void BatchedGEMM(CBLAS_TRANSPOSE transA,
+                   CBLAS_TRANSPOSE transB,
+                   int64_t M,
+                   int64_t N,
+                   int64_t K,
+                   U alpha,
+                   const T* A,
+                   const T* B,
+                   U beta,
+                   T* C,
+                   int64_t batchCount,
                    int64_t strideA,
                    int64_t strideB) const;
 

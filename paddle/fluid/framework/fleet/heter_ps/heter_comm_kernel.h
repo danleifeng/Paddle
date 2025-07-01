@@ -20,8 +20,8 @@ limitations under the License. */
 #if defined(PADDLE_WITH_CUDA)
 #include "cub/cub.cuh"
 #include "cub/util_allocator.cuh"
-#include "paddle/fluid/platform/cuda_device_guard.h"
 #include "paddle/fluid/platform/enforce.h"
+#include "paddle/phi/core/platform/cuda_device_guard.h"
 #endif
 
 namespace paddle {
@@ -339,6 +339,6 @@ class HeterCommKernel {
   int block_size_{256};
 };
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle
 #endif

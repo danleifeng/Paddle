@@ -26,6 +26,7 @@ DYGRAPH_ONLY_TENSOR_ATTRS_ALLOW_LIST = OrderedSet(
         '__len__',
         '__long__',
         '__nonzero__',
+        '__dict__',
         'apply_',
         'backward',
         'clear_grad',
@@ -36,7 +37,6 @@ DYGRAPH_ONLY_TENSOR_ATTRS_ALLOW_LIST = OrderedSet(
         'data',
         'data_ptr',
         'detach_',
-        'element_size',
         'fill_',
         'fill_diagonal_',
         'fill_diagonal_tensor',
@@ -70,13 +70,16 @@ DYGRAPH_ONLY_TENSOR_ATTRS_ALLOW_LIST = OrderedSet(
         'rows',
         'set_string_list',
         'set_value',
+        'set_tensor',
         'set_vocab',
         'strides',
         'to_sparse_coo',
         'to_sparse_csr',
-        'tolist',
         'value',
         'zero_',
+        "__cuda_array_interface__",
+        '__dlpack__',
+        "__dlpack_device__",
     ]
 )
 STATIC_ONLY_TENSOR_ATTRS_ALLOW_LIST = OrderedSet(
@@ -103,6 +106,7 @@ STATIC_ONLY_TENSOR_ATTRS_ALLOW_LIST = OrderedSet(
         'use_empty',
         'is_dist_dense_tensor_type',
         'dist_attr',
+        'place_attr',
         'update_dist_attr',
         'is_combine',
         'value_assign',
@@ -116,6 +120,7 @@ STATIC_ONLY_TENSOR_ATTRS_ALLOW_LIST = OrderedSet(
         'trainable',
         'is_sparse_coo_tensor_type',
         'is_sparse_csr_tensor_type',
+        'all_used_ops_in_same_block',
     ]
 )
 

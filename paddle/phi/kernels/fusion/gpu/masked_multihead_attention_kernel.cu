@@ -371,7 +371,7 @@ __global__ void masked_multihead_attention_kernel(
     qk = block_sum<WARPS_PER_RED>(&red_smem[WARPS_PER_RED], qk);
   }
 
-  // Let only the last cuda TheradBlock compute the final q*k.
+  // Let only the last cuda ThreadBlock compute the final q*k.
   if (tid == 0 && is_last_block) {
     // NOTE(wangxi): mask must be 0.0
     // T mask = params.attn_mask[
@@ -857,8 +857,8 @@ void fmha_impl(const phi::GPUContext &dev_ctx,
     FMHA_LAUNCH_KERNEL(128, 128, stream)
     FMHA_LAUNCH_KERNEL(192, 256, stream)
     default:
-      PADDLE_THROW(
-          phi::errors::Unimplemented("Dim_head = %d is unsupport!", dim_head));
+      PADDLE_THROW(common::errors::Unimplemented(
+          "Dim_head = %d is unsupported!", dim_head));
   }
 }
 
@@ -1038,7 +1038,7 @@ void DispatchWithDtype(const Context &dev_ctx,
       mask_broadcast_num_heads = false;
     } else {
       PADDLE_THROW(errors::InvalidArgument(
-          "Unknow dimension for attn_mask, the num_head(2nd) "
+          "Unknown dimension for attn_mask, the num_head(2nd) "
           "dimension is invalid, it should be 1 or num_head(%d), "
           "but got %d",
           num_head,
@@ -1059,7 +1059,7 @@ void DispatchWithDtype(const Context &dev_ctx,
   }
 
   if (cum_offsets) {
-    PADDLE_THROW(phi::errors::PermissionDenied(
+    PADDLE_THROW(common::errors::PermissionDenied(
         "Current mmha kernel does not support cum_offsets param."));
   }
 
@@ -1086,7 +1086,7 @@ void DispatchWithDtype(const Context &dev_ctx,
   params.inv_sqrt_dh = inv_sqrt_dh;
   params.rotary_emb_dims = rotary_emb_dims;
 
-  params.steps_per_block = timestep;  // if not SPLIT, this is unuseful.
+  params.steps_per_block = timestep;  // if not SPLIT, this is useless.
   params.split_seq = 1;               // if not SPLIT, grid.x==1
 
   bool SPLIT = false;
@@ -1305,7 +1305,7 @@ void MMHAKernel(const Context &dev_ctx,
             typename DispatchDtypeTrait<float>::FuncVersion{});
         break;
       default:
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "In the case of quantization enabled with Input(x) INT32, "
             "Attr(compute_dtype) must be set in (bf16, fp16, fp32), "
             "but get compute_dtype (%s)",

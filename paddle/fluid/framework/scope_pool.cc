@@ -13,8 +13,7 @@
 // limitations under the License.
 #include "paddle/fluid/framework/scope_pool.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 ScopePool &ScopePool::Instance() {  // NOLINT
   static ScopePool pool;
@@ -37,9 +36,9 @@ void ScopePool::Remove(Scope *s) {
   PADDLE_ENFORCE_GT(
       has_scope,
       0,
-      phi::errors::NotFound("Global scope %p is not found in ScopePool. "
-                            "Deleting a nonexistent scope is not allowed.",
-                            s));
+      common::errors::NotFound("Global scope %p is not found in ScopePool. "
+                               "Deleting a nonexistent scope is not allowed.",
+                               s));
   DeleteScope(s);
 }
 
@@ -53,5 +52,4 @@ void ScopePool::Clear() {
   scopes_.clear();
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

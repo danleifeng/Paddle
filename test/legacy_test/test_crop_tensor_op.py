@@ -18,7 +18,6 @@ import numpy as np
 from op_test import OpTest
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def crop(data, offsets, crop_shape):
@@ -42,6 +41,11 @@ def crop(data, offsets, crop_shape):
                 )
             if selected:
                 result.append(value)
+    # data 0-size
+    if 0 in data.shape:
+        for i, value in enumerate(data.shape):
+            if value == 0:
+                crop_shape[i] = 0
     return np.array(result).reshape(crop_shape)
 
 
@@ -53,17 +57,18 @@ class TestCropTensorOp(OpTest):
         self.unk_dim_idx = -1
         self.attrs = {}
         self.python_api = paddle.crop
+        self.dtype = "float64"
         self.initTestCase()
 
         if self.shape_by_input:
             self.inputs = {
-                'X': np.random.random(self.x_shape).astype("float64"),
+                'X': np.random.random(self.x_shape).astype(self.dtype),
                 'Shape': np.array(self.crop_shape).astype("int32"),
             }
         else:
             self.attrs['shape'] = self.crop_shape
             self.inputs = {
-                'X': np.random.random(self.x_shape).astype("float64"),
+                'X': np.random.random(self.x_shape).astype(self.dtype),
             }
         if self.offset_by_input:
             self.inputs['Offsets'] = np.array(self.offsets).astype('int32')
@@ -109,6 +114,9 @@ class TestCase3(TestCropTensorOp):
         self.offsets = [1, 5, 3]
         self.shape_by_input = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
 
 class TestCase4(TestCropTensorOp):
     def initTestCase(self):
@@ -116,6 +124,9 @@ class TestCase4(TestCropTensorOp):
         self.crop_shape = [-1, 3, -1, 4]
         self.offsets = [0, 0, 1, 0]
         self.shape_by_input = True
+
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestCase5(TestCropTensorOp):
@@ -133,6 +144,34 @@ class TestCase6(TestCropTensorOp):
         self.offsets = [0, 0, 0, 0, 0, 0]
         self.shape_by_input = True
         self.offset_by_input = True
+
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=False)
+
+
+class TestCase_ZeroSize(TestCropTensorOp):
+    def initTestCase(self):
+        self.__class__.exist_fp64_check_grad = True
+        self.x_shape = (0, 0, 5, 8, 8)
+        self.crop_shape = [1, 1, 2, 4, 4]
+        self.offsets = [1, 0, 0, 2, 2]
+        self.offset_by_input = True
+
+
+class TestCase_ZeroSize2(TestCropTensorOp):
+    def initTestCase(self):
+        paddle.disable_static()
+        self.__class__.exist_fp64_check_grad = True
+        # x_grad return NAN
+        self.x_shape = (2, 4, 5, 8, 8)
+        self.crop_shape = [0, 0, 2, 4, 4]
+        self.offsets = [1, 0, 0, 2, 2]
+        self.offset_by_input = True
+        self.dtype = "float32"
+
+    def test_check_grad_normal(self):
+        grad = paddle.zeros(self.x_shape).numpy()
+        self.check_grad(['X'], 'Out', user_defined_grads=[grad], check_pir=True)
 
 
 class TestCropTensorOpTensorAttr(OpTest):
@@ -183,7 +222,7 @@ class TestCropTensorOpTensorAttr(OpTest):
         self.shape_attr = [0, 0]
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         self.check_grad(["X"], "Out", check_pir=True)
@@ -214,6 +253,9 @@ class TestCropTensorOpTensorAttrCase3(TestCropTensorOpTensorAttr):
         self.ShapeTensor = False
         self.OffsetsTensor = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=True)
+
 
 class TestCropTensorOpTensorAttrCase4(TestCropTensorOpTensorAttr):
     def initTestCase(self):
@@ -224,10 +266,14 @@ class TestCropTensorOpTensorAttrCase4(TestCropTensorOpTensorAttr):
         self.offsets_attr = [-1, -1, 3]
         self.OffsetsTensor = True
 
+    def test_check_output(self):
+        self.check_output(check_pir=True, check_symbol_infer=True)
+
 
 class TestCropTensorException(unittest.TestCase):
-    @test_with_pir_api
+
     def test_exception(self):
+        paddle.enable_static()
         input1 = paddle.static.data(
             name="input1", shape=[2, 3, 6, 6], dtype="float32"
         )
@@ -245,9 +291,6 @@ class TestCropTensorException(unittest.TestCase):
 
         def attr_shape_value1():
             out = paddle.crop(input1, shape=[2, -2, dim, 3])
-
-        def attr_shape_value2():
-            out = paddle.crop(input1, shape=[2, 0, dim, 3])
 
         def attr_offsets_type():
             out = paddle.crop(input1, shape=[2, 2, 3, 3], offsets=0)
@@ -268,11 +311,28 @@ class TestCropTensorException(unittest.TestCase):
         self.assertRaises(TypeError, attr_shape_type)
         self.assertRaises(TypeError, attr_shape_dtype)
         self.assertRaises(ValueError, attr_shape_value1)
-        self.assertRaises(ValueError, attr_shape_value2)
         self.assertRaises(TypeError, attr_offsets_type)
         self.assertRaises(TypeError, attr_offsets_dtype)
         self.assertRaises(ValueError, attr_offsets_value)
         self.assertRaises(TypeError, input_dtype)
+
+
+class TestCropWithUnknownShape(unittest.TestCase):
+    def test_crop_with_unknown_shape(self):
+        paddle.enable_static()
+        main_program = paddle.static.Program()
+        with paddle.static.program_guard(main_program):
+            x = paddle.static.data(name='x', shape=[-1, 4, 4], dtype='float32')
+            shape = paddle.static.data(name='shape', shape=[3], dtype='int32')
+            out = paddle.crop(x, shape=shape, offsets=[1, 1, 1])
+            exe = paddle.static.Executor(paddle.CPUPlace())
+            x_np = np.random.random((4, 4, 4)).astype('float32')
+            shape_np = np.array([2, 2, 2]).astype('int32')
+            (out_np,) = exe.run(
+                feed={'x': x_np, 'shape': shape_np}, fetch_list=[out]
+            )
+            self.assertEqual(tuple(out.shape), (-1, -1, -1))
+            self.assertEqual(out_np.shape, (2, 2, 2))
 
 
 if __name__ == '__main__':

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import gradient_checker
@@ -22,7 +23,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestFlipOp_API(unittest.TestCase):
@@ -101,7 +101,9 @@ class TestFlipOp(OpTest):
         self.attrs = {"axis": self.axis}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad(["X"], "Out", check_cinn=True, check_pir=True)
@@ -153,6 +155,12 @@ class TestFlipOpNegAxis(TestFlipOp):
     def init_test_case(self):
         self.in_shape = (6, 4, 2, 2)
         self.axis = [-1]
+
+
+class TestFlipOp_ZeroSize(TestFlipOp):
+    def init_test_case(self):
+        self.in_shape = (4, 0, 6, 3)
+        self.axis = [0, 2]
 
 
 # ----------------flip_fp16----------------
@@ -232,7 +240,6 @@ class TestFlipDoubleGradCheck(unittest.TestCase):
     def flip_wrapper(self, x):
         return paddle.flip(x[0], [0, 1])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
         # the shape of input variable should be clearly specified, not include -1.
@@ -253,7 +260,13 @@ class TestFlipDoubleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for p in places:
@@ -264,7 +277,6 @@ class TestFlipTripleGradCheck(unittest.TestCase):
     def flip_wrapper(self, x):
         return paddle.flip(x[0], [0, 1])
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
         # the shape of input variable should be clearly specified, not include -1.
@@ -285,7 +297,13 @@ class TestFlipTripleGradCheck(unittest.TestCase):
 
     def test_grad(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for p in places:

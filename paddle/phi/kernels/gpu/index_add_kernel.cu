@@ -36,11 +36,13 @@ __global__ void index_add_cuda_kernel(const T* input,
                                       int64_t stride,
                                       int64_t size,
                                       int64_t delta,
-                                      T* output) {
+                                      T* output,
+                                      int64_t index_dim_size) {
   CUDA_KERNEL_LOOP_TYPE(idx, N, int64_t) {
     int64_t pre_idx = idx / (stride * size);
     int64_t dim_idx = idx % (stride * size) / stride;
-    IndexT src_dim_idx = index[dim_idx];
+    IndexT src_dim_idx =
+        (index[dim_idx] < 0 ? index[dim_idx] + index_dim_size : index[dim_idx]);
     int64_t input_idx =
         idx + (delta * pre_idx + src_dim_idx - dim_idx) * stride;
     phi::CudaAtomicAdd(&output[input_idx], add_value[idx]);
@@ -48,12 +50,16 @@ __global__ void index_add_cuda_kernel(const T* input,
 }
 
 template <typename T, typename Context>
-void IndexAddKernel(const Context& ctx,
+void IndexAddKernel(const Context& dev_ctx,
                     const DenseTensor& x,
                     const DenseTensor& index,
                     const DenseTensor& add_value,
                     int axis,
                     DenseTensor* output) {
+  if (output && output->numel() == 0) {
+    dev_ctx.template Alloc<T>(output);
+    return;
+  }
   auto input_dim = x.dims();
   auto output_dim = output->dims();
   auto add_value_dim = add_value.dims();
@@ -66,29 +72,30 @@ void IndexAddKernel(const Context& ctx,
   int64_t delta = input_dim[dim] - size;
 
   auto* in_data = x.data<T>();
-  T* out_data = ctx.template Alloc<T>(output);
+  T* out_data = dev_ctx.template Alloc<T>(output);
   auto* add_value_data = add_value.data<T>();
 
   int64_t numel = add_value.numel();
   if (numel == 0) {
     return;
   }
-  auto stream = ctx.stream();
+  auto stream = dev_ctx.stream();
 
   unsigned int block_dim = PADDLE_CUDA_NUM_THREADS;
   dim3 grid_dim = dim3((numel + block_dim - 1) / block_dim);
-  phi::backends::gpu::LimitGridDim(ctx, &grid_dim);
+  phi::backends::gpu::LimitGridDim(dev_ctx, &grid_dim);
 
   // copy input to output.
   // todo(@limin29): inplace do not need copy.
-  phi::Copy(ctx, x, ctx.GetPlace(), false, output);
+  phi::Copy(dev_ctx, x, dev_ctx.GetPlace(), false, output);
+  if (index.numel() == 0) return;
 
   if (FLAGS_cudnn_deterministic) {
     VLOG(2) << "Run grad kernel of index_add with single thread.";
     block_dim = 1;
     grid_dim.x = 1;
   }
-
+  auto index_dim_size = input_dim[dim];
   if (index_type == phi::DataType::INT64) {
     const int64_t* index_data = index.data<int64_t>();
     index_add_cuda_kernel<T, int64_t>
@@ -99,7 +106,8 @@ void IndexAddKernel(const Context& ctx,
                                              stride,
                                              size,
                                              delta,
-                                             out_data);
+                                             out_data,
+                                             index_dim_size);
   } else {
     const int* index_data = index.data<int>();
     index_add_cuda_kernel<T, int>
@@ -110,7 +118,8 @@ void IndexAddKernel(const Context& ctx,
                                              stride,
                                              size,
                                              delta,
-                                             out_data);
+                                             out_data,
+                                             index_dim_size);
   }
 }
 

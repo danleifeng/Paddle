@@ -36,7 +36,6 @@ from .quant_config import (
     SUPPORT_QUANTIZATION_OP_DICT,
     ARMCPUQuantizer,
     BaseQuantizer,
-    MKLDNNQuantizer,
     TensorRTQuantizer,
 )
 from .quantization_pass import (
@@ -355,7 +354,7 @@ class PostTrainingQuantization:
         self._quantized_weight_var_name = set()
         self._quantized_act_var_name = set()
         self._weight_op_pairs = {}
-        # The vars for alog = KL or hist
+        # The vars for algo = KL or hist
         self._sampling_act_abs_min_max = {}
         self._sampling_act_histogram = {}
         self._sampling_data = {}
@@ -400,14 +399,6 @@ class PostTrainingQuantization:
             )
         elif deploy_backend.lower() == "tensorrt":
             self.quant_config = TensorRTQuantizer(
-                quantizable_op_type=quantizable_op_type,
-                quant_bits=weight_bits,
-            )
-        elif (
-            deploy_backend.lower() == "mkldnn"
-            or deploy_backend.lower() == "onednn"
-        ):
-            self.quant_config = MKLDNNQuantizer(
                 quantizable_op_type=quantizable_op_type,
                 quant_bits=weight_bits,
             )
@@ -647,7 +638,7 @@ class PostTrainingQuantization:
                             op._set_attr("op_namescope", "skip_quant")
 
                 op_type = op.type
-                # skip quant form simular conv1d_transpose
+                # skip quant form similar conv1d_transpose
                 if op_type == 'conv2d_transpose':
                     in_name = op.input("Filter")[0]
                     for _op in self._program.blocks[block_id].ops:
@@ -702,9 +693,9 @@ class PostTrainingQuantization:
                     for out_var_name in utils._get_op_output_var_names(op):
                         for in_var_name in utils._get_op_input_var_names(op):
                             if in_var_name in persistable_var_names:
-                                self._quantized_op_pairs[
-                                    in_var_name
-                                ] = out_var_name
+                                self._quantized_op_pairs[in_var_name] = (
+                                    out_var_name
+                                )
                 # For other op, only sample output scale
                 elif op_type in self.quant_config.observer_operation_types:
                     collect_var_name(
@@ -1155,9 +1146,9 @@ class PostTrainingQuantization:
                     hist, bin_width, self._activation_bits
                 )
             elif self._algo == "hist":
-                self._quantized_var_threshold[
-                    var_name
-                ] = self._get_hist_scaling_factor(hist, hist_edges)
+                self._quantized_var_threshold[var_name] = (
+                    self._get_hist_scaling_factor(hist, hist_edges)
+                )
 
     def _update_program(self):
         '''
@@ -1263,13 +1254,13 @@ class PostTrainingQuantization:
                             if real_tensor_name not in scale_dict.keys():
                                 continue
                             if opera == '*':
-                                scale_dict[
-                                    real_tensor_name
-                                ] = max_scale / float(scalar)
+                                scale_dict[real_tensor_name] = (
+                                    max_scale / float(scalar)
+                                )
                             elif opera == '/':
-                                scale_dict[
-                                    real_tensor_name
-                                ] = max_scale * float(scalar)
+                                scale_dict[real_tensor_name] = (
+                                    max_scale * float(scalar)
+                                )
                         else:
                             if tensor_name not in scale_dict.keys():
                                 continue
@@ -1662,7 +1653,7 @@ class WeightQuantization:
 
     def convert_weight_to_fp16(self, save_model_dir):
         """
-        Convert all presistable vars from fp32 to fp16.
+        Convert all persistable vars from fp32 to fp16.
         Note that, this api only changes the data type of variables in
         __params__ file, and the __model__ file remains unchanged.
 

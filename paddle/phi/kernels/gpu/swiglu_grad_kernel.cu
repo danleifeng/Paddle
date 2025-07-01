@@ -107,7 +107,7 @@ __global__ void SwiGLUGradCUDAKernel(const T *__restrict__ x,
 }
 
 template <typename T, typename Context>
-void SwiGLUGradKernelImpl(const Context &ctx,
+void SwiGLUGradKernelImpl(const Context &dev_ctx,
                           const T *x,
                           const T *y,
                           const T *dz,
@@ -127,18 +127,22 @@ void SwiGLUGradKernelImpl(const Context &ctx,
     vec_size = std::min(vec_size, phi::GetVectorizedSize<T>(dy));
   }
 
-#define PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL_BASE(                                \
-    __vec_size, __is_combine, __has_dx, __has_dy)                              \
-  case __vec_size: {                                                           \
-    SwiGLUGradCUDAKernel<T, __vec_size, __is_combine, __has_dx, __has_dy>      \
-        <<<config.block_per_grid, config.thread_per_block, 0, ctx.stream()>>>( \
-            x, y, dz, dx, dy, m, n);                                           \
-    break;                                                                     \
+#define PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL_BASE(                           \
+    __vec_size, __is_combine, __has_dx, __has_dy)                         \
+  case __vec_size: {                                                      \
+    SwiGLUGradCUDAKernel<T, __vec_size, __is_combine, __has_dx, __has_dy> \
+        <<<config.block_per_grid,                                         \
+           config.thread_per_block,                                       \
+           0,                                                             \
+           dev_ctx.stream()>>>(x, y, dz, dx, dy, m, n);                   \
+    break;                                                                \
   }
 
 #define PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL(__is_combine, __has_dx, __has_dy) \
   do {                                                                      \
     switch (vec_size) {                                                     \
+      PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL_BASE(                               \
+          8, __is_combine, __has_dx, __has_dy);                             \
       PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL_BASE(                               \
           VecSizeL, __is_combine, __has_dx, __has_dy);                      \
       PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL_BASE(                               \
@@ -146,7 +150,7 @@ void SwiGLUGradKernelImpl(const Context &ctx,
       PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL_BASE(                               \
           VecSizeS, __is_combine, __has_dx, __has_dy);                      \
       default:                                                              \
-        PADDLE_THROW(phi::errors::Unimplemented(                            \
+        PADDLE_THROW(common::errors::Unimplemented(                         \
             "Unsupported vectorized size: %d !", vec_size));                \
         break;                                                              \
     }                                                                       \
@@ -154,7 +158,7 @@ void SwiGLUGradKernelImpl(const Context &ctx,
 
   if (y) {
     auto config =
-        phi::backends::gpu::GetGpuLaunchConfig1D(ctx, m * n, vec_size);
+        phi::backends::gpu::GetGpuLaunchConfig1D(dev_ctx, m * n, vec_size);
     if (dx) {
       if (dy) {
         PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL(false, true, true);
@@ -164,14 +168,14 @@ void SwiGLUGradKernelImpl(const Context &ctx,
     } else {
       PADDLE_ENFORCE_NOT_NULL(
           dy,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Both gradients of Input(X) and Input(Y) is None."));
       PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL(false, false, true);
     }
   } else {
     PADDLE_ENFORCE_NOT_NULL(
         dx,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Both gradients of Input(X) and Input(Y) is None."));
     while (n % vec_size != 0) {
       vec_size /= 2;
@@ -179,7 +183,7 @@ void SwiGLUGradKernelImpl(const Context &ctx,
     y = x + n;
     dy = dx + n;
     auto config =
-        phi::backends::gpu::GetGpuLaunchConfig1D(ctx, m * n / vec_size, 1);
+        phi::backends::gpu::GetGpuLaunchConfig1D(dev_ctx, m * n / vec_size, 1);
     PD_LAUNCH_SWIGLU_GRAD_CUDA_KERNEL(true, true, true);
   }
 }

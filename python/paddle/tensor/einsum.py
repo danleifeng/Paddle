@@ -17,7 +17,7 @@ import collections
 import itertools
 import re
 import string
-from typing import TYPE_CHECKING, NamedTuple, Sequence
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import opt_einsum
@@ -35,6 +35,8 @@ from .math import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
 
 __all__ = []
@@ -219,7 +221,7 @@ def build_global_view(
     # Put all labels in alphabetical order
     concat = sorted(''.join(nop_labels).replace('.', ''))
     labels, count = [], []
-    for a, b in zip(['.'] + concat, concat):
+    for a, b in zip(['.', *concat], concat):
         if a != b:
             labels.append(b)
             count.append(1)
@@ -398,16 +400,16 @@ def plan_matmul(
         and k > 0
         and -1 not in np.concatenate((op1_vshape, op2_vshape))
     ):
-        op1_shape = (
-            list(op1_vshape[I])
-            + [np.prod(op1_vshape[J1])]
-            + [np.prod(op1_vshape[K])]
-        )
-        op2_shape = (
-            list(op2_vshape[I])
-            + [np.prod(op2_vshape[J2])]
-            + [np.prod(op2_vshape[K])]
-        )
+        op1_shape = [
+            *list(op1_vshape[I]),
+            np.prod(op1_vshape[J1]),
+            np.prod(op1_vshape[K]),
+        ]
+        op2_shape = [
+            *list(op2_vshape[I]),
+            np.prod(op2_vshape[J2]),
+            np.prod(op2_vshape[K]),
+        ]
 
         # Merge J dims and K dims by reshaping
         step = reshape, [var1], var1, op1_shape
@@ -463,14 +465,14 @@ def plan_matmul(
                 reshape,
                 [var1],
                 var1,
-                list(op1_vshape[I]) + [1] + [np.prod(op1_vshape[K])],
+                [*list(op1_vshape[I]), 1, np.prod(op1_vshape[K])],
             )
             plan.add_step(step)
             step = (
                 reshape,
                 [var2],
                 var2,
-                list(op2_vshape[I]) + [1] + [np.prod(op2_vshape[K])],
+                [*list(op2_vshape[I]), 1, np.prod(op2_vshape[K])],
             )
             plan.add_step(step)
             step = matmul, [var1, var2], var2, False, True
@@ -836,11 +838,10 @@ def parse_fake_shape(
         1. ori_label is the original labels, not aligned by '....'
         2. if the '...' is evaluated to empty list, there is no '.' in label
         """
-        assert len(op.shape) == len(label), (
-            "length of shape and length of label must be the same, but received %d != %d"
-            % (len(op.shape), len(label))
-        )
-        fakes = [s for i, (l, s) in enumerate(zip(label, op.shape)) if l != '.']
+        assert len(op.shape) == len(
+            label
+        ), f"length of shape and length of label must be the same, but received {len(op.shape)} != {len(label)}"
+        fakes = [s for i, (l, s) in enumerate(zip(label, op.shape))]
         fakes = list(map(abs, fakes))  # make -1 -> 1
         if '.' in ori_label:
             fakes.insert(ori_label.index('.'), 1)
@@ -911,7 +912,7 @@ def einsum_v2(equation: str, *operands: Tensor) -> Tensor:
         var_list.append(gen_einsum_op(eq, *var_s))
     assert (
         len(var_list) == 1
-    ), "There must be one elements in list, but received %d." % len(var_list)
+    ), f"There must be one elements in list, but received {len(var_list)}."
     return var_list[0]
 
 

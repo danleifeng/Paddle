@@ -21,14 +21,26 @@ limitations under the License. */
 #include "paddle/phi/kernels/autotune/cache_base.h"
 #include "paddle/phi/kernels/cast_kernel.h"
 #include "paddle/phi/kernels/funcs/blas/blas.h"
+#ifdef PADDLE_WITH_HIP
+#include "paddle/phi/kernels/funcs/blas/blaslt_impl.hip.h"
+#else
 #include "paddle/phi/kernels/funcs/blas/blaslt_impl.cu.h"
+#endif
 #include "paddle/phi/kernels/funcs/complex_functors.h"
+#include "paddle/phi/kernels/scale_kernel.h"
 #if defined(PADDLE_WITH_CUDA)
 #include "paddle/phi/kernels/funcs/cublaslt.h"
+#include "paddle/phi/kernels/gpu/cuda_gemm_kernel.h"
+#include "paddle/phi/kernels/transpose_kernel.h"
+#elif defined(PADDLE_WITH_HIP)
+#include "paddle/phi/kernels/funcs/hipblaslt.h"
 #endif
 #if defined(PADDLE_WITH_CUDA) && CUDA_VERSION >= 11060
 #include "paddle/phi/kernels/autotune/auto_tune_base.h"
 #endif
+#include "paddle/phi/kernels/full_kernel.h"
+
+COMMON_DECLARE_bool(cuda_core_int8_gemm);
 
 namespace phi {
 
@@ -49,7 +61,7 @@ static void GetBroadcastFromDims(const int x_ndim,
     PADDLE_ENFORCE_EQ(
         x_bd_dims[i] == y_bd_dims[i] || x_bd_dims[i] <= 1 || y_bd_dims[i] <= 1,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Input(X) and Input(Y) has error dim. "
             "X_broadcast's shape[%s] must be equal to Y_broadcast's shape[%s], "
             "or X_broadcast's shape[%s] <= 1, or Y_broadcast's shape[%s] <= 1, "
@@ -119,12 +131,12 @@ void MatMulFunctionImplWithBlas(
   auto blas = phi::funcs::GetBlas<Context, T>(dev_ctx);
 
   if (x_ndim == 1 && y_ndim == 1) {
-    const int M = X.numel();
-    const int N = Y.numel();
+    const int64_t M = X.numel();
+    const int64_t N = Y.numel();
     PADDLE_ENFORCE_EQ(
         M,
         N,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "X's numbers must be equal to Y's numbers, "
             "when X/Y's dims =1. But received X has [%d] elements, "
             "received Y has [%d] elements.",
@@ -147,29 +159,29 @@ void MatMulFunctionImplWithBlas(
   }
 
   if (x_ndim == 1) {
-    const int N = X.numel();
+    const int64_t N = X.numel();
     if (trans_y) {
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 1,
-                                       N,
-                                       y_ndim - 1,
-                                       y_dims[y_ndim - 1]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 1,
+                                          N,
+                                          y_ndim - 1,
+                                          y_dims[y_ndim - 1]));
     } else {
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 2,
-                                       N,
-                                       y_ndim - 2,
-                                       y_dims[y_ndim - 2]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 2,
+                                          N,
+                                          y_ndim - 2,
+                                          y_dims[y_ndim - 2]));
     }
     std::vector<std::int64_t> out_dims(y_ndim - 1);
     if (trans_y) {
@@ -181,7 +193,7 @@ void MatMulFunctionImplWithBlas(
     Out->ResizeAndAllocate(common::make_ddim(out_dims));
     dev_ctx.template Alloc<T>(Out);
     if (trans_y) {
-      const int M = Y.numel() / N;
+      const int64_t M = Y.numel() / N;
       VLOG(3) << "MatMul's case 2";
       blas.GEMV(false,
                 M,
@@ -192,8 +204,8 @@ void MatMulFunctionImplWithBlas(
                 static_cast<T>(flag),
                 dev_ctx.template Alloc<T>(Out));
     } else {
-      const int M = y_dims[y_ndim - 1];
-      const int batch_size = Y.numel() / (M * N);
+      const int64_t M = y_dims[y_ndim - 1];
+      const int64_t batch_size = Y.numel() / (M * N);
       if (batch_size == 1) {
         VLOG(3) << "MatMul's case 3";
         blas.GEMV(true,
@@ -225,29 +237,29 @@ void MatMulFunctionImplWithBlas(
   }
 
   if (y_ndim == 1) {
-    const int N = Y.numel();
+    const int64_t N = Y.numel();
     if (trans_x) {
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d"
-                                       "But received X'dims[%d] is %d",
-                                       x_ndim - 2,
-                                       N,
-                                       x_ndim - 2,
-                                       x_dims[x_ndim - 2]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d"
+                                          "But received X'dims[%d] is %d",
+                                          x_ndim - 2,
+                                          N,
+                                          x_ndim - 2,
+                                          x_dims[x_ndim - 2]));
     } else {
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d"
-                                       "But received X'dims[%d] is %d",
-                                       x_ndim - 1,
-                                       N,
-                                       x_ndim - 1,
-                                       x_dims[x_ndim - 1]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d"
+                                          "But received X'dims[%d] is %d",
+                                          x_ndim - 1,
+                                          N,
+                                          x_ndim - 1,
+                                          x_dims[x_ndim - 1]));
     }
     std::vector<std::int64_t> out_dims(x_ndim - 1);
     if (trans_x) {
@@ -260,8 +272,8 @@ void MatMulFunctionImplWithBlas(
     dev_ctx.template Alloc<T>(Out);
 
     if (trans_x) {
-      const int M = x_dims[x_ndim - 1];
-      const int batch_size = X.numel() / (M * N);
+      const int64_t M = x_dims[x_ndim - 1];
+      const int64_t batch_size = X.numel() / (M * N);
       if (batch_size == 1) {
         VLOG(3) << "MatMul's case 5";
         blas.GEMV(true,
@@ -289,7 +301,7 @@ void MatMulFunctionImplWithBlas(
                          0);
       }
     } else {
-      const int M = X.numel() / N;
+      const int64_t M = X.numel() / N;
       VLOG(3) << "MatMul's case 7";
       blas.GEMV(false,
                 M,
@@ -303,33 +315,33 @@ void MatMulFunctionImplWithBlas(
     return;
   }
 
-  const int M = trans_x ? x_dims[x_ndim - 1] : x_dims[x_ndim - 2];
-  const int K = trans_x ? x_dims[x_ndim - 2] : x_dims[x_ndim - 1];
+  const int64_t M = trans_x ? x_dims[x_ndim - 1] : x_dims[x_ndim - 2];
+  const int64_t K = trans_x ? x_dims[x_ndim - 2] : x_dims[x_ndim - 1];
   if (trans_y) {
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 1],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 1,
-                                     K,
-                                     y_ndim - 1,
-                                     y_dims[y_ndim - 1]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 1,
+                                        K,
+                                        y_ndim - 1,
+                                        y_dims[y_ndim - 1]));
   } else {
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 2],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 2,
-                                     K,
-                                     y_ndim - 2,
-                                     y_dims[y_ndim - 2]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 2,
+                                        K,
+                                        y_ndim - 2,
+                                        y_dims[y_ndim - 2]));
   }
-  const int N = trans_y ? y_dims[y_ndim - 2] : y_dims[y_ndim - 1];
-  const int ndim = (std::max)(x_ndim, y_ndim);
+  const int64_t N = trans_y ? y_dims[y_ndim - 2] : y_dims[y_ndim - 1];
+  const int64_t ndim = (std::max)(x_ndim, y_ndim);
   std::vector<std::int64_t> x_broadcast_dims(ndim);
   std::vector<std::int64_t> y_broadcast_dims(ndim);
   std::vector<std::int64_t> out_broadcast_dims(ndim);
@@ -513,7 +525,7 @@ void MatMulFunctionImplWithCublasLt(
     PADDLE_ENFORCE_EQ(
         M,
         N,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "X's numbers must be equal to Y's numbers, "
             "when X/Y's dims =1. But received X has [%d] elements, "
             "received Y has [%d] elements",
@@ -543,24 +555,24 @@ void MatMulFunctionImplWithCublasLt(
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 1,
-                                       N,
-                                       y_ndim - 1,
-                                       y_dims[y_ndim - 1]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 1,
+                                          N,
+                                          y_ndim - 1,
+                                          y_dims[y_ndim - 1]));
     } else {
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 2,
-                                       N,
-                                       y_ndim - 2,
-                                       y_dims[y_ndim - 2]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 2,
+                                          N,
+                                          y_ndim - 2,
+                                          y_dims[y_ndim - 2]));
     }
     std::vector<std::int64_t> out_dims(y_ndim - 1);
     if (trans_y) {
@@ -626,24 +638,24 @@ void MatMulFunctionImplWithCublasLt(
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d"
-                                       "But received X'dims[%d] is %d",
-                                       x_ndim - 2,
-                                       N,
-                                       x_ndim - 2,
-                                       x_dims[x_ndim - 2]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d"
+                                          "But received X'dims[%d] is %d",
+                                          x_ndim - 2,
+                                          N,
+                                          x_ndim - 2,
+                                          x_dims[x_ndim - 2]));
     } else {
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d, "
-                                       "but received X'dims[%d] is %d",
-                                       x_ndim - 1,
-                                       N,
-                                       x_ndim - 1,
-                                       x_dims[x_ndim - 1]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d, "
+                                          "but received X'dims[%d] is %d",
+                                          x_ndim - 1,
+                                          N,
+                                          x_ndim - 1,
+                                          x_dims[x_ndim - 1]));
     }
     std::vector<std::int64_t> out_dims(x_ndim - 1);
     if (trans_x) {
@@ -710,24 +722,24 @@ void MatMulFunctionImplWithCublasLt(
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 1],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 1,
-                                     K,
-                                     y_ndim - 1,
-                                     y_dims[y_ndim - 1]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 1,
+                                        K,
+                                        y_ndim - 1,
+                                        y_dims[y_ndim - 1]));
   } else {
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 2],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 2,
-                                     K,
-                                     y_ndim - 2,
-                                     y_dims[y_ndim - 2]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 2,
+                                        K,
+                                        y_ndim - 2,
+                                        y_dims[y_ndim - 2]));
   }
   const int N = trans_y ? y_dims[y_ndim - 2] : y_dims[y_ndim - 1];
   const int ndim = (std::max)(x_ndim, y_ndim);
@@ -895,7 +907,7 @@ void MatMulFunctionImplWithCublasLt(
 
 template <typename Context, typename T>
 struct MatMulDispatcher {
-  void operator()(const Context& ctx,
+  void operator()(const Context& dev_ctx,
                   const DenseTensor& x,
                   const DenseTensor& y,
                   const std::vector<std::int64_t>& x_dims,
@@ -905,14 +917,14 @@ struct MatMulDispatcher {
                   bool trans_y,
                   bool flag = false) {
     MatMulFunctionImplWithBlas<Context, T>(
-        ctx, x, y, x_dims, y_dims, out, trans_x, trans_y, flag);
+        dev_ctx, x, y, x_dims, y_dims, out, trans_x, trans_y, flag);
   }
 };
 
 #ifdef PADDLE_WITH_CUDA
 template <typename T>
 struct MatMulDispatcher<phi::GPUContext, T> {
-  void operator()(const phi::GPUContext& ctx,
+  void operator()(const phi::GPUContext& dev_ctx,
                   const DenseTensor& x,
                   const DenseTensor& y,
                   const std::vector<std::int64_t>& x_dims,
@@ -935,9 +947,9 @@ struct MatMulDispatcher<phi::GPUContext, T> {
                                              /* reserve_data */ nullptr,
                                              /* use_addto */ flag,
                                              /* no_exchange */ true);
-    tuner->Run(ctx,
+    tuner->Run(dev_ctx,
                matmul_planner.GetKey(),
-               ctx,
+               dev_ctx,
                x,
                y,
                x_dims,
@@ -949,7 +961,7 @@ struct MatMulDispatcher<phi::GPUContext, T> {
                &matmul_planner);
 #else
     MatMulFunctionImplWithBlas<phi::GPUContext, T>(
-        ctx, x, y, x_dims, y_dims, out, trans_x, trans_y, flag);
+        dev_ctx, x, y, x_dims, y_dims, out, trans_x, trans_y, flag);
 #endif
   }
 };
@@ -957,7 +969,7 @@ struct MatMulDispatcher<phi::GPUContext, T> {
 #endif  // PADDLE_WITH_CUDA
 
 template <typename Context, typename T>
-void MatMulFunction(const Context& ctx,
+void MatMulFunction(const Context& dev_ctx,
                     const DenseTensor& x,
                     const DenseTensor& y,
                     const std::vector<std::int64_t>& x_dims,
@@ -967,11 +979,11 @@ void MatMulFunction(const Context& ctx,
                     bool trans_y,
                     bool flag = false) {
   MatMulDispatcher<Context, T>()(
-      ctx, x, y, x_dims, y_dims, out, trans_x, trans_y, flag);
+      dev_ctx, x, y, x_dims, y_dims, out, trans_x, trans_y, flag);
 }
 
 template <typename Context>
-bool MatMulInt8Function(const Context& ctx,
+bool MatMulInt8Function(const Context& dev_ctx,
                         const DenseTensor& x,
                         const DenseTensor& y,
                         const std::vector<std::int64_t>& x_dims,
@@ -984,7 +996,7 @@ bool MatMulInt8Function(const Context& ctx,
 
 #ifdef PADDLE_WITH_CUDA
 template <>
-bool inline MatMulInt8Function(const phi::GPUContext& ctx,
+bool inline MatMulInt8Function(const phi::GPUContext& dev_ctx,
                                const DenseTensor& x,
                                const DenseTensor& y,
                                const std::vector<std::int64_t>& x_dims,
@@ -1020,7 +1032,7 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
     PADDLE_ENFORCE_EQ(
         M,
         N,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "X's numbers must be equal to Y's numbers, "
             "when X/Y's dims =1. But received X has [%d] elements, s"
             "received Y has [%d] elements",
@@ -1031,11 +1043,11 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
     }
 
     out->Resize(common::make_ddim({}));
-    ctx.template Alloc<int32_t>(out);
-    blaslt::Run(ctx,
+    dev_ctx.template Alloc<int32_t>(out);
+    blaslt::Run(dev_ctx,
                 y_data,
                 x_data,
-                ctx.template Alloc<int32_t>(out),
+                dev_ctx.template Alloc<int32_t>(out),
                 1,
                 1,
                 M,
@@ -1050,13 +1062,13 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 1,
-                                       N,
-                                       y_ndim - 1,
-                                       y_dims[y_ndim - 1]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 1,
+                                          N,
+                                          y_ndim - 1,
+                                          y_dims[y_ndim - 1]));
       if (!(N % 4 == 0)) {
         return false;
       }
@@ -1064,13 +1076,13 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 2,
-                                       N,
-                                       y_ndim - 2,
-                                       y_dims[y_ndim - 2]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 2,
+                                          N,
+                                          y_ndim - 2,
+                                          y_dims[y_ndim - 2]));
       const int M = y.numel() / N;
       if (!(M == 1 || M % 4 == 0)) {
         return false;
@@ -1084,13 +1096,13 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       out_dims.back() = y_dims.back();
     }
     out->ResizeAndAllocate(common::make_ddim(out_dims));
-    ctx.template Alloc<int32_t>(out);
+    dev_ctx.template Alloc<int32_t>(out);
     if (trans_y) {
       const int M = y.numel() / N;
-      blaslt::Run(ctx,
+      blaslt::Run(dev_ctx,
                   y_data,
                   x_data,
-                  ctx.template Alloc<int32_t>(out),
+                  dev_ctx.template Alloc<int32_t>(out),
                   M,
                   1,
                   N,
@@ -1101,10 +1113,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       const int M = y_dims[y_ndim - 1];
       const int batch_size = y.numel() / (M * N);
       if (batch_size == 1) {
-        blaslt::Run(ctx,
+        blaslt::Run(dev_ctx,
                     y_data,
                     x_data,
-                    ctx.template Alloc<int32_t>(out),
+                    dev_ctx.template Alloc<int32_t>(out),
                     M,
                     1,
                     N,
@@ -1112,10 +1124,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
                     false,
                     &matmul_planner);
       } else {
-        blaslt::RunWithBatch(ctx,
+        blaslt::RunWithBatch(dev_ctx,
                              y_data,
                              x_data,
-                             ctx.template Alloc<int32_t>(out),
+                             dev_ctx.template Alloc<int32_t>(out),
                              M,
                              1,
                              N,
@@ -1137,13 +1149,13 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d, "
-                                       "but received X'dims[%d] is %d",
-                                       x_ndim - 2,
-                                       N,
-                                       x_ndim - 2,
-                                       x_dims[x_ndim - 2]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d, "
+                                          "but received X'dims[%d] is %d",
+                                          x_ndim - 2,
+                                          N,
+                                          x_ndim - 2,
+                                          x_dims[x_ndim - 2]));
       const int M = x.numel() / N;
       if (!((M == 1 || M % 4 == 0))) {
         return false;
@@ -1152,13 +1164,13 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d, "
-                                       "but received X'dims[%d] is %d",
-                                       x_ndim - 1,
-                                       N,
-                                       x_ndim - 1,
-                                       x_dims[x_ndim - 1]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d, "
+                                          "but received X'dims[%d] is %d",
+                                          x_ndim - 1,
+                                          N,
+                                          x_ndim - 1,
+                                          x_dims[x_ndim - 1]));
       if (N % 4 != 0) {
         return false;
       }
@@ -1171,16 +1183,16 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       std::copy_n(x_dims.cbegin(), x_ndim - 1, out_dims.begin());
     }
     out->ResizeAndAllocate(common::make_ddim(out_dims));
-    ctx.template Alloc<int32_t>(out);
+    dev_ctx.template Alloc<int32_t>(out);
 
     if (trans_x) {
       const int M = x_dims[x_ndim - 1];
       const int batch_size = x.numel() / (M * N);
       if (batch_size == 1) {
-        blaslt::Run(ctx,
+        blaslt::Run(dev_ctx,
                     x_data,
                     y_data,
-                    ctx.template Alloc<int32_t>(out),
+                    dev_ctx.template Alloc<int32_t>(out),
                     M,
                     1,
                     N,
@@ -1188,10 +1200,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
                     false,
                     &matmul_planner);
       } else {
-        blaslt::RunWithBatch(ctx,
+        blaslt::RunWithBatch(dev_ctx,
                              x_data,
                              y_data,
-                             ctx.template Alloc<int32_t>(out),
+                             dev_ctx.template Alloc<int32_t>(out),
                              M,
                              1,
                              N,
@@ -1205,10 +1217,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
       }
     } else {
       const int M = x.numel() / N;
-      blaslt::Run(ctx,
+      blaslt::Run(dev_ctx,
                   x_data,
                   y_data,
-                  ctx.template Alloc<int32_t>(out),
+                  dev_ctx.template Alloc<int32_t>(out),
                   M,
                   1,
                   N,
@@ -1225,24 +1237,24 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 1],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 1,
-                                     K,
-                                     y_ndim - 1,
-                                     y_dims[y_ndim - 1]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 1,
+                                        K,
+                                        y_ndim - 1,
+                                        y_dims[y_ndim - 1]));
   } else {
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 2],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 2,
-                                     K,
-                                     y_ndim - 2,
-                                     y_dims[y_ndim - 2]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 2,
+                                        K,
+                                        y_ndim - 2,
+                                        y_dims[y_ndim - 2]));
   }
   const int N = trans_y ? y_dims[y_ndim - 2] : y_dims[y_ndim - 1];
   const int ndim = (std::max)(x_ndim, y_ndim);
@@ -1260,7 +1272,7 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
   out_broadcast_dims[ndim - 1] = N;
 
   out->ResizeAndAllocate(common::make_ddim(out_broadcast_dims));
-  ctx.template Alloc<int32_t>(out);
+  dev_ctx.template Alloc<int32_t>(out);
 
   const int batch_dim = ndim - 2;
   // broadcast message
@@ -1308,10 +1320,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
     }
   }
   if (x_batch_size == 1 && y_batch_size == 1) {
-    blaslt::Run(ctx,
+    blaslt::Run(dev_ctx,
                 x_data,
                 y_data,
-                ctx.template Alloc<int32_t>(out),
+                dev_ctx.template Alloc<int32_t>(out),
                 M,
                 N,
                 K,
@@ -1320,10 +1332,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
                 &matmul_planner);
   } else if (x_batch_size == 1) {
     if (M == 1 && trans_y) {
-      blaslt::Run(ctx,
+      blaslt::Run(dev_ctx,
                   y_data,
                   x_data,
-                  ctx.template Alloc<int32_t>(out),
+                  dev_ctx.template Alloc<int32_t>(out),
                   y_batch_size * N,
                   1,
                   K,
@@ -1331,10 +1343,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
                   false,
                   &matmul_planner);
     } else {
-      blaslt::RunWithBatch(ctx,
+      blaslt::RunWithBatch(dev_ctx,
                            x_data,
                            y_data,
-                           ctx.template Alloc<int32_t>(out),
+                           dev_ctx.template Alloc<int32_t>(out),
                            M,
                            N,
                            K,
@@ -1348,10 +1360,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
     }
   } else if (y_batch_size == 1) {
     if (!trans_x) {
-      blaslt::Run(ctx,
+      blaslt::Run(dev_ctx,
                   x_data,
                   y_data,
-                  ctx.template Alloc<int32_t>(out),
+                  dev_ctx.template Alloc<int32_t>(out),
                   x_batch_size * M,
                   N,
                   K,
@@ -1359,10 +1371,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
                   trans_y,
                   &matmul_planner);
     } else {
-      blaslt::RunWithBatch(ctx,
+      blaslt::RunWithBatch(dev_ctx,
                            x_data,
                            y_data,
-                           ctx.template Alloc<int32_t>(out),
+                           dev_ctx.template Alloc<int32_t>(out),
                            M,
                            N,
                            K,
@@ -1375,10 +1387,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
                            &matmul_planner);
     }
   } else if (!is_broadcast_dims) {
-    blaslt::RunWithBatch(ctx,
+    blaslt::RunWithBatch(dev_ctx,
                          x_data,
                          y_data,
-                         ctx.template Alloc<int32_t>(out),
+                         dev_ctx.template Alloc<int32_t>(out),
                          M,
                          N,
                          K,
@@ -1404,10 +1416,10 @@ bool inline MatMulInt8Function(const phi::GPUContext& ctx,
 
       x_ptr[i] = x_data + x_index * M * K;
       y_ptr[i] = y_data + y_index * K * N;
-      out_ptr[i] = ctx.template Alloc<int32_t>(out) + i * M * N;
+      out_ptr[i] = dev_ctx.template Alloc<int32_t>(out) + i * M * N;
       IndexIncreaseFromDims(batch_dim, out_broadcast_dims.data(), index.data());
     }
-    blaslt::RunWithBatch(ctx,
+    blaslt::RunWithBatch(dev_ctx,
                          x_ptr.data(),
                          y_ptr.data(),
                          out_ptr.data(),
@@ -1452,7 +1464,7 @@ bool inline MatMulInt8Function(const phi::GPUContext& dev_ctx,
     PADDLE_ENFORCE_EQ(
         M,
         N,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "X's numbers must be equal to Y's numbers, "
             "when X/Y's dims =1. But received X has [%d] elements, "
             "received Y has [%d] elements.",
@@ -1481,24 +1493,24 @@ bool inline MatMulInt8Function(const phi::GPUContext& dev_ctx,
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 1,
-                                       N,
-                                       y_ndim - 1,
-                                       y_dims[y_ndim - 1]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 1,
+                                          N,
+                                          y_ndim - 1,
+                                          y_dims[y_ndim - 1]));
     } else {
       PADDLE_ENFORCE_EQ(
           y_dims[y_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                       "Y'dims[%d] must be equal to %d, "
-                                       "but received Y'dims[%d] is %d.",
-                                       y_ndim - 2,
-                                       N,
-                                       y_ndim - 2,
-                                       y_dims[y_ndim - 2]));
+          common::errors::InvalidArgument("Input(Y) has error dim. "
+                                          "Y'dims[%d] must be equal to %d, "
+                                          "but received Y'dims[%d] is %d.",
+                                          y_ndim - 2,
+                                          N,
+                                          y_ndim - 2,
+                                          y_dims[y_ndim - 2]));
     }
     std::vector<std::int64_t> out_dims(y_ndim - 1);
     if (trans_y) {
@@ -1562,24 +1574,24 @@ bool inline MatMulInt8Function(const phi::GPUContext& dev_ctx,
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 2],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d"
-                                       "But received X'dims[%d] is %d",
-                                       x_ndim - 2,
-                                       N,
-                                       x_ndim - 2,
-                                       x_dims[x_ndim - 2]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d"
+                                          "But received X'dims[%d] is %d",
+                                          x_ndim - 2,
+                                          N,
+                                          x_ndim - 2,
+                                          x_dims[x_ndim - 2]));
     } else {
       PADDLE_ENFORCE_EQ(
           x_dims[x_ndim - 1],
           N,
-          phi::errors::InvalidArgument("Input(X) has error dim."
-                                       "X'dims[%d] must be equal to %d"
-                                       "But received X'dims[%d] is %d",
-                                       x_ndim - 1,
-                                       N,
-                                       x_ndim - 1,
-                                       x_dims[x_ndim - 1]));
+          common::errors::InvalidArgument("Input(X) has error dim."
+                                          "X'dims[%d] must be equal to %d"
+                                          "But received X'dims[%d] is %d",
+                                          x_ndim - 1,
+                                          N,
+                                          x_ndim - 1,
+                                          x_dims[x_ndim - 1]));
     }
     std::vector<std::int64_t> out_dims(x_ndim - 1);
     if (trans_x) {
@@ -1644,24 +1656,24 @@ bool inline MatMulInt8Function(const phi::GPUContext& dev_ctx,
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 1],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 1,
-                                     K,
-                                     y_ndim - 1,
-                                     y_dims[y_ndim - 1]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 1,
+                                        K,
+                                        y_ndim - 1,
+                                        y_dims[y_ndim - 1]));
   } else {
     PADDLE_ENFORCE_EQ(
         y_dims[y_ndim - 2],
         K,
-        phi::errors::InvalidArgument("Input(Y) has error dim. "
-                                     "Y'dims[%d] must be equal to %d, "
-                                     "but received Y'dims[%d] is %d.",
-                                     y_ndim - 2,
-                                     K,
-                                     y_ndim - 2,
-                                     y_dims[y_ndim - 2]));
+        common::errors::InvalidArgument("Input(Y) has error dim. "
+                                        "Y'dims[%d] must be equal to %d, "
+                                        "but received Y'dims[%d] is %d.",
+                                        y_ndim - 2,
+                                        K,
+                                        y_ndim - 2,
+                                        y_dims[y_ndim - 2]));
   }
   const int N = trans_y ? y_dims[y_ndim - 2] : y_dims[y_ndim - 1];
   const int ndim = (std::max)(x_ndim, y_ndim);
@@ -1832,7 +1844,7 @@ bool inline MatMulInt8Function(const phi::GPUContext& dev_ctx,
 
 template <typename Context, typename T>
 typename std::enable_if<std::is_integral<T>::value>::type
-MatmulJudgeDtypeKernel(const Context& ctx,
+MatmulJudgeDtypeKernel(const Context& dev_ctx,
                        const DenseTensor& x,
                        const DenseTensor& y,
                        const std::vector<std::int64_t>& x_dims,
@@ -1840,28 +1852,46 @@ MatmulJudgeDtypeKernel(const Context& ctx,
                        DenseTensor* out,
                        bool transpose_x,
                        bool transpose_y) {
+#if defined(PADDLE_WITH_CUDA)
+  if constexpr (std::is_same<Context, phi::GPUContext>::value &&
+                std::is_same<T, int8_t>::value) {
+    if (x.dtype() == phi::DataType::INT8 && x_dims[0] <= 4 &&
+        y_dims.size() == 2 && y_dims[0] % 16 == 0 && y_dims[1] % 16 == 0 &&
+        FLAGS_cuda_core_int8_gemm && dev_ctx.GetComputeCapability() >= 70 &&
+        transpose_y) {
+      phi::CudaGemm<T, Context>(dev_ctx, x, y, out);
+      return;
+    }
+  }
+#endif
   bool try_matmul_int8 = MatMulInt8Function<Context>(
-      ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
+      dev_ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
   if (try_matmul_int8) {
     return;
   }
-  auto x_tmp = phi::Cast<T, Context>(ctx, x, phi::DataType::FLOAT32);
-  auto y_tmp = phi::Cast<T, Context>(ctx, y, phi::DataType::FLOAT32);
+  auto x_tmp = phi::Cast<T, Context>(dev_ctx, x, phi::DataType::FLOAT32);
+  auto y_tmp = phi::Cast<T, Context>(dev_ctx, y, phi::DataType::FLOAT32);
   DenseTensor out_tmp;
-  MatMulFunction<Context, float>(
-      ctx, x_tmp, y_tmp, x_dims, y_dims, &out_tmp, transpose_x, transpose_y);
+  MatMulFunction<Context, float>(dev_ctx,
+                                 x_tmp,
+                                 y_tmp,
+                                 x_dims,
+                                 y_dims,
+                                 &out_tmp,
+                                 transpose_x,
+                                 transpose_y);
   if (x.dtype() == phi::DataType::INT8) {
-    phi::CastKernel<float>(ctx, out_tmp, phi::DataType::INT32, out);
+    phi::CastKernel<float>(dev_ctx, out_tmp, phi::DataType::INT32, out);
     return;
   }
-  phi::CastKernel<float>(ctx, out_tmp, x.dtype(), out);
+  phi::CastKernel<float>(dev_ctx, out_tmp, x.dtype(), out);
 }
 
 #if defined(PADDLE_WITH_CUDA)
 #if CUDA_VERSION >= 12010
 template <typename Context>
 typename std::enable_if<std::is_same<Context, phi::GPUContext>::value>::type
-DispatchMatmulFP8Kernel(const Context& ctx,
+DispatchMatmulFP8Kernel(const Context& dev_ctx,
                         const DenseTensor& x,
                         const DenseTensor& y,
                         const std::vector<std::int64_t>& x_dims,
@@ -1871,52 +1901,52 @@ DispatchMatmulFP8Kernel(const Context& ctx,
                         bool transpose_y) {
   if (x.dtype() != DataType::FLOAT8_E4M3FN ||
       y.dtype() != DataType::FLOAT8_E4M3FN) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "float8 matmul needs input x and y be float8_e4m3fn"));
   }
 
   PADDLE_ENFORCE_EQ(
       x_dims.size(),
       2,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Mat x for matmul fp8 just support 2-dim tensor, but got %d",
           x_dims.size()));
   PADDLE_ENFORCE_EQ(
       y_dims.size(),
       2,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Mat y for matmul fp8 just support 2-dim tensor, but got %d",
           y_dims.size()));
-  PADDLE_ENFORCE_EQ(
-      x_dims[1],
-      y_dims[0],
-      phi::errors::InvalidArgument("x_dims[1] needs to equal to y_dims[0], but "
-                                   "got x_dims[1] = %d, y_dims[0] = %d",
-                                   x_dims[1],
-                                   y_dims[0]));
+  PADDLE_ENFORCE_EQ(x_dims[1],
+                    y_dims[0],
+                    common::errors::InvalidArgument(
+                        "x_dims[1] needs to equal to y_dims[0], but "
+                        "got x_dims[1] = %d, y_dims[0] = %d",
+                        x_dims[1],
+                        y_dims[0]));
 
   PADDLE_ENFORCE_EQ(
       x_dims[1] % 16,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "fp8 matmul need x_dims[1] % 16 = 0, got x_dims[1] = %d", x_dims[1]));
   PADDLE_ENFORCE_EQ(
       y_dims[0] % 16,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "fp8 matmul need y_dims[0] % 16 = 0, got y_dims[0] = %d", y_dims[0]));
 
   phi::DenseTensor workspace;
   workspace.Resize({30 * 1024 * 1024});
-  ctx.template Alloc<int8_t>(&workspace);
-  ctx.template Alloc<phi::dtype::float16>(out);
+  dev_ctx.template Alloc<int8_t>(&workspace);
+  dev_ctx.template Alloc<phi::dtype::float16>(out);
 
-  CublasLtMatmulFP8<phi::dtype::float16>(ctx, x, y, &workspace, out);
+  CublasLtMatmulFP8<phi::dtype::float16>(dev_ctx, x, y, &workspace, out);
 }
 
 template <typename Context>
 typename std::enable_if<std::is_same<Context, phi::CPUContext>::value>::type
-DispatchMatmulFP8Kernel(const Context& ctx,
+DispatchMatmulFP8Kernel(const Context& dev_ctx,
                         const DenseTensor& x,
                         const DenseTensor& y,
                         const std::vector<std::int64_t>& x_dims,
@@ -1927,7 +1957,7 @@ DispatchMatmulFP8Kernel(const Context& ctx,
 
 template <typename Context, typename T>
 typename std::enable_if<std::is_same<T, phi::dtype::float8_e4m3fn>::value>::type
-DispatchMatmulKernel(const Context& ctx,
+DispatchMatmulKernel(const Context& dev_ctx,
                      const DenseTensor& x,
                      const DenseTensor& y,
                      const std::vector<std::int64_t>& x_dims,
@@ -1936,7 +1966,7 @@ DispatchMatmulKernel(const Context& ctx,
                      bool transpose_x,
                      bool transpose_y) {
   DispatchMatmulFP8Kernel<Context>(
-      ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
+      dev_ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
 }
 #endif
 #endif
@@ -1944,7 +1974,7 @@ DispatchMatmulKernel(const Context& ctx,
 template <typename Context, typename T>
 typename std::enable_if<
     !std::is_same<T, phi::dtype::float8_e4m3fn>::value>::type
-DispatchMatmulKernel(const Context& ctx,
+DispatchMatmulKernel(const Context& dev_ctx,
                      const DenseTensor& x,
                      const DenseTensor& y,
                      const std::vector<std::int64_t>& x_dims,
@@ -1953,12 +1983,12 @@ DispatchMatmulKernel(const Context& ctx,
                      bool transpose_x,
                      bool transpose_y) {
   MatMulFunction<Context, T>(
-      ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
+      dev_ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
 }
 
 template <typename Context, typename T>
 typename std::enable_if<!std::is_integral<T>::value>::type
-MatmulJudgeDtypeKernel(const Context& ctx,
+MatmulJudgeDtypeKernel(const Context& dev_ctx,
                        const DenseTensor& x,
                        const DenseTensor& y,
                        const std::vector<std::int64_t>& x_dims,
@@ -1967,30 +1997,36 @@ MatmulJudgeDtypeKernel(const Context& ctx,
                        bool transpose_x,
                        bool transpose_y) {
   DispatchMatmulKernel<Context, T>(
-      ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
+      dev_ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
 }
 
 template <typename T, typename Context>
-void MatmulKernel(const Context& ctx,
+void MatmulKernel(const Context& dev_ctx,
                   const DenseTensor& x,
                   const DenseTensor& y,
                   bool transpose_x,
                   bool transpose_y,
                   DenseTensor* out) {
-  PADDLE_ENFORCE_NE(
+  if (x.numel() == 0 || y.numel() == 0) {
+    // input shape [1, 1, 5, 0], [1, 1, 0, 5], result shape is [1, 1, 5, 5]
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(out->dims())), 0, out);
+    return;
+  }
+  PADDLE_ENFORCE_GE(
       common::product(x.dims()),
       0,
-      phi::errors::InvalidArgument("The Input(X) dims size must not be equal "
-                                   "0, but received dims size is 0."));
-  PADDLE_ENFORCE_NE(
+      common::errors::InvalidArgument(
+          "The dims of Input(X) should be greater than or equal to 0."));
+  PADDLE_ENFORCE_GE(
       common::product(y.dims()),
       0,
-      phi::errors::InvalidArgument("The Input(Y) dims size must not be equal "
-                                   "0, but received dims size is 0."));
+      common::errors::InvalidArgument(
+          "The dims of Input(Y) should be greater than or equal to 0."));
   const std::vector<std::int64_t> x_dims = common::vectorize(x.dims());
   const std::vector<std::int64_t> y_dims = common::vectorize(y.dims());
   MatmulJudgeDtypeKernel<Context, T>(
-      ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
+      dev_ctx, x, y, x_dims, y_dims, out, transpose_x, transpose_y);
 }
 
 template <typename T, typename Context>
@@ -2031,7 +2067,7 @@ void MatmulWithFlattenKernelInt8Impl(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       x.dtype(),
       DataType::INT8,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The type of input(x) used in int8 mul must be (%s) "
           "does not match the "
           "type of data (%s) currently contained in the container.",
@@ -2040,7 +2076,7 @@ void MatmulWithFlattenKernelInt8Impl(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       y.dtype(),
       DataType::INT8,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The type of input(y) used in int8 mul must be (%s) "
           "does not match the "
           "type of data (%s) currently contained in the container.",
@@ -2055,7 +2091,7 @@ void MatmulWithFlattenKernelInt8Impl(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       x_matrix.dims()[1],
       y_matrix.dims()[0],
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "X's numbers of columns must be equal to Y's numbers of rows."
           "But received X has [%d] columns,"
           "received Y has [%d] rows",
@@ -2064,14 +2100,14 @@ void MatmulWithFlattenKernelInt8Impl(const Context& dev_ctx,
 
   PADDLE_ENFORCE_EQ((y_matrix.dims()[1] % 4 == 0 || y_matrix.dims()[1] == 1),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The dimension size N used in int8 mul must be 1 "
                         "or a multiple of 4 does not match the size (%d)"
                         "currently contained in the container.",
                         y_matrix.dims()[1]));
   PADDLE_ENFORCE_EQ((x_matrix.dims()[1] % 4 == 0),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The dimension size K used in int8 mul must be a "
                         "multiple of 4 does not match the size (%d) currently"
                         "contained in the container.",
@@ -2145,7 +2181,7 @@ DispatchMatmulWithFlattenInt8Kernel(const phi::CPUContext& dev_ctx,
                                     int x_num_col_dims,
                                     int y_num_col_dims,
                                     DenseTensor* out) {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "MatmulWithFlatten with CPU is NOT implemented "
       "yet."));
 }
@@ -2185,4 +2221,18 @@ void MatmulWithFlattenKernel(const Context& dev_ctx,
       dev_ctx, x, y, x_num_col_dims, y_num_col_dims, out);
 }
 
+template <typename T, typename Context>
+void LegacyMatmulKernel(const Context& dev_ctx,
+                        const DenseTensor& x,
+                        const DenseTensor& y,
+                        bool transpose_x,
+                        bool transpose_y,
+                        float alpha,
+                        DenseTensor* out) {
+  MatmulKernel<T, Context>(dev_ctx, x, y, transpose_x, transpose_y, out);
+  if (std::fabs(alpha - 1.f) > 1e-6f) {
+    ScaleKernel<T, Context>(
+        dev_ctx, *out, Scalar(alpha), Scalar(0), false, out);
+  }
+}
 }  // namespace phi

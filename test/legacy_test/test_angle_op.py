@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 from paddle import static
 from paddle.base import core, dygraph
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -43,6 +42,8 @@ class TestAngleOpFloat(OpTest):
     def setUp(self):
         self.op_type = "angle"
         self.python_api = paddle.angle
+        self.prim_op_type = "prim"
+        self.public_python_api = paddle.angle
         self.dtype = "float64"
         self.x = np.linspace(-5, 5, 101).astype(self.dtype)
         out_ref = np.angle(self.x)
@@ -50,7 +51,7 @@ class TestAngleOpFloat(OpTest):
         self.outputs = {'Out': out_ref}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -60,6 +61,7 @@ class TestAngleOpFloat(OpTest):
                 angle_grad(self.x, np.ones_like(self.x) / self.x.size)
             ],
             check_pir=True,
+            check_prim_pir=True,
         )
 
 
@@ -67,6 +69,8 @@ class TestAngleFP16Op(TestAngleOpFloat):
     def setUp(self):
         self.op_type = "angle"
         self.python_api = paddle.angle
+        self.prim_op_type = "prim"
+        self.public_python_api = paddle.angle
         self.dtype = "float16"
         self.x = np.linspace(-5, 5, 101).astype(self.dtype)
         out_ref = np.angle(self.x)
@@ -83,6 +87,8 @@ class TestAngleBF16Op(OpTest):
     def setUp(self):
         self.op_type = "angle"
         self.python_api = paddle.angle
+        self.prim_op_type = "prim"
+        self.public_python_api = paddle.angle
         self.dtype = np.uint16
         self.np_dtype = np.float32
         self.x = np.linspace(-5, 5, 101).astype(self.np_dtype)
@@ -95,7 +101,9 @@ class TestAngleBF16Op(OpTest):
         self.place = core.CUDAPlace(0)
 
     def test_check_output(self):
-        self.check_output_with_place(self.place, check_pir=True)
+        self.check_output_with_place(
+            self.place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(
@@ -106,6 +114,7 @@ class TestAngleBF16Op(OpTest):
                 angle_grad(self.x, np.ones_like(self.x) / self.x.size)
             ],
             check_pir=True,
+            check_prim_pir=True,
         )
 
 
@@ -122,7 +131,7 @@ class TestAngleOpComplex(OpTest):
         self.outputs = {'Out': out_ref}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -139,6 +148,7 @@ class TestAngleAPI(unittest.TestCase):
     def setUp(self):
         self.x = np.random.randn(2, 3) + 1j * np.random.randn(2, 3)
         self.out = np.angle(self.x)
+        self.dtype = "complex128"
 
     def test_dygraph(self):
         with dygraph.guard():
@@ -146,16 +156,34 @@ class TestAngleAPI(unittest.TestCase):
             out_np = paddle.angle(x).numpy()
         np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static(self):
         mp, sp = static.Program(), static.Program()
         with static.program_guard(mp, sp):
-            x = static.data("x", shape=[2, 3], dtype="complex128")
+            x = static.data("x", shape=[2, 3], dtype=self.dtype)
             out = paddle.angle(x)
 
         exe = static.Executor()
         exe.run(sp)
         [out_np] = exe.run(mp, feed={"x": self.x}, fetch_list=[out])
+        np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
+
+
+class TestAngleAPIWithNan(TestAngleAPI):
+    def setUp(self):
+        self.x = np.array([np.nan, -1, 1], dtype=np.float64)
+        self.out = np.angle(self.x)
+        self.dtype = "float64"
+
+
+class TestZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.x = np.random.randn(2, 0) + 1j * np.random.randn(2, 0)
+        self.out = np.angle(self.x)
+
+    def test_0size(self):
+        with dygraph.guard():
+            x = paddle.to_tensor(self.x)
+            out_np = paddle.angle(x).numpy()
         np.testing.assert_allclose(self.out, out_np, rtol=1e-05)
 
 

@@ -28,7 +28,7 @@
 #include "paddle/cinn/optim/ir_simplify.h"
 #include "paddle/cinn/optim/replace_var_with_expr.h"
 #include "paddle/cinn/optim/transform_polyfor_to_for.h"
-#include "paddle/cinn/poly/stage.h"
+#include "paddle/common/enforce.h"
 
 PD_DECLARE_bool(cinn_runtime_display_debug_info);
 
@@ -51,22 +51,14 @@ void CheckNoIslCallRemains(Expr* expr) {
   }
 }
 
-bool TensorContainsGPUInfo(ir::Tensor t, poly::Stage* stage) {
-  if (stage->inlined()) return false;
-  if (stage) {
-    for (auto& info : stage->forloop_infos()) {
-      if (info.second.device == ir::DeviceAPI::GPU) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 const char* CompuGraphNode::__type_info__ = "ComputeGraphNode";
 const char* CompuGraphNode::type_info() const { return __type_info__; }
 std::string CompuGraphNode::id() const {
-  CHECK(tensor.defined());
+  PADDLE_ENFORCE_EQ(
+      tensor.defined(),
+      true,
+      ::common::errors::InvalidArgument("Tensor is not defined. Please ensure "
+                                        "tensor is properly initialized."));
   return tensor->name;
 }
 
@@ -89,9 +81,18 @@ std::vector<ir::Argument> LowerImpl::GenerateFunctionArgumentList(
   std::set<std::string> arg_names;
 
   for (auto& scalar : scalar_args_) {
-    CHECK(!arg_names.count(scalar->name));
+    PADDLE_ENFORCE_EQ(
+        arg_names.count(scalar->name),
+        0,
+        ::common::errors::InvalidArgument(
+            "Argument name '%s' already exists in the argument names set.",
+            scalar->name));
     auto* scalar_node = scalar.As<ir::_Var_>();
-    CHECK(scalar_node->type().valid());
+    PADDLE_ENFORCE_EQ(
+        scalar_node->type().valid(),
+        true,
+        ::common::errors::InvalidArgument(
+            "The type of scalar node '%s' is not valid.", scalar->name));
     arg_names.insert(scalar->name);
 
     args.emplace_back(scalar, ir::Argument::IO::kInput);
@@ -112,7 +113,12 @@ std::vector<ir::Argument> LowerImpl::GenerateFunctionArgumentList(
           std::find_if(args.begin(), args.end(), [&](const ir::Argument& x) {
             return x.name() == tensor_node->buffer->name;
           });
-      CHECK(it != args.end());
+      PADDLE_ENFORCE_EQ(
+          it != args.end(),
+          true,
+          ::common::errors::InvalidArgument(
+              "Argument with name '%s' not found in the argument list.",
+              tensor_node->buffer->name));
       if (it->is_input()) {
         args.erase(it);
       } else if (it->is_output()) {
@@ -130,7 +136,7 @@ std::vector<ir::Argument> LowerImpl::GenerateFunctionArgumentList(
 
   return args;
 }
-// Generate Function Arguments for splitted kernel.
+// Generate Function Arguments for split kernel.
 std::vector<ir::Argument> LowerImpl::GenFuncArgForSplitKernel(
     Expr func_iterator, std::vector<ir::Tensor> temp_tensors) {
   CheckArgsUnique();
@@ -142,9 +148,18 @@ std::vector<ir::Argument> LowerImpl::GenFuncArgForSplitKernel(
   std::set<std::string> all_tensor_names;
 
   for (auto& scalar : scalar_args_) {
-    CHECK(!arg_names.count(scalar->name));
+    PADDLE_ENFORCE_EQ(
+        arg_names.count(scalar->name),
+        0,
+        ::common::errors::InvalidArgument(
+            "Argument name '%s' already exists in the argument names set.",
+            scalar->name));
     auto* scalar_node = scalar.As<ir::_Var_>();
-    CHECK(scalar_node->type().valid());
+    PADDLE_ENFORCE_EQ(
+        scalar_node->type().valid(),
+        true,
+        ::common::errors::InvalidArgument(
+            "The type of scalar node '%s' is not valid.", scalar->name));
     arg_names.insert(scalar->name);
 
     in_args.emplace_back(scalar, ir::Argument::IO::kInput);
@@ -233,12 +248,15 @@ std::vector<ir::Argument> LowerImpl::GenFuncArgForSplitKernel(
 std::vector<Tensor> LowerImpl::CollectTemporaryTensors() {
   // a temporary should be in the comp_graph but not contained in the
   // tensor_args.
-  absl::flat_hash_map<std::string, Tensor> tensor_arg_map = GenTensorArgMap();
-  absl::flat_hash_map<std::string, Tensor> temp_tensor_map;
+  paddle::flat_hash_map<std::string, Tensor> tensor_arg_map = GenTensorArgMap();
+  paddle::flat_hash_map<std::string, Tensor> temp_tensor_map;
 
   for (auto* node : compu_graph_->nodes()) {
     auto* cnode = node->safe_as<CompuGraphNode>();
-    CHECK(cnode);
+    PADDLE_ENFORCE_NOT_NULL(
+        cnode,
+        ::common::errors::InvalidArgument(
+            "Node could not be safely cast to CompuGraphNode."));
     if (!tensor_arg_map.count(cnode->tensor->name)) {
       temp_tensor_map[cnode->tensor->name] = cnode->tensor;
     }
@@ -253,115 +271,20 @@ std::vector<Tensor> LowerImpl::CollectTemporaryTensors() {
   return temp_tensors;
 }
 
-absl::flat_hash_map<std::string, Tensor> LowerImpl::GenTensorArgMap() {
-  absl::flat_hash_map<std::string, Tensor> map;
+paddle::flat_hash_map<std::string, Tensor> LowerImpl::GenTensorArgMap() {
+  paddle::flat_hash_map<std::string, Tensor> map;
   for (auto& t : tensor_args_) {
     map[t->name] = t;
   }
   return map;
 }
 
-absl::flat_hash_map<std::string, Tensor> LowerImpl::GenAllTensorMap() {
-  absl::flat_hash_map<std::string, Tensor> map;
+paddle::flat_hash_map<std::string, Tensor> LowerImpl::GenAllTensorMap() {
+  paddle::flat_hash_map<std::string, Tensor> map;
   for (auto& t : CollectAllTensors()) {
     map[t->name] = t;
   }
   return map;
-}
-
-std::vector<ir::LoweredFunc> LowerImpl::operator()() {
-  std::vector<poly::Stage*> stages;
-  std::map<std::string, ir::Tensor> all_tensor_map;
-  for (auto& t : CollectAllTensors()) {
-    all_tensor_map[t->name] = t;
-  }
-
-  auto deps = CollectExtraDependencies();
-  auto schedule =
-      poly::CreateSchedule(stages,
-                           poly::ScheduleKind::Poly,
-                           std::vector<std::pair<std::string, std::string>>(
-                               deps.begin(), deps.end()));
-  auto func_body = GenerateFunctionBody(schedule.get());
-
-  std::vector<ir::LoweredFunc> result;
-  int num_func = 0;
-  for (auto& func_iterator : func_body) {
-    if (support_ir_schedule_) {
-      // add ScheduleBlockRealize
-      func_iterator = ir::ScheduleBlockRealize::Make(
-          {},
-          ir::ScheduleBlock::Make(
-              {}, {}, {}, cinn::common::UniqName("root"), func_iterator));
-    }
-    std::set<std::string> temp_tensor_names;
-    for (auto& t : temp_tensor_args_) temp_tensor_names.insert(t->name);
-
-    auto store_exprs = ir::ir_utils::CollectIRNodes(
-        func_iterator, [](const Expr* x) { return x->As<ir::Store>(); });
-    std::vector<ir::Tensor> new_temp_tensors;
-    for (auto& expr : store_exprs) {
-      auto* store_node = expr.As<ir::Store>();
-      CHECK(store_node);
-      auto* tensor = store_node->tensor.As<ir::_Tensor_>();
-      CHECK(tensor);
-      VLOG(3) << "In store_exprs, its name is : " << tensor->name;
-      CHECK(tensor->buffer.defined());
-      if (tensor->buffer->memory_type != ir::MemoryType::Heap) {
-        new_temp_tensors.push_back(store_node->tensor.as_tensor_ref());
-      }
-    }
-
-    auto func_temp_tensors = CollectTemporaryTensors();
-    std::vector<ir::Buffer> temp_buffers;
-    std::unordered_set<std::string> buffer_name_set;
-    // TODO(Superjomn) write buffer latter.
-
-    ir::LoweredFunc func;
-    if (target_ == cinn::common::DefaultNVGPUTarget()) {
-      auto func_args2 =
-          GenFuncArgForSplitKernel(func_iterator, new_temp_tensors);
-      std::string new_fn_name = fn_name_;
-      if (num_func > 0) {
-        new_fn_name += "_" + std::to_string(num_func);
-      }
-      VLOG(3) << "Making func :" << new_fn_name;
-      for (auto& i : func_args2) {
-        VLOG(3) << "func_args2 is : " << i.name();
-      }
-      for (auto& i : temp_buffers) {
-        VLOG(3) << "temp_buffers is : " << i->name;
-      }
-      func = ir::_LoweredFunc_::Make(
-          new_fn_name, func_args2, func_iterator, temp_buffers);
-    } else {
-      auto func_args = GenerateFunctionArgumentList(func_iterator);
-      func = ir::_LoweredFunc_::Make(
-          fn_name_, func_args, func_iterator, temp_buffers);
-    }
-
-    if (support_ir_schedule_) {
-      optim::TransformPolyForToFor(&func->body);
-      optim::SimplifyBlocks(&func->body);
-      func->body = ir::Block::Make({func->body});
-      result.push_back(ir::LoweredFunc(func.get()));
-      num_func++;
-    } else {
-      auto res = optim::Optimize(func,
-                                 target_,
-                                 FLAGS_cinn_runtime_display_debug_info,
-                                 /* remove_gpu_for_loops = */ false);
-
-      if (cuda_axis_info_.size() > num_func &&
-          cuda_axis_info_[num_func].valid()) {
-        auto* res_func = res.as_lowered_func();
-        res_func->cuda_axis_info = cuda_axis_info_[num_func];
-      }
-      result.push_back(ir::LoweredFunc(res.get()));
-      num_func++;
-    }
-  }
-  return result;
 }
 
 std::vector<Tensor> LowerImpl::CollectAllTensors() {
@@ -371,7 +294,10 @@ std::vector<Tensor> LowerImpl::CollectAllTensors() {
   auto& edges = std::get<1>(topo_order);
   for (auto* node : nodes) {
     auto* cnode = node->safe_as<CompuGraphNode>();
-    CHECK(cnode);
+    PADDLE_ENFORCE_NOT_NULL(
+        cnode,
+        ::common::errors::InvalidArgument(
+            "Node could not be safely cast to CompuGraphNode."));
     tensors.push_back(cnode->tensor);
   }
   return tensors;
@@ -382,124 +308,12 @@ LowerImpl::CollectExtraDependencies() const {
   std::set<std::pair<std::string, std::string>> deps;
   for (auto* node : compu_graph_->nodes()) {
     auto* cnode = node->safe_as<CompuGraphNode>();
-    CHECK(cnode);
+    PADDLE_ENFORCE_NOT_NULL(
+        cnode,
+        ::common::errors::InvalidArgument(
+            "Node could not be safely cast to CompuGraphNode."));
   }
   return deps;
-}
-
-std::vector<Expr> LowerImpl::GenerateFunctionBody(
-    const poly::Schedule* schedule) {
-  // generate the expressions for each group.
-  std::vector<Expr> exprs;
-  std::vector<Expr> result;
-  auto tensor_map = GenAllTensorMap();
-  std::map<std::string, Expr> tuple_to_expr;
-  CHECK(!schedule->groups.empty()) << "no group is generated";
-
-  std::map<std::string, ir::Tensor> global_tensor_map;
-  std::unordered_map<std::string, std::vector<Expr>> resized_buffer_cache;
-
-  for (auto& group : schedule->groups) {
-    PADDLE_ENFORCE_GT(
-        group.nodes.size(),
-        0,
-        phi::errors::InvalidArgument(
-            "Group is empty"
-            "Expected size of group is larger than 0, but receive %d. ",
-            group.nodes.size()));
-    bool all_temp_tensor = true;
-    for (auto& node : group.nodes) {
-      if (!tensor_map.count(node->id())) {
-        VLOG(2) << "tensor_map doesn't count " << node->id();
-        continue;
-      }
-      auto& tensor = tensor_map[node->id()];
-      if (!tensor->has_expression()) continue;
-      all_temp_tensor =
-          all_temp_tensor &&
-          ((tensor->buffer.defined() &&
-            (tensor->buffer->memory_type == ir::MemoryType::GPUShared ||
-             tensor->buffer->memory_type == ir::MemoryType::GPULocal)));
-      auto store_body = tensor->tensor_store_expanded_body();
-      if (support_ir_schedule_) {
-        // add schedule block of tensor computation for schedule IR
-        int var_counts = tensor->shape.size() + tensor->reduce_axis.size();
-        std::vector<int> int_shape;
-        VLOG(3) << "Tensor " << tensor->name
-                << "'s shape is : " << utils::Join(tensor->shape, ",");
-        for (auto& expr : tensor->shape) {
-          CHECK(expr.is_constant());
-          int_shape.push_back(static_cast<int>(expr.get_constant()));
-        }
-        for (auto& var : tensor->reduce_axis) {
-          CHECK(var->lower_bound.defined());
-          CHECK(var->upper_bound.defined());
-          CHECK(cinn::common::is_zero(var->lower_bound));
-          CHECK(var->upper_bound.is_constant());
-          int_shape.push_back(
-              static_cast<int>(var->upper_bound.get_constant()));
-        }
-        // create block itervars, i0,i1...
-        std::vector<Var> block_vars;
-        std::vector<Expr> iter_values;
-        std::vector<Var> axis_vars =
-            cinn::common::GenDefaultAxis(tensor->shape.size());
-        // bind var_values
-        axis_vars.insert(axis_vars.end(),
-                         tensor->reduce_axis.begin(),
-                         tensor->reduce_axis.end());
-        for (int i = 0; i < var_counts; i++) {
-          block_vars.push_back(Var(Expr(0),
-                                   Expr(int_shape[i]),
-                                   cinn::UniqName("i" + std::to_string(i)),
-                                   false));
-          if (i >= tensor->shape.size()) {
-            block_vars[i]->is_reduce_axis = true;
-            axis_vars[i]->is_reduce_axis = true;
-          }
-          iter_values.push_back(axis_vars[i]);
-          // replace store's indice
-          VLOG(3) << "replace axis_var " << axis_vars[i]->name
-                  << " to block_var " << block_vars[i];
-          optim::ReplaceVarWithExpr(&store_body, axis_vars[i], block_vars[i]);
-        }
-        store_body = ir::ScheduleBlockRealize::Make(
-            iter_values,
-            ir::ScheduleBlock::Make(
-                block_vars, {}, {}, tensor->name, store_body));
-        // iter_values, ir::ScheduleBlock::Make(block_vars, {}, {},
-        // cinn::common::UniqName(tensor->name), store_body));
-        VLOG(3) << "store body\n" << store_body;
-      }
-      tuple_to_expr[tensor->name] = store_body;
-    }
-
-    ir::CudaAxisInfo temp_cuda_axis_info;
-    Expr group_expr;
-
-    if (group_expr.defined()) {
-      cuda_axis_info_.emplace_back(std::move(temp_cuda_axis_info));
-      if (target_ == cinn::common::DefaultNVGPUTarget() && !all_temp_tensor) {
-        exprs.push_back(group_expr);
-        Expr body = ir::Block::Make(exprs);
-        result.push_back(body);
-        exprs.clear();
-      } else {
-        exprs.push_back(group_expr);
-      }
-    }
-  }
-  if (target_ == cinn::common::DefaultHostTarget()) {
-    Expr body = ir::Block::Make(exprs);
-    result.push_back(body);
-    exprs.clear();
-  } else if (!exprs.empty()) {
-    Expr body = ir::Block::Make(exprs);
-    result.push_back(body);
-    exprs.clear();
-  }
-
-  return result;
 }
 
 }  // namespace detail

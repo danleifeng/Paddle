@@ -22,7 +22,6 @@ from utils import static_guard
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def instance_norm_wrapper(
@@ -36,18 +35,26 @@ def instance_norm_wrapper(
 
 
 def _reference_instance_norm(x, scale, bias, epsilon):
+    prev_x_shape = x.shape
+    if len(x.shape) < 4:
+        x = np.reshape(x, (x.shape[0], x.shape[1], -1, 1))
+
     N, C, H, W = x.shape
     mean = np.mean(x, axis=(2, 3), keepdims=True)
     variance = np.var(x, axis=(2, 3), keepdims=True)
-    std = np.sqrt(variance) + epsilon
+    std = np.sqrt(variance + epsilon)
     x_norm = (x - mean) / std
     scale = scale.reshape([1, C, 1, 1])
     bias = bias.reshape([1, C, 1, 1])
     x_norm = scale * x_norm + bias
-    return x_norm, mean.reshape(N * C), std.reshape(N * C)
+    return x_norm.reshape(prev_x_shape), mean.reshape(N * C), std.reshape(N * C)
 
 
 def _reference_instance_norm_grad(x, scale, mean, var):
+    prev_x_shape = x.shape
+    if len(x.shape) < 4:
+        N, C = x.shape[0], x.shape[1]
+        x = np.reshape(x, (N, C, -1, 1))
     n, c, h, w = x.shape
     d_y = np.ones(x.shape) / (np.prod(x.shape))
     d_bias = np.ones((c,)) / c
@@ -76,12 +83,21 @@ def _reference_instance_norm_grad(x, scale, mean, var):
         )
     )
 
-    return d_x, d_scale, d_bias
+    return d_x.reshape(prev_x_shape), d_scale, d_bias
 
 
 class TestInstanceNorm(unittest.TestCase):
     def test_error(self):
-        places = [base.CPUPlace()]
+        places = []
+        if os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower() in [
+            '1',
+            'true',
+            'on',
+        ] or not (
+            core.is_compiled_with_cuda()
+            and core.op_support_gpu("instance_norm")
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda() and core.op_support_gpu(
             "instance_norm"
         ):
@@ -116,7 +132,16 @@ class TestInstanceNorm(unittest.TestCase):
                 self.assertRaises(ValueError, error3d)
 
     def test_dygraph(self):
-        places = [base.CPUPlace()]
+        places = []
+        if os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower() in [
+            '1',
+            'true',
+            'on',
+        ] or not (
+            core.is_compiled_with_cuda()
+            and core.op_support_gpu("instance_norm")
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda() and core.op_support_gpu(
             "instance_norm"
         ):
@@ -141,10 +166,18 @@ class TestInstanceNorm(unittest.TestCase):
             y2 = compute_v2(x)
             np.testing.assert_allclose(y1, y2, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static(self):
         with static_guard():
-            places = [base.CPUPlace()]
+            places = []
+            if os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower() in [
+                '1',
+                'true',
+                'on',
+            ] or not (
+                core.is_compiled_with_cuda()
+                and core.op_support_gpu("instance_norm")
+            ):
+                places.append(base.CPUPlace())
             if core.is_compiled_with_cuda() and core.op_support_gpu(
                 "instance_norm"
             ):
@@ -195,7 +228,7 @@ class TestInstanceNormFP32OP(OpTest):
         self.init_dtype()
         self.init_shape()
         self.init_value()
-        self.set_err_thre()
+        self.set_err_threshold()
         self.inputs = {'X': self.value, 'Scale': self.scale, 'Bias': self.bias}
         self.attrs = {
             'epsilon': self.eps,
@@ -251,7 +284,7 @@ class TestInstanceNormFP32OP(OpTest):
         self.scale = np.random.random([self.shape[1]]).astype(np.float32)
         self.bias = np.random.random([self.shape[1]]).astype(np.float32)
 
-    def set_err_thre(self):
+    def set_err_threshold(self):
         self.atol = 1e-3
         self.fw_comp_rtol = 1e-6
         self.fw_comp_atol = 1e-6
@@ -259,6 +292,58 @@ class TestInstanceNormFP32OP(OpTest):
         self.rev_comp_atol = 1e-4
         self.cinn_rtol = 1e-4
         self.cinn_atol = 1e-4
+
+
+class TestInstanceNormWithNCL(TestInstanceNormFP32OP):
+    def init_shape(self):
+        self.shape = [4, 100, 16]
+
+    def test_check_output(self):
+        self.check_output(
+            atol=self.atol,
+            check_pir=True,
+            check_prim_pir=(
+                False if os.getenv("FLAGS_enable_pir_in_executor") else True
+            ),
+        )
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['X', 'Scale', 'Bias'],
+            'Y',
+            check_pir=True,
+            check_prim_pir=(
+                False if os.getenv("FLAGS_enable_pir_in_executor") else True
+            ),
+        )
+
+
+class TestInstanceNormWithNC(TestInstanceNormFP32OP):
+    def init_shape(self):
+        self.shape = [4, 100]
+
+    def set_err_threshold(self):
+        super().set_err_threshold()
+        self.fw_comp_atol = 3e-5
+
+    def test_check_output(self):
+        self.check_output(
+            atol=self.atol,
+            check_pir=True,
+            check_prim_pir=(
+                False if os.getenv("FLAGS_enable_pir_in_executor") else True
+            ),
+        )
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['X', 'Scale', 'Bias'],
+            'Y',
+            check_pir=True,
+            check_prim_pir=(
+                False if os.getenv("FLAGS_enable_pir_in_executor") else True
+            ),
+        )
 
 
 @unittest.skipIf(
@@ -273,7 +358,7 @@ class TestInstanceNormFP16OP(TestInstanceNormFP32OP):
     def init_dtype(self):
         self.dtype = np.float16
 
-    def set_err_thre(self):
+    def set_err_threshold(self):
         self.atol = 0.03125
         self.max_relative_error = 8e-3
 
@@ -400,9 +485,7 @@ class PrimNet(paddle.nn.Layer):
 
 
 def apply_to_static(net, use_cinn):
-    build_strategy = paddle.static.BuildStrategy()
-    build_strategy.build_cinn_pass = use_cinn
-    return paddle.jit.to_static(net, build_strategy=False, full_graph=True)
+    return paddle.jit.to_static(net, backend=None, full_graph=True)
 
 
 class TestPrimForwardAndBackward(unittest.TestCase):

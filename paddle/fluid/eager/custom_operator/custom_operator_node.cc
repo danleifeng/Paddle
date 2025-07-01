@@ -17,10 +17,11 @@
 #include "paddle/fluid/eager/custom_operator/custom_operator_utils.h"
 #include "paddle/fluid/framework/custom_operator.h"
 #include "paddle/fluid/framework/custom_operator_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/phi/api/ext/op_meta_info.h"
 #include "paddle/phi/api/lib/data_transform.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
+COMMON_DECLARE_bool(check_cuda_error);
 
 namespace egr {
 
@@ -49,7 +50,7 @@ static void ConstructFwdAndBwdMap(
   PADDLE_ENFORCE_LE(
       grad_outputs_names.size(),
       inputs_names.size(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Grad outputs num should be less equal than forward inputs num."));
   for (size_t i = 0; i < grad_outputs_names.size(); i++) {
     auto end = grad_outputs_names[i].find("@GRAD@GRAD");
@@ -89,7 +90,7 @@ static void ConstructFwdAndBwdMap(
             }
           }
         } else {
-          PADDLE_THROW(phi::errors::NotFound(
+          PADDLE_THROW(common::errors::NotFound(
               "All Grad outputs should be end of @GRAD@GRAD or @GRAD@NEW or "
               "@GRAD and we got %s is not one of them, "
               "please check your op and change to fit the rule.",
@@ -144,7 +145,7 @@ static void ConstructFwdAndBwdMap(
         std::find(attrs_names.begin(), attrs_names.end(), grad_attrs_names[i]);
     PADDLE_ENFORCE_NE(end,
                       attrs_names.end(),
-                      phi::errors::NotFound(
+                      common::errors::NotFound(
                           "All Grad attrs should be one of forward attrs and "
                           "we got %s is not one of them, please check your "
                           "op and change to fit the rule.",
@@ -166,6 +167,9 @@ RunCustomOpNode::operator()(paddle::small_vector<std::vector<paddle::Tensor>,
                                                  kSlotSmallVectorSize>& grads,
                             bool create_graph,
                             bool is_new_grad) {  // NOLINT
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("RunCustomOpNode begin");
+  }
   paddle::CustomOpKernelContext ctx;
   const auto& meta_info_map = egr::Controller::Instance().GetOpMetaInfoMap();
   const auto& vec_map = meta_info_map.at(op_type_);
@@ -204,7 +208,7 @@ RunCustomOpNode::operator()(paddle::small_vector<std::vector<paddle::Tensor>,
   VLOG(6) << "Prepare Grad inputs";
   for (auto& in : tmp_ins) {
     for (auto& tensor : in) {
-      if (tensor.initialized() && tensor.is_dense_tensor() &&
+      if (tensor.has_allocation() && tensor.is_dense_tensor() &&
           !std::dynamic_pointer_cast<phi::DenseTensor>(tensor.impl())
                ->meta()
                .is_contiguous()) {
@@ -234,7 +238,7 @@ RunCustomOpNode::operator()(paddle::small_vector<std::vector<paddle::Tensor>,
               << " to tmp_outputs: " << grad_output_idx;
       for (size_t j = 0; j < OutputMeta()[grad_output_idx].size(); j++) {
         outs[grad_output_idx]
-            .emplace_back(/* init it incase of copy nullptr of shared_ptr */
+            .emplace_back(/* init it in case of copy nullptr of shared_ptr */
                           std::make_shared<phi::DenseTensor>(
                               phi::DataType::UNDEFINED),
                           egr::Controller::Instance().GenerateUniqueName(
@@ -262,16 +266,17 @@ RunCustomOpNode::operator()(paddle::small_vector<std::vector<paddle::Tensor>,
     if (ctx.OutputRangeAt(i).first + 1 == ctx.OutputRangeAt(i).second) {
       paddle::Tensor* out_tensor =
           ctx.MutableOutputAt(ctx.OutputRangeAt(i).first);
-      if (!out_tensor->initialized()) {
+      if (!out_tensor->has_allocation()) {
         PADDLE_ENFORCE(
             paddle::framework::detail::IsOptionalVar(
                 grad_outputs_names.at(i)) ||
                 out_tensor->is_dist_tensor(),
-            phi::errors::InvalidArgument(
-                "Custom grad operator's %d-th output is not initialized. "
+            common::errors::InvalidArgument(
+                "Custom grad operator[%s]'s %d-th output is not initialized. "
                 "Please check your implementation again. If you are "
                 "using inplace optional outputs, then you must use "
                 "`paddle::Optional` to decorate this output",
+                op_type_,
                 i));
         // We can also consider using `autograd_meta` to tolerant nullptr.
         out_tensor->set_autograd_meta(std::make_shared<egr::AutogradMeta>());
@@ -298,9 +303,9 @@ RunCustomOpNode::operator()(paddle::small_vector<std::vector<paddle::Tensor>,
   }
 
   if (require_any_grad && (vec_map.size() > 2)) {
-    paddle::platform::RecordEvent node_creation_record_event(
+    phi::RecordEvent node_creation_record_event(
         "Custom Op " + op_type_ + " double_grad node_creation",
-        paddle::platform::TracerEventType::OperatorInner,
+        phi::TracerEventType::OperatorInner,
         1);
     VLOG(6) << " Construct Grad for Custom Op: " << op_type_;
     ConstructFwdAndBwdMap(vec_map, op_type_);
@@ -372,6 +377,14 @@ RunCustomOpNode::operator()(paddle::small_vector<std::vector<paddle::Tensor>,
     grad_node->SetAttrs(attrs);
   }
 
+  if (HasNodePostHook()) {
+    outs = ApplyNodePostHooks(outs, hooked_grads);
+  }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("RunCustomOpNode finish");
+  }
+
   return outs;
 }
 
@@ -381,6 +394,9 @@ RunCustomOpDoubleGradNode::operator()(
         grads,
     bool create_graph,
     bool is_new_grad) {  // NOLINT
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("RunCustomOpDoubleGradNode begin");
+  }
   paddle::CustomOpKernelContext ctx;
   const auto& meta_info_map = egr::Controller::Instance().GetOpMetaInfoMap();
   const auto& vec_map = meta_info_map.at(op_type_);
@@ -456,6 +472,14 @@ RunCustomOpDoubleGradNode::operator()(
   for (size_t i = 0; i < ctx.OutputRange().size(); ++i) {
     auto output_pair = ctx.OutputRangeAt(i);
     outs[i] = ctx.OutputsBetween(output_pair.first, output_pair.second);
+  }
+
+  if (HasNodePostHook()) {
+    outs = ApplyNodePostHooks(outs, hooked_grads);
+  }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("RunCustomOpDoubleGradNode finish");
   }
 
   return outs;

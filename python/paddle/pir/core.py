@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 
 import numpy as np
 
@@ -46,6 +47,8 @@ vartype_to_datatype = {
     VarDesc.VarType.COMPLEX128: DataType.COMPLEX128,
     VarDesc.VarType.FP8_E4M3FN: DataType.FLOAT8_E4M3FN,
     VarDesc.VarType.FP8_E5M2: DataType.FLOAT8_E5M2,
+    VarDesc.VarType.STRING: DataType.PSTRING,
+    VarDesc.VarType.RAW: DataType.ALL_DTYPE,
 }
 
 datatype_to_vartype = {v: k for k, v in vartype_to_datatype.items()}
@@ -97,7 +100,7 @@ _PADDLE_PIR_DTYPE_2_NUMPY_DTYPE = {
 }
 
 
-def convert_np_dtype_to_dtype_(np_dtype):
+def convert_np_dtype_to_dtype_(np_dtype) -> DataType:
     """
     Convert the data type in numpy to the data type in Paddle.
 
@@ -106,7 +109,7 @@ def convert_np_dtype_to_dtype_(np_dtype):
             string.
 
     Returns:
-        core.DataType : The data type in Paddle.
+        DataType : The data type in Paddle.
 
     """
     # Convert the data type string to numpy data type.
@@ -121,7 +124,7 @@ def convert_np_dtype_to_dtype_(np_dtype):
     else:
         dtype = np.dtype(np_dtype)
 
-    if dtype in np_type_to_paddle_type.keys():
+    if dtype in np_type_to_paddle_type:
         return np_type_to_paddle_type[dtype]
     else:
         raise ValueError(f"Not supported numpy dtype {dtype}")
@@ -192,9 +195,9 @@ def default_main_program():
             >>> y = paddle.static.data(name='y', shape=[100, 100], dtype='float32')
             >>> out = paddle.add(x, y)
 
-            >>> print the number of blocks in the program, 1 in this case
+            >>> # print the number of blocks in the program, 1 in this case
             >>> print(paddle.static.default_main_program().num_blocks) # 1
-            >>> print the default_main_program
+            >>> # print the default_main_program
             >>> print(paddle.static.default_main_program())
     """
     return _main_program_
@@ -214,6 +217,8 @@ def switch_main_program(program, insertion_point=None):
     prev_program = _main_program_
     prev_insertion_point = get_current_insertion_point()
     _main_program_ = program
+    if program == prev_program and insertion_point is None:
+        insertion_point = prev_insertion_point
     if insertion_point is None:
         set_insertion_point_to_block_end(_main_program_.global_block())
     else:
@@ -390,7 +395,7 @@ def create_parameter(
 
 def create_persistable_value(dtype, shape, name=None, **kwargs):
     """
-    Create Value that is persistable in startup program and main program. The Value is initilized in startup program and
+    Create Value that is persistable in startup program and main program. The Value is initialized in startup program and
     used in main program.
 
     Returns:
@@ -406,6 +411,25 @@ def create_persistable_value(dtype, shape, name=None, **kwargs):
     value_name = name
     if not value_name:
         value_name = unique_name.generate('persistable_value')
+
+    is_dist = 'dist_attr' in kwargs and kwargs['dist_attr']
+
+    def to_dist(value):
+        import paddle
+
+        dist_attr = kwargs['dist_attr']
+        dist_type = paddle.base.libpaddle.pir.cvt_to_dist_type(
+            value.type(), dist_attr
+        )
+        value.set_type(dist_type)
+        op_dist_attr = paddle.base.libpaddle.pir.create_op_dist_attribute(
+            dist_attr.process_mesh, [], [dist_attr]
+        )
+        define_op = value.get_defining_op()
+        define_op.dist_attr = op_dist_attr
+        if define_op.has_attr("shape"):
+            define_op.set_int_array_attr("shape", value._local_shape)
+
     startup_program = default_startup_program()
     main_program = default_main_program()
 
@@ -416,13 +440,16 @@ def create_persistable_value(dtype, shape, name=None, **kwargs):
             parameter_meta, startup_program.global_block()
         )
         init_result.persistable = True
+        if is_dist:
+            to_dist(init_result)
         set_persistable_value(init_result, value_name)
 
     with program_guard(default_main_program()):
         reset_insertion_point_to_start()
         persist_value = data(value_name, shape, dtype, Place())
         persist_value.persistable = True
-
+        if is_dist:
+            to_dist(persist_value)
     return persist_value
 
 
@@ -469,7 +496,10 @@ def _convert_into_value(tensor):
             paddle.pir.core.default_main_program(), tensor
         )
         NON_PERSISTABLE_VAR_NAME_SUFFIX = "__non_persistable"
-        if tensor.name.endswith(NON_PERSISTABLE_VAR_NAME_SUFFIX):
+        # NOTE(SigureMo): Why do not use `tensor.name.endswith(NON_PERSISTABLE_VAR_NAME_SUFFIX)`?
+        # Because the tensor maybe copied, the name of the tensor will be appended with a new suffix.
+        # Such as `lstm_0.dropout_state__non_persistable_deepcopy_204`
+        if NON_PERSISTABLE_VAR_NAME_SUFFIX in tensor.name:
             value.persistable = False
         return value
 
@@ -550,7 +580,7 @@ def set_state_dict(program, state_dict, scope=None):
         clear_state_dict = state_dict
 
     for name, value in clear_state_dict.items():
-        if isinstance(value, paddle.base.libpaddle.Tensor):
+        if isinstance(value, paddle.base.libpaddle.DenseTensor):
             continue
         elif isinstance(value, np.ndarray):
             clear_state_dict[name] = paddle.to_tensor(value)

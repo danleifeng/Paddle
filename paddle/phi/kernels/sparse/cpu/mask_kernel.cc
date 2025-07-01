@@ -33,10 +33,10 @@ void MaskCooCPUKernel(const CPUContext& dev_ctx,
                       const SparseCooTensor& mask,
                       SparseCooTensor* out) {
   const DDim& dims = x.dims();
-  PADDLE_ENFORCE_EQ(
-      x.dims(),
-      mask.dims(),
-      phi::errors::InvalidArgument("the input x and mask must have the shape"));
+  PADDLE_ENFORCE_EQ(x.dims(),
+                    mask.dims(),
+                    common::errors::InvalidArgument(
+                        "the input x and mask must have the shape"));
   const DenseTensor& indices = mask.indices();
   const DenseTensor& values = mask.values();
   const int sparse_dim = mask.sparse_dim();
@@ -55,7 +55,7 @@ void MaskCooCPUKernel(const CPUContext& dev_ctx,
   const int cols = static_cast<int>(dims_2d[1]);
   const IntT* indices_ptr = indices.data<IntT>();
 
-  std::vector<IntT> out_indexs(non_zero_num), sparse_offsets(sparse_dim);
+  std::vector<IntT> sparse_offsets(sparse_dim);
 
   phi::funcs::sparse::CalcOffsetsPerDim<IntT>(
       dims, sparse_dim, sparse_offsets.data());
@@ -178,7 +178,7 @@ void MaskAsCsrKernel(const Context& dev_ctx,
         }));
   } else {
     // throw exception
-    phi::errors::InvalidArgument(
+    common::errors::InvalidArgument(
         "mask_as for Sparse CSR Tensor only support 2-D or 3-D, but got "
         "%d-D.",
         x_dims.size());
@@ -193,12 +193,12 @@ void MaskHelperCooCPUKernel(const CPUContext& dev_ctx,
   PADDLE_ENFORCE_EQ(
       mask_indices.dims().size(),
       2,
-      phi::errors::InvalidArgument("the mask_indices must be 2-D tensor"));
+      common::errors::InvalidArgument("the mask_indices must be 2-D tensor"));
 
   const int32_t sparse_dim = x.sparse_dim();
 
-  std::vector<IntT> sparse_offsets(sparse_dim), x_indexs(x.nnz()),
-      mask_indexs(mask_indices.dims()[1]);
+  std::vector<IntT> sparse_offsets(sparse_dim), x_indices(x.nnz()),
+      mask_out_indices(mask_indices.dims()[1]);
   phi::funcs::sparse::CalcOffsetsPerDim<IntT>(
       x.dims(), sparse_dim, sparse_offsets.data());
 
@@ -208,18 +208,18 @@ void MaskHelperCooCPUKernel(const CPUContext& dev_ctx,
                                      sparse_dim,
                                      0,
                                      1,
-                                     x_indexs.data());
+                                     x_indices.data());
   phi::funcs::sparse::FlattenIndices(mask_indices.data<IntT>(),
                                      sparse_offsets.data(),
                                      x.nnz(),
                                      sparse_dim,
                                      0,
                                      1,
-                                     mask_indexs.data());
+                                     mask_out_indices.data());
 
-  std::unordered_map<IntT, uint64_t> x_indexs_map;
-  for (uint64_t i = 0; i < x_indexs.size(); i++) {
-    x_indexs_map[x_indexs[i]] = i;
+  std::unordered_map<IntT, uint64_t> x_indices_map;
+  for (uint64_t i = 0; i < x_indices.size(); i++) {
+    x_indices_map[x_indices[i]] = i;
   }
 
   *out = phi::EmptyLike<T>(dev_ctx, x.values());
@@ -230,9 +230,9 @@ void MaskHelperCooCPUKernel(const CPUContext& dev_ctx,
       x.dims().size() == sparse_dim ? 1 : x.values().dims()[1];
   const T* in_ptr = x.values().data<T>();
   // TODO(zhangkaihuo): multithreading can be used for acceleration
-  for (uint64_t i = 0; i < mask_indexs.size(); i++) {
-    auto iter = x_indexs_map.find(mask_indexs[i]);
-    if (iter != x_indexs_map.end()) {
+  for (uint64_t i = 0; i < mask_out_indices.size(); i++) {
+    auto iter = x_indices_map.find(mask_out_indices[i]);
+    if (iter != x_indices_map.end()) {
       memcpy(out_ptr + i * stride,
              in_ptr + iter->second * stride,
              stride * sizeof(T));

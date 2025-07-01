@@ -81,9 +81,9 @@ def filter_fn(param, pos_emb=True, layer_norm=True, bias=True):
 class TestFleetMetaOptimizer(unittest.TestCase):
     def setUp(self):
         os.environ["PADDLE_TRAINER_ID"] = "1"
-        os.environ[
-            "PADDLE_TRAINER_ENDPOINTS"
-        ] = "127.0.0.1:36001,127.0.0.1:36002"
+        os.environ["PADDLE_TRAINER_ENDPOINTS"] = (
+            "127.0.0.1:36001,127.0.0.1:36002"
+        )
 
     def test_tensor_parallel_extra_sync(self):
         from paddle.distributed import fleet
@@ -115,7 +115,7 @@ class TestFleetMetaOptimizer(unittest.TestCase):
             'matmul_v2',
             'elementwise_add',
             'matmul_v2',
-            'c_allreduce_sum',
+            'all_reduce',
             'elementwise_add',
             'layer_norm',
             'reduce_mean',
@@ -127,18 +127,18 @@ class TestFleetMetaOptimizer(unittest.TestCase):
             'matmul_v2_grad',
             'elementwise_add_grad',
             'matmul_v2_grad',
-            'c_allreduce_sum',
+            'all_reduce',
             'lookup_table_v2_grad',
             'adam',
             'adam',
             'adam',
-            'c_broadcast',
+            'broadcast',
             'adam',
-            'c_broadcast',
+            'broadcast',
             'adam',
-            'c_broadcast',
+            'broadcast',
             'adam',
-            'c_broadcast',
+            'broadcast',
             'adam',
         ]
         paddle.distributed.fleet.utils.tensor_parallel_utils.add_extra_synchronization(

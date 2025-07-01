@@ -29,6 +29,9 @@ void GatherKernel(const Context& dev_ctx,
                   DenseTensor* out) {
   const auto& index_type = index.dtype();
   auto axis_v = axis.to<int>();
+  if (axis_v < 0) {
+    axis_v += static_cast<int>(x.dims().size());
+  }
   if (axis_v != 0) {
     if (index_type == phi::DataType::INT32) {
       phi::funcs::GatherV2CUDAFunction<T, int32_t>(
@@ -53,9 +56,9 @@ void GatherKernel(const Context& dev_ctx,
   } else if (index_type == phi::DataType::INT16) {
     phi::funcs::GPUGather<T, int16_t>(dev_ctx, x, index, out);
   } else {
-    PADDLE_THROW(
-        phi::errors::InvalidArgument("The data type of Input(Index) of gather "
-                                     "must be int16, int32 or int64 on GPU."));
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "The data type of Input(Index) of gather "
+        "must be int16, int32 or int64 on GPU."));
   }
 }
 

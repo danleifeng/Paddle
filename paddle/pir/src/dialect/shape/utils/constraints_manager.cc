@@ -59,7 +59,15 @@ std::pair<DimExpr, DimExpr> EliminateCommonFactor(const OpT<DimExpr>& lhs,
       lhs_diffs->push_back(lhs_dim_expr);
     }
   }
-  if (lhs_diffs->empty() || rhs_diffs->empty()) return std::pair(lhs, rhs);
+  if (lhs_diffs->empty() && rhs_diffs->empty()) return std::pair(lhs, lhs);
+
+  bool opt_is_add = DimExpr(lhs).isa<Add<DimExpr>>();
+  if (lhs_diffs->empty()) {
+    lhs_diffs->push_back(opt_is_add ? DimExpr(0) : DimExpr(1));
+  }
+  if (rhs_diffs->empty()) {
+    rhs_diffs->push_back(opt_is_add ? DimExpr(0) : DimExpr(1));
+  }
   auto lhs_diff =
       lhs_diffs->size() == 1 ? lhs_diffs->at(0) : OpT<DimExpr>{lhs_diffs};
   auto rhs_diff =
@@ -78,6 +86,10 @@ std::pair<DimExpr, DimExpr> SimplifyEqCstr(const DimExpr& lhs,
          const Mul<DimExpr>& rhs) -> std::pair<DimExpr, DimExpr> {
         return EliminateCommonFactor<Mul>(lhs, rhs);
       },
+      [](const Mul<DimExpr>& lhs, int64_t rhs) -> std::pair<DimExpr, DimExpr> {
+        Mul<DimExpr> mul_rhs{List<DimExpr>{rhs}};
+        return EliminateCommonFactor<Mul>(lhs, mul_rhs);
+      },
       [](const auto& lhs, const auto& rhs) -> std::pair<DimExpr, DimExpr> {
         return std::make_pair(DimExpr(lhs), DimExpr(rhs));
       }};
@@ -90,6 +102,24 @@ void ConstraintsManager::AddEqCstr(const DimExpr& lhs, const DimExpr& rhs) {
   if (lhs == rhs) {
     return;
   }
+
+  const auto& AddEqCstrForBroadcastSubstitute = [&](const DimExpr& bc_dimexpr,
+                                                    const DimExpr&
+                                                        string_dimexpr) {
+    if (!bc_dimexpr.isa<Broadcast<DimExpr>>()) return;
+    if (!string_dimexpr.isa<std::string>()) return;
+    const auto& [operands] = bc_dimexpr.Get<Broadcast<DimExpr>>();
+    for (const auto& operand : *operands) {
+      if (operand == string_dimexpr) return;
+    }
+    for (const auto& operand : *operands) {
+      AddEqCstr(Broadcast<DimExpr>{{operand, string_dimexpr}}, string_dimexpr);
+    }
+  };
+  if (lhs.isa<Broadcast<DimExpr>>() && rhs.isa<std::string>())
+    AddEqCstrForBroadcastSubstitute(lhs, rhs);
+  if (rhs.isa<Broadcast<DimExpr>>() && lhs.isa<std::string>())
+    AddEqCstrForBroadcastSubstitute(rhs, lhs);
 
   auto simplify_result = SimplifyEqCstr(lhs, rhs);
   if (simplify_result.first != lhs && simplify_result.second != rhs) {
@@ -218,6 +248,33 @@ bool ConstraintsManager::IsBroadcastable(const DimExpr& lhs,
   return false;
 }
 
+void ConstraintsManager::AddInputRangeCstr(
+    const DimExpr& dim_expr, const ConstraintsManager::Range& range) {
+  PADDLE_ENFORCE_EQ(dim_expr.isa<std::string>(),
+                    true,
+                    common::errors::InvalidArgument(
+                        "Bounded input DimExpr should be a string type."));
+
+  PADDLE_ENFORCE_EQ(input_ranges_.find(dim_expr),
+                    input_ranges_.end(),
+                    common::errors::InvalidArgument(
+                        "Bounded input DimExpr range can only be added once."));
+  input_ranges_[dim_expr] = range;
+}
+
+bool ConstraintsManager::IsBoundedInput(const DimExpr& dim_expr) const {
+  return input_ranges_.count(dim_expr);
+}
+
+const ConstraintsManager::Range& ConstraintsManager::GetRangeOfBoundedInput(
+    const DimExpr& dim_expr) const {
+  PADDLE_ENFORCE_EQ(IsBoundedInput(dim_expr),
+                    true,
+                    common::errors::InvalidArgument(
+                        "DimExpr is not a bounded input dim expr."));
+  return input_ranges_.at(dim_expr);
+}
+
 void ConstraintsManager::SetEqualCallbackFunc(
     EqualCallbackFunc equal_callback_func) {
   equal_callback_func_ = equal_callback_func;
@@ -254,6 +311,34 @@ void ConstraintsManager::SubstituteInConstraint(const DimExpr& origin,
     }
   });
   broadcastables_ = substituted_broadcastables;
+
+  InputRangeConstraints substituted_input_ranges;
+  InputRangeConstraintsVisitor([&](auto it) {
+    const DimExpr& substituted_dim_expr =
+        SubstituteDimExpr(it->first, substitution_pattern);
+    if (substituted_dim_expr != it->first) {
+      PADDLE_ENFORCE_EQ(
+          substituted_dim_expr.isa<std::string>() ||
+              substituted_dim_expr.isa<std::int64_t>(),
+          true,
+          common::errors::InvalidArgument(
+              "Bounded input DimExpr can only be substituted with "
+              "a string or an integer."));
+      if (substituted_dim_expr.isa<std::int64_t>()) {
+        std::int64_t substituted_value =
+            substituted_dim_expr.Get<std::int64_t>();
+        const bool in_range = substituted_value >= it->second.min &&
+                              substituted_value <= it->second.max;
+        PADDLE_ENFORCE_EQ(in_range,
+                          true,
+                          common::errors::InvalidArgument(
+                              "Bounded input DimExpr range is inconsistent "
+                              "with other constraints."));
+      }
+      substituted_input_ranges[substituted_dim_expr] = it->second;
+    }
+  });
+  input_ranges_ = substituted_input_ranges;
 }
 
 void ConstraintsManager::VisitEqualClusters(
@@ -300,6 +385,21 @@ void ConstraintsManager::BroadcastableConstraintsVisitor(
   }
 }
 
+void ConstraintsManager::InputRangeConstraintsVisitor(
+    const std::function<void(InputRangeConstraints::iterator)>& DoEach) {
+  for (auto it = input_ranges_.begin(); it != input_ranges_.end(); it++) {
+    DoEach(it);
+  }
+}
+
+void ConstraintsManager::InputRangeConstraintsVisitor(
+    const std::function<void(InputRangeConstraints::const_iterator)>& DoEach)
+    const {
+  for (auto it = input_ranges_.begin(); it != input_ranges_.end(); it++) {
+    DoEach(it);
+  }
+}
+
 std::ostream& operator<<(std::ostream& stream,
                          const ConstraintsManager& constraints_manager) {
   stream << "ConstraintsManager:" << std::endl;
@@ -319,6 +419,11 @@ std::ostream& operator<<(std::ostream& stream,
   stream << "GreatThanOne Constraints:" << std::endl;
   constraints_manager.GTOneConstraintsVisitor(
       [&](const auto& it) { stream << "  " << *it << std::endl; });
+  stream << "Input Range Constraints:" << std::endl;
+  constraints_manager.InputRangeConstraintsVisitor([&](const auto& it) {
+    stream << "  InputRange[" << it->first << ", min: " << it->second.min
+           << ", max: " << it->second.max << "]" << std::endl;
+  });
   return stream;
 }
 

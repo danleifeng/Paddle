@@ -15,17 +15,19 @@
 from __future__ import annotations
 
 import typing
-from typing import TYPE_CHECKING, Callable, Sequence, Tuple, TypeVar, overload
+from typing import TYPE_CHECKING, Callable, TypeVar, overload
 
 import paddle
 from paddle.base import framework
 from paddle.incubate.autograd import primapi, utils
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
     from paddle._typing import TensorOrTensors
 
-    _OutputT = TypeVar("_OutputT", Tensor, Tuple[Tensor, ...])
+    _OutputT = TypeVar("_OutputT", Tensor, tuple[Tensor, ...])
 
 
 @overload
@@ -33,8 +35,7 @@ def vjp(
     func: Callable[..., _OutputT],
     xs: Tensor,
     v: TensorOrTensors | None = None,
-) -> tuple[_OutputT, Tensor]:
-    ...
+) -> tuple[_OutputT, Tensor]: ...
 
 
 @overload
@@ -42,8 +43,7 @@ def vjp(
     func: Callable[..., _OutputT],
     xs: Sequence[Tensor],
     v: TensorOrTensors | None = None,
-) -> tuple[_OutputT, tuple[Tensor, ...]]:
-    ...
+) -> tuple[_OutputT, tuple[Tensor, ...]]: ...
 
 
 def vjp(func, xs, v=None):
@@ -109,8 +109,7 @@ def jvp(
     func: Callable[..., _OutputT],
     xs: Tensor,
     v: TensorOrTensors | None = None,
-) -> tuple[_OutputT, Tensor]:
-    ...
+) -> tuple[_OutputT, Tensor]: ...
 
 
 @overload
@@ -118,8 +117,7 @@ def jvp(
     func: Callable[..., _OutputT],
     xs: Sequence[Tensor],
     v: TensorOrTensors | None = None,
-) -> tuple[_OutputT, tuple[Tensor, ...]]:
-    ...
+) -> tuple[_OutputT, tuple[Tensor, ...]]: ...
 
 
 def jvp(func, xs, v=None):
@@ -295,7 +293,9 @@ class Jacobian:
         else:
             self._jacobian = _JacobianBatchFirst(func, xs)
 
-    def __getitem__(self, indexes: int | slice) -> Tensor:
+    def __getitem__(
+        self, indexes: int | slice | tuple[int | slice, ...]
+    ) -> Tensor:
         return self._jacobian[indexes]
 
     @property
@@ -440,9 +440,9 @@ class _Jacobian:
             0 if isinstance(idx, int) else slice(0, lazy_axis_size, 1)
         )
         return (
-            indexes[: self._lazy_axis]
-            + (shifted_lazy_axis_idx,)
-            + indexes[self._lazy_axis + 1 :]
+            *indexes[: self._lazy_axis],
+            shifted_lazy_axis_idx,
+            *indexes[self._lazy_axis + 1 :],
         )
 
     def __getitem__(self, indexes):

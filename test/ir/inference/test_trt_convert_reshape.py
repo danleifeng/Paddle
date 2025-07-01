@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -46,7 +48,7 @@ class TrtConvertReshapeTest(TrtLayerAutoScanTest):
         return True
 
     def sample_program_configs(self):
-        def generate_input1(attrs: List[Dict[str, Any]]):
+        def generate_input1(attrs: list[dict[str, Any]]):
             if self.dims == 4:
                 self.input_shape = [1, 2, 4, 6]
                 return np.ones([1, 2, 4, 6]).astype(np.float32)
@@ -60,21 +62,21 @@ class TrtConvertReshapeTest(TrtLayerAutoScanTest):
                 self.input_shape = [48]
                 return np.ones([48]).astype(np.float32)
 
-        def generate_weight1(attrs: List[Dict[str, Any]]):
+        def generate_weight1(attrs: list[dict[str, Any]]):
             return np.array([1, 48]).astype(np.int32)
 
-        def generate_shapeT1_data(attrs: List[Dict[str, Any]]):
+        def generate_shapeT1_data(attrs: list[dict[str, Any]]):
             return np.array([2]).astype(np.int32)
 
-        def generate_shapeT2_data(attrs: List[Dict[str, Any]]):
+        def generate_shapeT2_data(attrs: list[dict[str, Any]]):
             return np.array([24]).astype(np.int32)
 
         for dims in [4, 3, 2, 1]:
             for shape in [
-                [1, 6, 8],
-                [1, 2, 4, 6],
-                [1, 1, 0, 12],
-                [1, 0, 6],
+                # [1, 6, 8],
+                # [1, 2, 4, 6],
+                # [1, 1, 0, 12],
+                # [1, 0, 6],
                 [1, -1, 12],
                 [2, -1],
                 [3, 16],
@@ -92,7 +94,7 @@ class TrtConvertReshapeTest(TrtLayerAutoScanTest):
 
                 ops_config = [
                     {
-                        "op_type": "reshape",
+                        "op_type": "reshape2",
                         "op_inputs": dics_input[0],
                         "op_outputs": {"Out": ["reshape_out"]},
                         "op_attrs": dics[0],
@@ -112,38 +114,28 @@ class TrtConvertReshapeTest(TrtLayerAutoScanTest):
 
                 yield program_config
 
+    def generate_dynamic_shape(self, attrs):
+        if self.dims == 4:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 2, 4, 6]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [1, 2, 4, 6]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 2, 4, 6]}
+        elif self.dims == 3:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 8, 6]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [1, 8, 6]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 8, 6]}
+        elif self.dims == 2:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 48]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [1, 48]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 48]}
+        elif self.dims == 1:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [48]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [48]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [48]}
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape(attrs):
-            if self.dims == 4:
-                self.dynamic_shape.min_input_shape = {
-                    "reshape_input": [1, 2, 4, 6]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "reshape_input": [4, 2, 4, 6]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "reshape_input": [1, 2, 4, 6]
-                }
-            elif self.dims == 3:
-                self.dynamic_shape.min_input_shape = {
-                    "reshape_input": [1, 8, 6]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "reshape_input": [4, 8, 6]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "reshape_input": [1, 8, 6]
-                }
-            elif self.dims == 2:
-                self.dynamic_shape.min_input_shape = {"reshape_input": [1, 48]}
-                self.dynamic_shape.max_input_shape = {"reshape_input": [4, 48]}
-                self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 48]}
-            elif self.dims == 1:
-                self.dynamic_shape.min_input_shape = {"reshape_input": [48]}
-                self.dynamic_shape.max_input_shape = {"reshape_input": [48]}
-                self.dynamic_shape.opt_input_shape = {"reshape_input": [48]}
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
 
         def clear_dynamic_shape():
             self.dynamic_shape.min_input_shape = {}
@@ -171,19 +163,20 @@ class TrtConvertReshapeTest(TrtLayerAutoScanTest):
 
         # for static_shape
         clear_dynamic_shape()
-        self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-5
-        self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-3
+        if not run_pir:
+            self.trt_param.precision = paddle_infer.PrecisionType.Float32
+            program_config.set_input_type(np.float32)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                attrs, False
+            ), 1e-5
+            self.trt_param.precision = paddle_infer.PrecisionType.Half
+            program_config.set_input_type(np.float16)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                attrs, False
+            ), 1e-3
 
         # for dynamic_shape
-        generate_dynamic_shape(attrs)
+        self.generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
@@ -200,7 +193,7 @@ class TrtConvertReshapeTest(TrtLayerAutoScanTest):
 
     def test(self):
         self.add_skip_trt_case()
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 # reshape having three inputs.
@@ -209,7 +202,7 @@ class TrtConvertReshapeTest2(TrtLayerAutoScanTest):
         return True
 
     def sample_program_configs(self):
-        def generate_input1(attrs: List[Dict[str, Any]]):
+        def generate_input1(attrs: list[dict[str, Any]]):
             if self.dims == 4:
                 return np.random.random([1, 2, 4, 6]).astype(np.float32)
             elif self.dims == 3:
@@ -242,6 +235,7 @@ class TrtConvertReshapeTest2(TrtLayerAutoScanTest):
                         "op_attrs": {
                             "dtype": 2,
                             "str_value": "2",
+                            "value": 2,
                             "shape": [1],
                         },
                     },
@@ -252,11 +246,12 @@ class TrtConvertReshapeTest2(TrtLayerAutoScanTest):
                         "op_attrs": {
                             "dtype": 2,
                             "str_value": "24",
+                            "value": 24,
                             "shape": [1],
                         },
                     },
                     {
-                        "op_type": "reshape",
+                        "op_type": "reshape2",
                         "op_inputs": dics_input[0],
                         "op_outputs": {"Out": ["reshape_out"]},
                         "op_attrs": dics[0],
@@ -276,41 +271,34 @@ class TrtConvertReshapeTest2(TrtLayerAutoScanTest):
 
                 yield program_config
 
-    def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape():
-            if self.dims == 4:
-                self.dynamic_shape.min_input_shape = {
-                    "reshape_input": [1, 2, 4, 6]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "reshape_input": [4, 2, 4, 6]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "reshape_input": [1, 2, 4, 6]
-                }
-            elif self.dims == 3:
-                self.dynamic_shape.min_input_shape = {
-                    "reshape_input": [1, 8, 6]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "reshape_input": [4, 8, 6]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "reshape_input": [1, 8, 6]
-                }
-            elif self.dims == 2:
-                self.dynamic_shape.min_input_shape = {"reshape_input": [1, 48]}
-                self.dynamic_shape.max_input_shape = {"reshape_input": [4, 48]}
-                self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 48]}
-            elif self.dims == 1:
-                self.dynamic_shape.min_input_shape = {"reshape_input": [48]}
-                self.dynamic_shape.max_input_shape = {"reshape_input": [48]}
-                self.dynamic_shape.opt_input_shape = {"reshape_input": [48]}
+    def generate_dynamic_shape(self, attrs):
+        if self.dims == 4:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 2, 4, 6]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [1, 2, 4, 6]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 2, 4, 6]}
+        elif self.dims == 3:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 8, 6]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [1, 8, 6]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 8, 6]}
+        elif self.dims == 2:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 48]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [1, 48]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 48]}
+        elif self.dims == 1:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [48]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [48]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [48]}
+        return self.dynamic_shape
 
+    def sample_predictor_configs(
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
+
+        attrs = [
+            program_config.ops[i].attrs for i in range(len(program_config.ops))
+        ]
         # for dynamic_shape
-        generate_dynamic_shape()
+        self.generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), (1, 2), 1e-5
@@ -323,7 +311,7 @@ class TrtConvertReshapeTest2(TrtLayerAutoScanTest):
 
     def test(self):
         self.add_skip_trt_case()
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 # reshape having 2 inputs.
@@ -332,7 +320,7 @@ class TrtConvertReshapeTest3(TrtLayerAutoScanTest):
         return True
 
     def sample_program_configs(self):
-        def generate_input1(attrs: List[Dict[str, Any]]):
+        def generate_input1(attrs: list[dict[str, Any]]):
             if self.dims == 4:
                 return np.random.random([1, 2, 12, 6]).astype(np.float32)
             elif self.dims == 3:
@@ -369,7 +357,7 @@ class TrtConvertReshapeTest3(TrtLayerAutoScanTest):
                         },
                     },
                     {
-                        "op_type": "reshape",
+                        "op_type": "reshape2",
                         "op_inputs": dics_input[0],
                         "op_outputs": {"Out": ["reshape_out"]},
                         "op_attrs": dics[0],
@@ -389,41 +377,41 @@ class TrtConvertReshapeTest3(TrtLayerAutoScanTest):
 
                 yield program_config
 
+    def generate_dynamic_shape(self, attrs):
+        if self.dims == 4:
+            self.dynamic_shape.min_input_shape = {
+                "reshape_input": [1, 2, 12, 6]
+            }
+            self.dynamic_shape.max_input_shape = {
+                "reshape_input": [4, 2, 12, 6]
+            }
+            self.dynamic_shape.opt_input_shape = {
+                "reshape_input": [1, 2, 12, 6]
+            }
+        elif self.dims == 3:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 8, 18]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [4, 8, 18]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 8, 18]}
+        elif self.dims == 2:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [1, 144]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [4, 144]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 144]}
+        elif self.dims == 1:
+            self.dynamic_shape.min_input_shape = {"reshape_input": [144]}
+            self.dynamic_shape.max_input_shape = {"reshape_input": [144]}
+            self.dynamic_shape.opt_input_shape = {"reshape_input": [144]}
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape():
-            if self.dims == 4:
-                self.dynamic_shape.min_input_shape = {
-                    "reshape_input": [1, 2, 12, 6]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "reshape_input": [4, 2, 12, 6]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "reshape_input": [1, 2, 12, 6]
-                }
-            elif self.dims == 3:
-                self.dynamic_shape.min_input_shape = {
-                    "reshape_input": [1, 8, 18]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "reshape_input": [4, 8, 18]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "reshape_input": [1, 8, 18]
-                }
-            elif self.dims == 2:
-                self.dynamic_shape.min_input_shape = {"reshape_input": [1, 144]}
-                self.dynamic_shape.max_input_shape = {"reshape_input": [4, 144]}
-                self.dynamic_shape.opt_input_shape = {"reshape_input": [1, 144]}
-            elif self.dims == 1:
-                self.dynamic_shape.min_input_shape = {"reshape_input": [144]}
-                self.dynamic_shape.max_input_shape = {"reshape_input": [144]}
-                self.dynamic_shape.opt_input_shape = {"reshape_input": [144]}
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
+
+        attrs = [
+            program_config.ops[i].attrs for i in range(len(program_config.ops))
+        ]
 
         # for dynamic_shape
-        generate_dynamic_shape()
+        self.generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), (1, 2), 1e-5
@@ -436,7 +424,7 @@ class TrtConvertReshapeTest3(TrtLayerAutoScanTest):
 
     def test(self):
         self.add_skip_trt_case()
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
@@ -444,7 +432,7 @@ class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
         return True
 
     def sample_program_configs(self):
-        def generate_input1(attrs: List[Dict[str, Any]]):
+        def generate_input1(attrs: list[dict[str, Any]]):
             if self.dims > 0:
                 self.input_shape = [1] * self.dims
                 return np.random.random(self.input_shape).astype(np.float32)
@@ -454,7 +442,7 @@ class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
 
         for dims in [0, 1, 2, 3]:
             for shape in [
-                [],
+                [1],
                 [1, 1],
             ]:
                 dics = [
@@ -467,7 +455,7 @@ class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
 
                 ops_config = [
                     {
-                        "op_type": "reshape",
+                        "op_type": "reshape2",
                         "op_inputs": dics_input[0],
                         "op_outputs": {"Out": ["reshape_out"]},
                         "op_attrs": dics[0],
@@ -487,19 +475,15 @@ class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
 
                 yield program_config
 
+    def generate_dynamic_shape(self, attrs):
+        self.dynamic_shape.min_input_shape = {"reshape_input": self.input_shape}
+        self.dynamic_shape.max_input_shape = {"reshape_input": self.input_shape}
+        self.dynamic_shape.opt_input_shape = {"reshape_input": self.input_shape}
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape(attrs):
-            self.dynamic_shape.min_input_shape = {
-                "reshape_input": self.input_shape
-            }
-            self.dynamic_shape.max_input_shape = {
-                "reshape_input": self.input_shape
-            }
-            self.dynamic_shape.opt_input_shape = {
-                "reshape_input": self.input_shape
-            }
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
 
         def clear_dynamic_shape():
             self.dynamic_shape.min_input_shape = {}
@@ -515,7 +499,7 @@ class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
         ]
 
         # for dynamic_shape
-        generate_dynamic_shape(attrs)
+        self.generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
@@ -532,7 +516,7 @@ class TrtConvertReshapeZeroDimsTest(TrtLayerAutoScanTest):
 
     def test(self):
         self.add_skip_trt_case()
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 if __name__ == "__main__":

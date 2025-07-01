@@ -25,16 +25,20 @@ template <typename T, typename Context>
 void RealStridedKernel(const Context& dev_ctx,
                        const DenseTensor& x,
                        DenseTensor* out) {
+  if (out->numel() == 0) {
+    dev_ctx.template Alloc<phi::dtype::Real<T>>(out);
+    return;
+  }
   if (!FLAGS_use_stride_kernel) {
-    PADDLE_THROW(
-        phi::errors::Fatal("FLAGS_use_stride_kernel is closed. Strided kernel "
-                           "be called, something wrong has happened!"));
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
   }
   if (x.dtype() != DataType::COMPLEX64 && x.dtype() != DataType::COMPLEX128) {
     PADDLE_THROW(
-        phi::errors::NotFound("paddle.real only support COMPLEX64 and "
-                              "COMPLEX128, but the input dtype is %s",
-                              x.dtype()));
+        common::errors::NotFound("paddle.real only support COMPLEX64 and "
+                                 "COMPLEX128, but the input dtype is %s",
+                                 x.dtype()));
   }
   DDim stride = x.strides();
   for (int i = 0; i < stride.size(); i++) {
@@ -50,16 +54,20 @@ template <typename T, typename Context>
 void ImagStridedKernel(const Context& dev_ctx,
                        const DenseTensor& x,
                        DenseTensor* out) {
+  if (out->numel() == 0) {
+    dev_ctx.template Alloc<phi::dtype::Real<T>>(out);
+    return;
+  }
   if (!FLAGS_use_stride_kernel) {
-    PADDLE_THROW(
-        phi::errors::Fatal("FLAGS_use_stride_kernel is closed. Strided kernel "
-                           "be called, something wrong has happened!"));
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
   }
   if (x.dtype() != DataType::COMPLEX64 && x.dtype() != DataType::COMPLEX128) {
     PADDLE_THROW(
-        phi::errors::NotFound("paddle.imag only support COMPLEX64 and "
-                              "COMPLEX128, but the input dtype is %s",
-                              x.dtype()));
+        common::errors::NotFound("paddle.imag only support COMPLEX64 and "
+                                 "COMPLEX128, but the input dtype is %s",
+                                 x.dtype()));
   }
   DDim stride = x.strides();
   for (int i = 0; i < stride.size(); i++) {

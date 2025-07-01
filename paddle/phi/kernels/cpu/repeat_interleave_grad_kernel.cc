@@ -25,7 +25,7 @@ namespace phi {
 
 template <typename T, typename Context>
 void RepeatInterleaveWithTensorIndexGradKernel(
-    const Context& ctx,
+    const Context& dev_ctx,
     const DenseTensor& x UNUSED,
     const DenseTensor& repeats_tensor,
     const DenseTensor& out_grad,
@@ -39,7 +39,7 @@ void RepeatInterleaveWithTensorIndexGradKernel(
   DenseTensor index;
   PADDLE_ENFORCE_EQ(repeats_tensor.dims()[0] == x_grad->dims()[dim],
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The length of Input(RepeatsTensor) must be the "
                         "same as length of Input(X) in axis. "
                         "But received: [%s], required: [%d].",
@@ -52,7 +52,7 @@ void RepeatInterleaveWithTensorIndexGradKernel(
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
   PADDLE_ENFORCE_EQ(index_type_match,
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(Repeats) holds the wrong type, it holds %s, but "
                         "desires to be %s or %s",
                         DataTypeToString(index_type),
@@ -61,24 +61,29 @@ void RepeatInterleaveWithTensorIndexGradKernel(
 
   phi::DeviceContextPool::Instance().Get(repeats_tensor.place());
   if (index_type == phi::DataType::INT32) {
-    phi::funcs::RepeatsTensor2IndexTensor<Context, int>(
-        ctx, repeats_tensor, &index);
-    IndexSelectGradInner<Context, T, int>(ctx, out_grad, index, x_grad, dim);
+    phi::funcs::RepeatsTensor2IndexTensorFunctor<Context, int>()(
+        dev_ctx, repeats_tensor, &index);
+    IndexSelectGradInner<Context, T, int>(
+        dev_ctx, out_grad, index, x_grad, dim);
   } else if (index_type == phi::DataType::INT64) {
-    phi::funcs::RepeatsTensor2IndexTensor<Context, int64_t>(
-        ctx, repeats_tensor, &index);
+    phi::funcs::RepeatsTensor2IndexTensorFunctor<Context, int64_t>()(
+        dev_ctx, repeats_tensor, &index);
     IndexSelectGradInner<Context, T, int64_t>(
-        ctx, out_grad, index, x_grad, dim);
+        dev_ctx, out_grad, index, x_grad, dim);
   }
 }
 
 template <typename T, typename Context>
-void RepeatInterleaveGradKernel(const Context& ctx,
+void RepeatInterleaveGradKernel(const Context& dev_ctx,
                                 const DenseTensor& x UNUSED,
                                 const DenseTensor& out_grad,
                                 int repeats,
                                 int dim,
                                 DenseTensor* x_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    return;
+  }
   auto input_dim = x_grad->dims();
   if (dim < 0) {
     dim += input_dim.size();
@@ -91,9 +96,10 @@ void RepeatInterleaveGradKernel(const Context& ctx,
     std::fill_n(index_vec.begin() + i * repeats, repeats, i);
   }
   index.Resize(common::make_ddim({index_size}));
-  phi::TensorFromVector<int>(index_vec, ctx, &index);
+  phi::TensorFromVector<int>(index_vec, dev_ctx, &index);
   const DenseTensor index_copy = index;
-  IndexSelectGradInner<Context, T, int>(ctx, out_grad, index_copy, x_grad, dim);
+  IndexSelectGradInner<Context, T, int>(
+      dev_ctx, out_grad, index_copy, x_grad, dim);
 }
 }  // namespace phi
 

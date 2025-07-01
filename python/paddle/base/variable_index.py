@@ -20,6 +20,7 @@ import paddle
 from . import core, unique_name
 
 MAX_INTEGER = 2**31 - 1
+MIN_INTEGER = -(2**31)
 
 
 def replace_ellipsis(var, item):
@@ -252,7 +253,7 @@ def is_tensor_array_type(value):
     else:
         return (
             hasattr(value, "desc")
-            and value.desc.type() == core.VarDesc.VarType.LOD_TENSOR_ARRAY
+            and value.desc.type() == core.VarDesc.VarType.DENSE_TENSOR_ARRAY
         )
 
 
@@ -296,8 +297,7 @@ def parse_index(x, indices):
                 # the unpack size would cause error.
                 # We raises IndexError here to support grammar like `a, b = var`
                 raise IndexError(
-                    "slice_item %d at dim %d should be >= 0 and < x.shape[%d]: %d"
-                    % (slice_item, dim, dim, x.shape[dim])
+                    f"slice_item {slice_item} at dim {dim} should be >= 0 and < x.shape[{dim}]: {x.shape[dim]}"
                 )
             # not calculate result to reduce call times for slice OP.
             decrease_axes.append(dim)
@@ -335,7 +335,7 @@ def parse_index(x, indices):
             if start is None:
                 start = 0 if step > 0 else MAX_INTEGER
             if end is None:
-                end = MAX_INTEGER if step > 0 else -1
+                end = MAX_INTEGER if step > 0 else MIN_INTEGER
 
             if not (
                 is_tensor_array
@@ -343,7 +343,7 @@ def parse_index(x, indices):
                 or isinstance(step, (paddle.base.Variable, paddle.pir.Value))
             ):
                 if x.shape[dim] != -1 and end >= x.shape[dim]:
-                    end = MAX_INTEGER if step > 0 else -1
+                    end = MAX_INTEGER if step > 0 else x.shape[dim]
             estimated_dim += 1
             dim += 1
 
@@ -438,7 +438,7 @@ def _setitem_static(x, indices, values):
         values(Tensor|Number|Ndarray): values to be assigned to the x.
     """
     from . import in_dynamic_or_pir_mode
-    from .framework import Variable, default_main_program, in_pir_mode
+    from .framework import Variable, in_pir_mode
 
     is_tensor_array = is_tensor_array_type(x)
 
@@ -557,7 +557,9 @@ def _setitem_static(x, indices, values):
                     _global_inplace_map,
                 )
 
-                _global_inplace_map.add(default_main_program(), x, output)
+                _global_inplace_map.add(
+                    paddle.static.default_main_program(), x, output
+                )
             return output
         else:
             helper = paddle.base.layer_helper.LayerHelper(
@@ -572,7 +574,7 @@ def _setitem_static(x, indices, values):
                 output = helper.create_variable_for_type_inference(
                     dtype=x.dtype
                 )
-            cur_block = default_main_program().current_block()
+            cur_block = paddle.static.default_main_program().current_block()
             cur_block.append_op(
                 type="set_value",
                 inputs=inputs,
@@ -680,7 +682,9 @@ def _setitem_static(x, indices, values):
                 _global_inplace_map,
             )
 
-            _global_inplace_map.add(default_main_program(), x, output)
+            _global_inplace_map.add(
+                paddle.static.default_main_program(), x, output
+            )
         else:
             helper = paddle.base.layer_helper.LayerHelper(
                 'set_value', **locals()
@@ -694,7 +698,7 @@ def _setitem_static(x, indices, values):
                 output = helper.create_variable_for_type_inference(
                     dtype=x.dtype
                 )
-            cur_block = default_main_program().current_block()
+            cur_block = paddle.static.default_main_program().current_block()
             cur_block.append_op(
                 type="set_value",
                 inputs=inputs,
@@ -760,7 +764,16 @@ def get_tensor_with_basic_indexing(
                 stride = attrs['strides']
             if use_strided_slice:
                 # TODO(zoooo0820): support strided_slice_array until PIR API is ready
-
+                if in_pir_mode():
+                    if isinstance(st, (list, tuple)):
+                        if paddle.utils._contain_var(st):
+                            st = paddle.utils.get_int_tensor_list(st)
+                    if isinstance(end, (list, tuple)):
+                        if paddle.utils._contain_var(end):
+                            end = paddle.utils.get_int_tensor_list(end)
+                    if isinstance(stride, (list, tuple)):
+                        if paddle.utils._contain_var(stride):
+                            stride = paddle.utils.get_int_tensor_list(stride)
                 out = paddle._C_ops.strided_slice(x, axes, st, end, stride)
                 if len(decrease_axes) > 0:
                     out = paddle._C_ops.squeeze(out, decrease_axes)
@@ -792,9 +805,8 @@ def get_tensor_with_basic_indexing(
                     attrs['decrease_axis'],
                 )
         else:
-            from .framework import default_main_program
 
-            target_block = default_main_program().current_block()
+            target_block = paddle.static.default_main_program().current_block()
 
             slice_out_var = target_block.create_var(
                 name=unique_name.generate_with_ignorable_key(
@@ -907,7 +919,7 @@ def _getitem_static(x, indices):
 
 def parse_bool_and_broadcast_indices(indices):
     # deal with multiple Tensors and translating bool tensor to int tensor.
-    # In static mode, bool-tensor cannot be broadcasted since its corresponding int tensor's shape cannot be infered.
+    # In static mode, bool-tensor cannot be broadcasted since its corresponding int tensor's shape cannot be inferred.
     for i, indice in enumerate(indices):
         if (
             indice.dtype == paddle.bool

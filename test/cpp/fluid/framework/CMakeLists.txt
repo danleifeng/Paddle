@@ -157,36 +157,11 @@ if(WITH_PSCORE)
       SRCS dist_multi_trainer_test.cc
       DEPS conditional_block_op executor gloo_wrapper ${RPC_DEPS}
            graph_gpu_wrapper)
-    cc_test(
-      heter_pipeline_trainer_test
-      SRCS heter_pipeline_trainer_test.cc
-      DEPS conditional_block_op
-           generated_op
-           heter_listen_and_serv_op
-           executor
-           heter_server
-           gloo_wrapper
-           phi
-           common
-           ${RPC_DEPS}
-           graph_gpu_wrapper)
   else()
     cc_test(
       dist_multi_trainer_test
       SRCS dist_multi_trainer_test.cc
       DEPS conditional_block_op executor gloo_wrapper ${RPC_DEPS})
-    cc_test(
-      heter_pipeline_trainer_test
-      SRCS heter_pipeline_trainer_test.cc
-      DEPS conditional_block_op
-           generated_op
-           heter_listen_and_serv_op
-           executor
-           heter_server
-           gloo_wrapper
-           phi
-           common
-           ${RPC_DEPS})
   endif()
 else()
   cc_test(
@@ -231,7 +206,7 @@ cc_test(
 cc_test(
   infershape_utils_test
   SRCS infershape_utils_test.cc
-  DEPS infershape_utils phi common)
+  DEPS operator phi)
 
 if(WITH_TESTING AND TEST selected_rows_utils_test)
   set_tests_properties(selected_rows_utils_test PROPERTIES TIMEOUT 120)
@@ -270,5 +245,3 @@ cc_test(
   workqueue_test
   SRCS new_executor/workqueue_test.cc
   DEPS standalone_executor)
-
-add_subdirectory(ir)

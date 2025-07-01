@@ -31,7 +31,7 @@ void SquaredL2NormGradKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       dout.numel(),
       1,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Input(GRAD@Out) of SquaredL2NormGradOP should be a scalar."));
 
   xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
@@ -45,14 +45,14 @@ void SquaredL2NormGradKernel(const Context& dev_ctx,
 
   // squared_l2_norm_grad: dx = dout(it is a scalar value!) * x * 2.0
 
-  // int scale(Context* ctx, const T* x, T* y, int64_t len, bool
+  // int scale(Context* xpu_ctx, const T* x, T* y, int64_t len, bool
   // bias_after_scale, float _scale, float _bias);
   int r = xpu::scale(dev_ctx.x_context(),
                      reinterpret_cast<const XPUType*>(x.data<T>()),
                      reinterpret_cast<XPUType*>(dx->data<T>()),
                      x.numel(),
                      false,
-                     dout_value_cpu * 2,
+                     static_cast<float>(dout_value_cpu * 2),
                      0.0f);
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "scale");
 }

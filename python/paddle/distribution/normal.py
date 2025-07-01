@@ -14,8 +14,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Sequence, Union
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -28,6 +28,8 @@ from paddle.framework import in_dynamic_mode
 from paddle.tensor import random
 
 if TYPE_CHECKING:
+    from typing import Union
+
     from typing_extensions import TypeAlias
 
     from paddle import Tensor, dtype
@@ -131,6 +133,7 @@ class Normal(distribution.Distribution):
             Tensor(shape=[1], dtype=float32, place=Place(cpu), stop_gradient=True,
                 [0.34939718])
     """
+
     loc: Tensor
     scale: Tensor
     name: str
@@ -269,7 +272,7 @@ class Normal(distribution.Distribution):
         """
         return self.scale.pow(2)
 
-    def sample(self, shape: Sequence[int] = (), seed: int = 0) -> Tensor:
+    def sample(self, shape: Sequence[int] = [], seed: int = 0) -> Tensor:
         """Generate samples of the specified shape.
 
         Args:
@@ -322,7 +325,7 @@ class Normal(distribution.Distribution):
             else:
                 return output
 
-    def rsample(self, shape: Sequence[int] = ()) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate reparameterized samples of the specified shape.
 
         Args:

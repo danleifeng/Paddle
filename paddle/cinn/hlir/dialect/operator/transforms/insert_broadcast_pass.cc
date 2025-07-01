@@ -37,8 +37,8 @@ namespace {
 pir::Value GetOutputDimTensor(pir::PatternRewriter* rewriter,
                               pir::Value x,
                               pir::Value y) {
-  pir::Operation* x_shape_op = rewriter->Build<paddle::dialect::ShapeOp>(x);
-  pir::Operation* y_shape_op = rewriter->Build<paddle::dialect::ShapeOp>(y);
+  pir::Operation* x_shape_op = rewriter->Build<paddle::dialect::Shape64Op>(x);
+  pir::Operation* y_shape_op = rewriter->Build<paddle::dialect::Shape64Op>(y);
   pir::Operation* shape_broadcast_op =
       rewriter->Build<paddle::dialect::ShapeBroadcastOp>(x_shape_op->result(0),
                                                          y_shape_op->result(0));
@@ -119,7 +119,6 @@ class InsertBroadcastPass : public pir::PatternRewritePass {
     ps.Add<InsertBroadcastPattern<paddle::dialect::BitwiseAndOp>>(context);
     ps.Add<InsertBroadcastPattern<paddle::dialect::BitwiseOrOp>>(context);
     ps.Add<InsertBroadcastPattern<paddle::dialect::BitwiseXorOp>>(context);
-    ps.Add<InsertBroadcastPattern<paddle::dialect::BitwiseNotOp>>(context);
 
     return ps;
   }

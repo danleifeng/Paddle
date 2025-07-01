@@ -24,15 +24,21 @@ if TYPE_CHECKING:
         CUDAPlace,
         CustomPlace,
         IPUPlace,
+        XPUPinnedPlace,
         XPUPlace,
     )
 
-PlaceLike: TypeAlias = Union[
+_Place: TypeAlias = Union[
     "CPUPlace",
     "CUDAPlace",
     "CUDAPinnedPlace",
+    "XPUPinnedPlace",
     "IPUPlace",
     "CustomPlace",
     "XPUPlace",
+]
+
+PlaceLike: TypeAlias = Union[
+    _Place,
     str,  # some string like "cpu", "gpu:0", etc.
 ]

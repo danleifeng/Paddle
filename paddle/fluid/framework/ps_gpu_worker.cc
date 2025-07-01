@@ -15,15 +15,15 @@ limitations under the License. */
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/operators/isfinite_op.h"
-#include "paddle/fluid/platform/cpu_helper.h"
-#include "paddle/fluid/platform/lodtensor_printer.h"
+#include "paddle/fluid/platform/densetensor_printer.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
 #include "paddle/utils/string/string_helper.h"
 
 #if (defined PADDLE_WITH_NCCL || defined PADDLE_WITH_RCCL || \
      defined PADDLE_WITH_XPU_BKCL) &&                        \
     (defined PADDLE_WITH_PSLIB)
 #ifdef PADDLE_WITH_CUDA
-#include "paddle/fluid/platform/cuda_device_guard.h"
+#include "paddle/phi/core/platform/cuda_device_guard.h"
 #endif
 
 #if defined _WIN32 || defined __APPLE__
@@ -31,8 +31,7 @@ limitations under the License. */
 #define _LINUX
 #endif
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::atomic<int> PSGPUWorker::shape_check_count_(16);
 std::atomic<bool> PSGPUWorker::shape_check_flag_(true);
@@ -72,10 +71,10 @@ void PSGPUWorker::CreateDeviceResource(const ProgramDesc& main_prog) {
             continue;
           }
           auto* ptr = scope->FindLocalVar(var->Name());
-          PADDLE_ENFORCE_NE(
-              ptr,
-              nullptr,
-              phi::errors::NotFound("The var %s is not found.", var->Name()));
+          PADDLE_ENFORCE_NE(ptr,
+                            nullptr,
+                            common::errors::NotFound("The var %s is not found.",
+                                                     var->Name()));
           need_reuse.push_back(ptr);
         }
       }
@@ -90,10 +89,10 @@ void PSGPUWorker::CreateDeviceResource(const ProgramDesc& main_prog) {
             continue;
           }
           auto* ptr = thread_scope_->FindLocalVar(var->Name());
-          PADDLE_ENFORCE_NE(
-              ptr,
-              nullptr,
-              phi::errors::NotFound("The var %s is not found.", var->Name()));
+          PADDLE_ENFORCE_NE(ptr,
+                            nullptr,
+                            common::errors::NotFound("The var %s is not found.",
+                                                     var->Name()));
           need_reuse_var_.push_back(ptr);
         }
       }
@@ -235,17 +234,17 @@ int PSGPUWorker::OpRunAndShapeCheck(OperatorBase& op,
       after_lods.push_back(infer_shape_ctx.GetOutputsLod(var_name_item.first));
     }
 
-    std::string op_name = "unknow_op";
+    std::string op_name = "unknown_op";
     if (op.Info().HasOpProtoAndChecker()) {
       op_name = op.Info().Proto().type();
     }
 
-#define SHAPE_CHECK_EQ(__VAL0, __VAL1)                                 \
-  PADDLE_ENFORCE_EQ(                                                   \
-      __VAL0,                                                          \
-      __VAL1,                                                          \
-      phi::errors::Fatal("Shape check dims/lods error, op name: %s .", \
-                         op_name))
+#define SHAPE_CHECK_EQ(__VAL0, __VAL1)                                    \
+  PADDLE_ENFORCE_EQ(                                                      \
+      __VAL0,                                                             \
+      __VAL1,                                                             \
+      common::errors::Fatal("Shape check dims/lods error, op name: %s .", \
+                            op_name))
 
     SHAPE_CHECK_EQ(pre_dims.size(), after_dims.size());
     for (size_t i = 0; i < pre_dims.size(); i++) {
@@ -373,7 +372,7 @@ void PSGPUWorker::TrainFiles() {
           need_reuse_var_vec_[thread_scope];
       PADDLE_ENFORCE_EQ(cur_scope_vars.size(),
                         need_reuse_var_.size(),
-                        phi::errors::Fatal("reuse vars size must be same."));
+                        common::errors::Fatal("reuse vars size must be same."));
       for (size_t i = 0; i < need_reuse_var_.size(); i++) {
         Variable* child = cur_scope_vars[i];
         Variable* parent = need_reuse_var_[i];
@@ -456,7 +455,7 @@ void PSGPUWorker::TrainFiles() {
           need_reuse_var_vec_[thread_scope];
       PADDLE_ENFORCE_EQ(cur_scope_vars.size(),
                         need_reuse_var_.size(),
-                        phi::errors::Fatal("reuse vars size must be same."));
+                        common::errors::Fatal("reuse vars size must be same."));
       for (size_t i = 0; i < need_reuse_var_.size(); i++) {
         Variable* child = cur_scope_vars[i];
         Variable* parent = need_reuse_var_[i];
@@ -580,6 +579,5 @@ void PSGPUWorker::ResetStat() {
 
 void PSGPUWorker::ProduceTasks() { return; }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

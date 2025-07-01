@@ -11,8 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
+import multiprocessing
 import os
+import time
+from typing import TYPE_CHECKING
 
 import paddle
 from paddle.distributed.communication.group import is_initialized
@@ -20,21 +24,58 @@ from paddle.distributed.fleet.utils.log_util import logger
 
 from .metadata import LocalTensorIndex, LocalTensorMetadata, Metadata
 from .utils import (
+    check_unique_id,
     compute_local_shape_and_global_offset,
     flatten_state_dict,
+    get_max_id,
 )
 
+if TYPE_CHECKING:
+    from paddle import Tensor
+    from paddle.distributed.collective import Group
 
-def check_file_name(file_name, process_group):
-    all_unique_id = []
-    unique_id = int(file_name.split(".")[0].split("_")[1])
-    paddle.distributed.all_gather_object(
-        all_unique_id, unique_id, process_group
-    )
-    for id in all_unique_id[1:]:
-        assert (
-            id == all_unique_id[0]
-        ), f"id:{id} !=  all_unique_id[0]:{file_name}"
+async_save_queue = []
+
+
+def check_exitcode(task):
+    exitcode = task.exitcode
+    if exitcode != 0:
+        logger.error(
+            f"Error: save ckpt process failed with exitcode {exitcode}!!!"
+        )
+
+
+def clear_async_save_task_queue():
+    """
+    wait until all async save task to be done.
+    """
+    while len(async_save_queue) > 0:
+        task = async_save_queue.pop()
+        if task and task.is_alive():
+            task.join(timeout=60)
+            if task.is_alive():
+                logger.error("Error: save ckpt process timeout!!!")
+                async_save_queue.append(task)
+            else:
+                check_exitcode(task)
+        else:
+            check_exitcode(task)
+
+
+def copy_dict_to_cpu(nested_dict):
+    """
+    Copy the paddle.Tensor objects in the nested dictionary to the CPU and return a new dict.
+    """
+    new_dict = {}
+    for key, value in nested_dict.items():
+        if isinstance(value, paddle.Tensor):
+            new_dict[key] = value.cpu()
+            paddle.device.synchronize()
+        elif isinstance(value, dict):
+            new_dict[key] = copy_dict_to_cpu(value)
+        else:
+            new_dict[key] = value
+    return new_dict
 
 
 def merge_state_dict_metadata(global_state_dict_metadata):
@@ -92,10 +133,12 @@ def dedup_tensor(
 
 
 def save_state_dict(
-    state_dict,
-    path,
-    process_group=None,
-    coordinator_rank=0,
+    state_dict: dict[str, Tensor],
+    path: str,
+    process_group: Group | None = None,
+    coordinator_rank: int = 0,
+    unique_id: int | None = None,
+    async_save: bool = False,
 ) -> None:
     """
     Save the state_dict of model to path.
@@ -104,7 +147,9 @@ def save_state_dict(
         state_dict(Dict[str, paddle.Tensor]): The state_dict to save.
         path(str): The directory to save state_dict.
         process_group(paddle.distributed.collective.Group): ProcessGroup to be used for cross-rank synchronization. Use the default process group which contains all cards.
-        coordinator_rank(int): The rank used to save non distributed values. Rank0 is used by default.
+        coordinator_rank(int): The rank used to save non distributed values. Rank 0 is used by default.
+        unique_id(int): The unique id of checkpoint, used to distinguish between different checkpoint versions. Default is None, in which case the id 0 when save for the first time and increased by 1 each time when calling save_state_dict in the same path. If unique_id is given and there is already checkpoint with the same unique_id, it will be overrited.
+        async_save(bool): Async save the state_dict, default is False.
 
     Examples:
         .. code-block:: python
@@ -140,16 +185,21 @@ def save_state_dict(
             # Init the default global process group
             paddle.distributed.init_parallel_env()
 
-        unique_id = 0
-        file_name = ""
-        while True:
-            file_name = f"{paddle.distributed.get_rank()}_{unique_id}.distcp"
-            if not os.path.exists(os.path.join(path, file_name)):
-                break
-            unique_id += 1
-        logger.debug(f"file_name:{file_name}")
+        if unique_id is None:
+            max_unique_id = get_max_id(path)
+            logger.debug(f"Max unique id: {max_unique_id}")
+            if max_unique_id is None:
+                unique_id = 0
+            else:
+                unique_id = max_unique_id
+        else:
+            assert unique_id >= 0, f'{unique_id} should be >= 0'
         if use_dist:
-            check_file_name(file_name, process_group)
+            check_unique_id(unique_id, process_group)
+
+        file_name = f"{paddle.distributed.get_rank()}_{unique_id}.distcp"
+        logger.debug(f"The checkpoint is saved to file_name:{file_name}")
+
         metadata = Metadata()
         local_state_dict = {}
         local_state_dict_metadata = {}
@@ -160,6 +210,9 @@ def save_state_dict(
                 if not val._is_initialized():
                     continue
                 if val.is_dist():
+                    local_tensor = val._local_value()
+                    # Note: The local_tensor must keep the same name with the original tensor. Otherwise, the StructuredToParameterName@@ mapping will be wrong.
+                    local_tensor.name = val.name
                     # when val is scalar, the shape is []
                     (
                         local_shape,
@@ -175,9 +228,6 @@ def save_state_dict(
                     )
                     if local_shape is None or global_offset is None:
                         continue
-                    local_tensor = val._local_value()
-                    # Note: The local_tensor must keep the same name with the original tensor. Otherwise, the StructuredToParameterName@@ mapping will be wrong.
-                    local_tensor.name = val.name
                 else:
                     local_shape = tuple(val.shape)
                     global_offset = (
@@ -187,9 +237,9 @@ def save_state_dict(
                     )
                     local_tensor = val
                 local_state_dict[key] = local_tensor
-                local_tenosr_dtype = str(local_tensor.dtype).split('.')[1]
+                local_tensor_dtype = str(local_tensor.dtype).split('.')[1]
                 local_state_dict_metadata[key] = LocalTensorMetadata(
-                    global_offset, local_shape, local_tenosr_dtype
+                    global_offset, local_shape, local_tensor_dtype
                 )
                 local_storage_metadata[
                     LocalTensorIndex(key, tuple(global_offset))
@@ -223,8 +273,36 @@ def save_state_dict(
         if coordinator_rank == paddle.distributed.get_rank():
             logger.debug(f"metadata:{metadata}")
             paddle.save(metadata, os.path.join(path, f"{unique_id}.metadata"))
-        logger.debug(f"local_state_dict:{local_state_dict}")
+
         dedup_tensor(
             local_state_dict, local_storage_metadata, metadata.storage_metadata
         )
-        paddle.save(local_state_dict, os.path.join(path, file_name))
+
+        if async_save:
+            cpu_state_dict = copy_dict_to_cpu(local_state_dict)
+            clear_async_save_task_queue()
+
+            attempt = 0
+            ctx = multiprocessing.get_context("spawn")
+
+            def start_process():
+                nonlocal attempt
+                try:
+                    p = ctx.Process(
+                        target=paddle.save,
+                        args=(cpu_state_dict, os.path.join(path, file_name)),
+                    )
+                    p.start()
+                    return p
+                except Exception as e:
+                    logger.error(
+                        f"Attempt {attempt + 1} failed with error: {e}"
+                    )
+                    attempt += 1
+                    time.sleep(1)
+                    return start_process()
+
+            p = start_process()
+            async_save_queue.append(p)
+        else:
+            paddle.save(local_state_dict, os.path.join(path, file_name))

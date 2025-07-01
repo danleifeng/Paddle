@@ -14,8 +14,6 @@
 
 #pragma once
 
-#include <absl/container/flat_hash_map.h>
-#include <absl/strings/string_view.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
@@ -25,6 +23,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -35,6 +34,7 @@
 #include "paddle/cinn/ir/ir_visitor.h"
 #include "paddle/cinn/ir/lowered_func.h"
 #include "paddle/cinn/ir/module.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace cinn {
 namespace backends {
@@ -48,14 +48,6 @@ class LLVMIRVisitor : public ir::IRVisitorRequireReImpl<llvm::Value *> {
   NODETY_FORALL(__m)
 #undef __m
 };
-
-/**
- * Tell whether a variable called \p \var_name will lowered to a pointer type in
- * LLVM.
- * @param var_name name of the variable.
- * @return a boolean.
- */
-bool LLVM_WillVarLowerAsPointer(const std::string &var_name);
 
 class SymbolTable {
  public:
@@ -72,17 +64,26 @@ class SymbolTable {
   }
 
   void Insert(const std::string &id, llvm::Value *value) {
-    CHECK(!scopes_.empty());
+    PADDLE_ENFORCE_EQ(
+        !scopes_.empty(),
+        true,
+        ::common::errors::InvalidArgument("sorry, scopes_ can't be empty"));
     scopes_.back().emplace(id, value);
   }
 
   void Erase(const std::string &id) {
-    CHECK(!scopes_.empty());
+    PADDLE_ENFORCE_EQ(
+        !scopes_.empty(),
+        true,
+        ::common::errors::InvalidArgument("sorry, scopes_ can't be empty"));
     scopes_.back().erase(id);
   }
 
   void PopScope() {
-    CHECK(!scopes_.empty());
+    PADDLE_ENFORCE_EQ(
+        !scopes_.empty(),
+        true,
+        ::common::errors::InvalidArgument("sorry, scopes_ can't be empty"));
     scopes_.pop_back();
   }
 
@@ -92,7 +93,7 @@ class SymbolTable {
   size_t num_scopes() const { return scopes_.size(); }
 
  private:
-  std::vector<absl::flat_hash_map<std::string, llvm::Value *>> scopes_;
+  std::vector<paddle::flat_hash_map<std::string, llvm::Value *>> scopes_;
 
   SymbolTable(const SymbolTable &) = delete;
 };
@@ -179,6 +180,10 @@ class CodeGenLLVM : public LLVMIRVisitor, public IrBuilderMixin<CodeGenLLVM> {
 
   using LLVMIRVisitor::Visit;
 
+  virtual llvm::Value *Visit(const ir::_Module_ *op);
+
+  virtual llvm::Value *Visit(const ir::_LoweredFunc_ *op);
+
 #define __(op__) llvm::Value *Visit(const ir::op__ *) override;
   NODETY_FORALL(__)
 #undef __
@@ -249,13 +254,16 @@ class CodeGenLLVM : public LLVMIRVisitor, public IrBuilderMixin<CodeGenLLVM> {
    * can optimize by reordering loads and stores across different buffers.
    */
   void AddTbaaMetadata(llvm::Instruction *inst,
-                       absl::string_view buffer,
+                       std::string_view buffer,
                        Expr index);
 
   void InitTarget(const Target &target);
 
   void Scalarize(const Expr &e,
                  std::function<void(int i, llvm::Value *v)> flambda);
+
+  llvm::Value *CastCompositeType(const ir::Expr &op_v);
+  void RegisterCustomizedPODStructType();
 
   llvm::Module *m_;
   llvm::IRBuilder<> *b_;
@@ -264,7 +272,7 @@ class CodeGenLLVM : public LLVMIRVisitor, public IrBuilderMixin<CodeGenLLVM> {
 
   std::unique_ptr<llvm::MDBuilder> md_builder_;
 
-  // std::shared_ptr<absl::flat_hash_map<std::string, llvm::Value *>>
+  // std::shared_ptr<paddle::flat_hash_map<std::string, llvm::Value *>>
   // named_vars_;
   std::shared_ptr<SymbolTable> symbol_table_;
   std::unordered_set<ir::_Var_ *> alias_vars_;

@@ -748,8 +748,8 @@ class TestSundryAPI(unittest.TestCase):
 
         self.assertEqual(out1.shape, [])
         self.assertEqual(out2.shape, [])
-        self.assertEqual(out1, 0)
-        self.assertEqual(out2, 0)
+        self.assertTrue(np.isnan(out1.numpy()))
+        self.assertTrue(np.isnan(out2.numpy()))
 
         self.assertEqual(x.grad.shape, [])
 
@@ -773,11 +773,11 @@ class TestSundryAPI(unittest.TestCase):
 
         self.assertEqual(out1.shape, [])
         self.assertEqual(out2.shape, [])
-        self.assertEqual(out1, 0)
-        self.assertEqual(out2, 0)
+        self.assertTrue(np.isnan(out1.numpy()))
+        self.assertTrue(np.isnan(out2.numpy()))
 
         self.assertEqual(x.grad.shape, [])
-        np.testing.assert_allclose(x.grad, 0)
+        self.assertTrue(np.isnan(x.grad.numpy()))
 
         # 2) x is ND
         x = paddle.rand([3, 5])
@@ -1690,7 +1690,13 @@ class TestSundryAPI(unittest.TestCase):
         self.assertEqual(y2.grad.shape, [])
 
     def test_repeat_interleave(self):
-        places = ['cpu']
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.is_compiled_with_cuda()
+        ):
+            places.append('cpu')
         if paddle.is_compiled_with_cuda():
             places.append('gpu')
         for place in places:

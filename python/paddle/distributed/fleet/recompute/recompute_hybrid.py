@@ -11,6 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
+import random
+from typing import TYPE_CHECKING, Any, TypedDict
+
+import numpy as np
 
 import paddle
 from paddle import framework
@@ -21,9 +27,24 @@ from ..meta_parallel.parallel_layers.random import get_rng_state_tracker
 from ..meta_parallel.pp_utils import utils
 from .recompute import (
     check_recompute_necessary,
+    custom_state_manager,
     detach_variable,
     switch_rng_state_tracker,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from typing_extensions import NotRequired
+
+    from paddle.distributed.communication.group import Group
+    from paddle.nn import Layer
+
+    class _Ctx(TypedDict):
+        mp_group: Group
+        offload: NotRequired[bool]
+        partition: NotRequired[bool]
+
 
 __all__ = []
 
@@ -81,6 +102,8 @@ class _HPRecomputeFunction(PyLayer):
         mp_group,
         offload,
         partition,
+        custom_get_state_func,
+        custom_set_state_func,
         *args,
         **kwargs,
     ):
@@ -92,6 +115,11 @@ class _HPRecomputeFunction(PyLayer):
         # store the rng states
         ctx.fwd_rng_state = paddle.get_rng_state()
         ctx.fwd_rng_state_tracker = get_rng_state_tracker().get_states_tracker()
+        ctx.fwd_numpy_state = np.random.get_state()
+        ctx.fwd_random_state = random.getstate()
+        ctx.fwd_custom_state = custom_get_state_func()
+        ctx.custom_get_state_func = custom_get_state_func
+        ctx.custom_set_state_func = custom_set_state_func
 
         # save config info
         ctx.mp_group = mp_group
@@ -197,7 +225,13 @@ class _HPRecomputeFunction(PyLayer):
 
             # need restore auto_cast state as well as w/b list
             with switch_rng_state_tracker(
-                ctx.fwd_rng_state, ctx.fwd_rng_state_tracker
+                ctx.fwd_rng_state,
+                ctx.fwd_rng_state_tracker,
+                ctx.fwd_numpy_state,
+                ctx.fwd_random_state,
+                ctx.fwd_custom_state,
+                ctx.custom_get_state_func,
+                ctx.custom_set_state_func,
             ):
                 if ctx.is_fw_autocast:
                     with paddle.amp.auto_cast(
@@ -245,7 +279,9 @@ class _HPRecomputeFunction(PyLayer):
             return grads
 
 
-def recompute_hybrid(ctx, function, *args, **kwargs):
+def recompute_hybrid(
+    ctx: _Ctx, function: Layer | Callable[..., Any], *args: Any, **kwargs: Any
+) -> Any:
     """
     recompute intermediate activations to save the memory in hybrid parallel scene.
     # NOTE(shenliang03)The current hybrid parallel recompute has limitations.
@@ -280,9 +316,25 @@ def recompute_hybrid(ctx, function, *args, **kwargs):
     if framework._dygraph_tracer()._has_grad:
         check_recompute_necessary(args)
 
+    if custom_state_manager.custom_get_state_func is None:
+        assert custom_state_manager.custom_set_state_func is None
+        custom_get_state_func = lambda x=None: None
+        custom_set_state_func = lambda x=None: None
+    else:
+        custom_get_state_func = custom_state_manager.custom_get_state_func
+        custom_set_state_func = custom_state_manager.custom_set_state_func
+
     all_outputs = []
     _HPRecomputeFunction.apply(
-        function, all_outputs, mp_group, offload, partition, *args, **kwargs
+        function,
+        all_outputs,
+        mp_group,
+        offload,
+        partition,
+        custom_get_state_func,
+        custom_set_state_func,
+        *args,
+        **kwargs,
     )
 
     if len(all_outputs) == 1:

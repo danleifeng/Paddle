@@ -19,7 +19,6 @@ import numpy as np
 import paddle
 from paddle import base, nn
 from paddle.base.framework import in_pir_mode
-from paddle.pir_utils import test_with_pir_api
 
 LOOKAHEAD_K = 5
 LOOKAHEAD_ALPHA = 0.2
@@ -27,7 +26,7 @@ SGD_LR = 1.0
 
 
 class TestLookAhead(unittest.TestCase):
-    @test_with_pir_api
+
     def test_lookahead_static(self):
         paddle.enable_static()
         place = base.CPUPlace()
@@ -35,19 +34,21 @@ class TestLookAhead(unittest.TestCase):
         exe = base.Executor(place)
         train_program = paddle.static.Program()
         startup = paddle.static.Program()
-        with paddle.static.program_guard(train_program, startup):
-            with base.unique_name.guard():
-                data = paddle.static.data(
-                    name='X', shape=[None, 1], dtype='float32'
-                )
-                hidden = paddle.nn.Linear(1, 10)
-                loss = paddle.mean(hidden(data))
+        with (
+            paddle.static.program_guard(train_program, startup),
+            base.unique_name.guard(),
+        ):
+            data = paddle.static.data(
+                name='X', shape=[None, 1], dtype='float32'
+            )
+            hidden = paddle.nn.Linear(1, 10)
+            loss = paddle.mean(hidden(data))
 
-                optimizer = paddle.optimizer.SGD(learning_rate=SGD_LR)
-                lookahead = paddle.incubate.optimizer.LookAhead(
-                    optimizer, alpha=LOOKAHEAD_ALPHA, k=LOOKAHEAD_K
-                )
-                lookahead.minimize(loss)
+            optimizer = paddle.optimizer.SGD(learning_rate=SGD_LR)
+            lookahead = paddle.incubate.optimizer.LookAhead(
+                optimizer, alpha=LOOKAHEAD_ALPHA, k=LOOKAHEAD_K
+            )
+            lookahead.minimize(loss)
 
         exe.run(startup)
         slow_param = None

@@ -20,7 +20,7 @@
 
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace framework {
@@ -167,15 +167,15 @@ void BoxWrapper::CopyForPull(const phi::Place& place,
              values.size() * sizeof(float*),
              cudaMemcpyHostToDevice);
 #endif
-#define EMBEDX_CASE(i, ...)                                                  \
-  case i: {                                                                  \
-    constexpr size_t EmbedxDim = i;                                          \
-    switch (expand_embed_dim) {                                              \
-      __VA_ARGS__                                                            \
-      default:                                                               \
-        PADDLE_THROW(phi::errors::InvalidArgument(                           \
-            "Unsupport this expand embedding size [%d]", expand_embed_dim)); \
-    }                                                                        \
+#define EMBEDX_CASE(i, ...)                                                    \
+  case i: {                                                                    \
+    constexpr size_t EmbedxDim = i;                                            \
+    switch (expand_embed_dim) {                                                \
+      __VA_ARGS__                                                              \
+      default:                                                                 \
+        PADDLE_THROW(common::errors::InvalidArgument(                          \
+            "Unsupported this expand embedding size [%d]", expand_embed_dim)); \
+    }                                                                          \
   } break
 
 #ifdef PADDLE_WITH_HIP
@@ -221,8 +221,8 @@ void BoxWrapper::CopyForPull(const phi::Place& place,
                 EXPAND_EMBED_PULL_CASE(64););
     EMBEDX_CASE(16, EXPAND_EMBED_PULL_CASE(0););
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
-          "Unsupport this embedding size [%d]", hidden_size - 3));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "Unsupported this embedding size [%d]", hidden_size - 3));
   }
   cudaStreamSynchronize(stream);
 #undef EXPAND_EMBED_PULL_CASE
@@ -310,15 +310,15 @@ void BoxWrapper::CopyForPush(const phi::Place& place,
              cudaMemcpyHostToDevice);
 #endif
 
-#define EMBEDX_CASE(i, ...)                                                  \
-  case i: {                                                                  \
-    constexpr size_t EmbedxDim = i;                                          \
-    switch (expand_embed_dim) {                                              \
-      __VA_ARGS__                                                            \
-      default:                                                               \
-        PADDLE_THROW(phi::errors::InvalidArgument(                           \
-            "Unsupport this expand embedding size [%d]", expand_embed_dim)); \
-    }                                                                        \
+#define EMBEDX_CASE(i, ...)                                                    \
+  case i: {                                                                    \
+    constexpr size_t EmbedxDim = i;                                            \
+    switch (expand_embed_dim) {                                                \
+      __VA_ARGS__                                                              \
+      default:                                                                 \
+        PADDLE_THROW(common::errors::InvalidArgument(                          \
+            "Unsupported this expand embedding size [%d]", expand_embed_dim)); \
+    }                                                                          \
   } break
 
 #ifdef PADDLE_WITH_HIP
@@ -356,8 +356,8 @@ void BoxWrapper::CopyForPush(const phi::Place& place,
                 EXPAND_EMBED_PUSH_CASE(64););
     EMBEDX_CASE(16, EXPAND_EMBED_PUSH_CASE(0););
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
-          "Unsupport this embedding size [%d]", hidden_size - 3));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "Unsupported this embedding size [%d]", hidden_size - 3));
   }
 
   cudaStreamSynchronize(stream);
@@ -365,6 +365,6 @@ void BoxWrapper::CopyForPush(const phi::Place& place,
 #undef EMBEDX_CASE
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace framework
+}  // namespace paddle
 #endif

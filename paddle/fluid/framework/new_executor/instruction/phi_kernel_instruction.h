@@ -15,6 +15,7 @@
 #pragma once
 
 #include "paddle/fluid/framework/new_executor/instruction/instruction_base.h"
+#include "paddle/fluid/framework/new_executor/new_executor_defs.h"
 
 namespace pir {
 class Operation;
@@ -63,6 +64,8 @@ class PhiKernelInstruction : public InstructionBase {
   phi::Kernel* phi_kernel_{nullptr};  // not owned
 
   std::string phi_op_name_;
+
+  std::string kernel_name_;
 
   ::pir::Operation* op_{nullptr};  // not owned
 

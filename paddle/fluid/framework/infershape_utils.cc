@@ -18,7 +18,6 @@ limitations under the License. */
 #include <string>
 
 #include "paddle/fluid/framework/convert_utils.h"
-#include "paddle/fluid/framework/framework.pb.h"
 #include "paddle/fluid/framework/phi_utils.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/common/int_array.h"
@@ -27,6 +26,7 @@ limitations under the License. */
 #include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/compat/op_utils.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/framework/framework.pb.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/core/kernel_factory.h"
 #include "paddle/phi/core/tensor_utils.h"
@@ -57,8 +57,8 @@ class InferShapeArgumentMappingContext : public phi::ArgumentMappingContext {
     auto* attr = ctx_.Attrs().GetAttr(name);
     PADDLE_ENFORCE_NOT_NULL(
         attr,
-        phi::errors::NotFound("Attribute (%s) should be in AttributeMap.",
-                              name));
+        common::errors::NotFound("Attribute (%s) should be in AttributeMap.",
+                                 name));
     return GetAttrValue(*attr);
   }
 
@@ -77,7 +77,7 @@ class InferShapeArgumentMappingContext : public phi::ArgumentMappingContext {
 
   bool IsDenseTensorInput(const std::string& name) const override {
     auto var_type = ctx_.GetInputVarType(name);
-    return var_type == proto::VarType::LOD_TENSOR;
+    return var_type == proto::VarType::DENSE_TENSOR;
   }
 
   bool IsDenseTensorInputs(const std::string& name) const override {
@@ -85,7 +85,7 @@ class InferShapeArgumentMappingContext : public phi::ArgumentMappingContext {
     return std::all_of(var_types.begin(),
                        var_types.end(),
                        [](const proto::VarType::Type& type) {
-                         return type == proto::VarType::LOD_TENSOR;
+                         return type == proto::VarType::DENSE_TENSOR;
                        });
   }
 
@@ -108,7 +108,7 @@ class InferShapeArgumentMappingContext : public phi::ArgumentMappingContext {
     return std::all_of(var_types.begin(),
                        var_types.end(),
                        [](const proto::VarType::Type& type) {
-                         return type == proto::VarType::LOD_TENSOR_ARRAY;
+                         return type == proto::VarType::DENSE_TENSOR_ARRAY;
                        });
   }
 
@@ -136,7 +136,16 @@ class InferShapeArgumentMappingContext : public phi::ArgumentMappingContext {
     return std::all_of(var_types.begin(),
                        var_types.end(),
                        [](const proto::VarType::Type& type) {
-                         return type == proto::VarType::LOD_TENSOR;
+                         return type == proto::VarType::DENSE_TENSOR;
+                       });
+  }
+
+  bool IsVocabOutput(const std::string& name) const override {
+    auto var_types = ctx_.GetOutputsVarType(name);
+    return std::all_of(var_types.begin(),
+                       var_types.end(),
+                       [](const proto::VarType::Type& type) {
+                         return type == proto::VarType::VOCAB;
                        });
   }
 
@@ -160,7 +169,7 @@ class InferShapeArgumentMappingContext : public phi::ArgumentMappingContext {
 static inline void ValidCheck(const phi::MetaTensor& meta_tensor) {
   PADDLE_ENFORCE_EQ(meta_tensor.initialized(),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The current CompatMetaTensor is not initialized."));
 }
 
@@ -191,17 +200,17 @@ bool CompatMetaTensor::is_dense() const {
     return var->IsType<phi::DenseTensor>();
   } else {
     auto* var = PADDLE_GET_CONST(VarDesc*, var_);
-    return var->GetType() == proto::VarType::LOD_TENSOR;
+    return var->GetType() == proto::VarType::DENSE_TENSOR;
   }
 }
 
 bool CompatMetaTensor::is_tensor_array() const {
   if (is_runtime_) {
     auto* var = PADDLE_GET_CONST(Variable*, var_);
-    return var->IsType<framework::LoDTensorArray>();
+    return var->IsType<phi::TensorArray>();
   } else {
     auto* var = PADDLE_GET_CONST(VarDesc*, var_);
-    return var->GetType() == proto::VarType::LOD_TENSOR_ARRAY;
+    return var->GetType() == proto::VarType::DENSE_TENSOR_ARRAY;
   }
 }
 
@@ -215,12 +224,12 @@ DDim CompatMetaTensor::dims() const {
       return var->Get<phi::SelectedRows>().GetCompleteDims();
     } else if (var->IsType<phi::SparseCooTensor>()) {
       return var->Get<phi::SparseCooTensor>().dims();
-    } else if (var->IsType<framework::LoDTensorArray>()) {
+    } else if (var->IsType<phi::TensorArray>()) {
       // use tensor array size as dims
-      auto& tensor_array = var->Get<framework::LoDTensorArray>();
+      auto& tensor_array = var->Get<phi::TensorArray>();
       return common::make_ddim({static_cast<int64_t>(tensor_array.size())});
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently, only can get dims from DenseTensor or SelectedRows or "
           "DenseTensorArray."));
     }
@@ -243,17 +252,17 @@ phi::DataType CompatMetaTensor::dtype() const {
       return var->Get<phi::SelectedRows>().dtype();
     } else if (var->IsType<phi::SparseCooTensor>()) {
       return var->Get<phi::SparseCooTensor>().dtype();
-    } else if (var->IsType<framework::LoDTensorArray>()) {
+    } else if (var->IsType<phi::TensorArray>()) {
       // NOTE(chenweihang): do nothing
-      // Unsupported get dtype from LoDTensorArray now
+      // Unsupported get dtype from phi::TensorArray now
       return phi::DataType::UNDEFINED;
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently, only can get dtype from DenseTensor or SelectedRows."));
     }
   } else {
     auto* var = PADDLE_GET_CONST(VarDesc*, var_);
-    return paddle::framework::TransToPhiDataType(var->GetDataType());
+    return phi::TransToPhiDataType(var->GetDataType());
   }
 }
 
@@ -267,12 +276,12 @@ DataLayout CompatMetaTensor::layout() const {
       return var->Get<phi::SelectedRows>().layout();
     } else if (var->IsType<phi::SparseCooTensor>()) {
       return var->Get<phi::SparseCooTensor>().layout();
-    } else if (var->IsType<framework::LoDTensorArray>()) {
+    } else if (var->IsType<phi::TensorArray>()) {
       // NOTE(chenweihang): do nothing
-      // Unsupported get layout from LoDTensorArray now
+      // Unsupported get layout from phi::TensorArray now
       return phi::DataLayout::UNDEFINED;
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently, only can get layout from DenseTensor or "
           "SelectedRows."));
     }
@@ -298,19 +307,19 @@ void CompatMetaTensor::set_dims(const DDim& dims) {
     } else if (var->IsType<phi::SparseCooTensor>()) {
       auto* tensor = var->GetMutable<phi::SparseCooTensor>();
       phi::DenseTensorUtils::GetMutableMeta(tensor)->dims = dims;
-    } else if (var->IsType<framework::LoDTensorArray>()) {
-      auto* tensor_array = var->GetMutable<framework::LoDTensorArray>();
+    } else if (var->IsType<phi::TensorArray>()) {
+      auto* tensor_array = var->GetMutable<phi::TensorArray>();
       // Note: Here I want enforce `tensor_array->size() == 0UL`, because
-      // inplace using on LoDTensorArray is dangerous, but the unittest
+      // inplace using on phi::TensorArray is dangerous, but the unittest
       // `test_list` contains this behavior
       PADDLE_ENFORCE_EQ(dims.size(),
                         1UL,
-                        phi::errors::InvalidArgument(
-                            "LoDTensorArray can only have one dimension."));
-      // only set the array size for LoDTensorArray input
+                        common::errors::InvalidArgument(
+                            "DenseTensorArray can only have one dimension."));
+      // only set the array size for phi::TensorArray input
       tensor_array->resize(dims[0]);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently, only can set dims from DenseTensor or SelectedRows."));
     }
   } else {
@@ -335,11 +344,11 @@ void CompatMetaTensor::set_dtype(phi::DataType dtype) {
     } else if (var->IsType<phi::SparseCooTensor>()) {
       auto* tensor = var->GetMutable<phi::SparseCooTensor>();
       phi::DenseTensorUtils::GetMutableMeta(tensor)->dtype = dtype;
-    } else if (var->IsType<framework::LoDTensorArray>()) {
+    } else if (var->IsType<phi::TensorArray>()) {
       // NOTE(chenweihang): do nothing
-      // Unsupported set dtype for LoDTensorArray now
+      // Unsupported set dtype for phi::TensorArray now
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently, only can set dtype from DenseTensor or SelectedRows."));
     }
   } else {
@@ -366,11 +375,11 @@ void CompatMetaTensor::set_layout(DataLayout layout) {
     } else if (var->IsType<phi::SparseCooTensor>()) {
       auto* tensor = var->GetMutable<phi::SparseCooTensor>();
       phi::DenseTensorUtils::GetMutableMeta(tensor)->layout = layout;
-    } else if (var->IsType<framework::LoDTensorArray>()) {
+    } else if (var->IsType<phi::TensorArray>()) {
       // NOTE(chenweihang): do nothing
-      // Unsupported set dtype for LoDTensorArray now
+      // Unsupported set dtype for phi::TensorArray now
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Currently, only can set layout from DenseTensor or "
           "SelectedRows."));
     }
@@ -388,7 +397,7 @@ void CompatMetaTensor::share_lod(const MetaTensor& meta_tensor) {
     if (var == nullptr) return;
     if (var->IsType<phi::DenseTensor>() && meta_tensor.is_dense()) {
       auto* tensor = var->GetMutable<phi::DenseTensor>();
-      phi::DenseTensorUtils::GetMutableMeta(tensor)->lod =
+      phi::DenseTensorUtils::GetMutableMeta(tensor)->legacy_lod =
           static_cast<const CompatMetaTensor&>(meta_tensor).GetRuntimeLoD();
     } else {
       // NOTE(chenweihang): do nothing
@@ -399,11 +408,11 @@ void CompatMetaTensor::share_lod(const MetaTensor& meta_tensor) {
     // NOTE(lizhiyu): If var is select_rows and meta_tensor is dense,
     // 'var->SetLodLevel' will fail. This case will happen when execute
     // 'test_hsigmoid_op.py'. So it is needed to assert 'var' type.
-    if ((var && (var->GetType() != proto::VarType::LOD_TENSOR &&
-                 var->GetType() != proto::VarType::LOD_TENSOR_ARRAY)) ||
+    if ((var && (var->GetType() != proto::VarType::DENSE_TENSOR &&
+                 var->GetType() != proto::VarType::DENSE_TENSOR_ARRAY)) ||
         (!meta_tensor.is_dense() && !meta_tensor.is_tensor_array())) {
       VLOG(3) << "this tensor or input metatensor is not phi::DenseTensor or "
-                 "LoDTensorArray.";
+                 "DenseTensorArray.";
       return;
     }
     if (var) {
@@ -623,7 +632,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
                   PADDLE_GET_CONST(paddle::experimental::Scalar, attr)));
               break;
             default:
-              PADDLE_THROW(phi::errors::Unimplemented(
+              PADDLE_THROW(common::errors::Unimplemented(
                   "Unsupported cast op attribute `%s` to Scalar when construct "
                   "InferMetaContext.",
                   attr_name));
@@ -641,7 +650,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
               infer_meta_context.EmplaceBackAttr(tensor_scalar);
             }
           } else {
-            PADDLE_THROW(phi::errors::InvalidArgument(
+            PADDLE_THROW(common::errors::InvalidArgument(
                 "Invalid input.size() when cast op attribute `%s` to Scalar, "
                 "expected 1, but actually is %d .",
                 attr_name,
@@ -669,7 +678,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
                   phi::IntArray({PADDLE_GET_CONST(int, attr)}));
               break;
             default:
-              PADDLE_THROW(phi::errors::Unimplemented(
+              PADDLE_THROW(common::errors::Unimplemented(
                   "Unsupported cast op attribute `%s` to IntArray when "
                   "construct InferMetaContext.",
                   attr_name));
@@ -769,7 +778,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
               infer_meta_context.EmplaceBackAttr(std::move(scalar_list));
             } break;
             default:
-              PADDLE_THROW(phi::errors::Unimplemented(
+              PADDLE_THROW(common::errors::Unimplemented(
                   "Unsupported cast op attribute `%s` to vector<Scalar> when "
                   "construct KernelContext.",
                   attr_names[i]));
@@ -804,7 +813,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
                   PADDLE_GET_CONST(std::vector<int>, attr));
               break;
             case phi::AttributeType::DATA_TYPE: {
-              auto data_type = paddle::framework::TransToPhiDataType(
+              auto data_type = phi::TransToPhiDataType(
                   static_cast<framework::proto::VarType::Type>(
                       PADDLE_GET_CONST(int, attr)));
               infer_meta_context.EmplaceBackAttr(data_type);
@@ -827,7 +836,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
                   infer_meta_context.EmplaceBackAttr(vector_int64_attr);
                 } break;
                 default:
-                  PADDLE_THROW(phi::errors::Unimplemented(
+                  PADDLE_THROW(common::errors::Unimplemented(
                       "Unsupported cast op attribute `%s` to vector<int64_t> "
                       "when "
                       "construct KernelContext.",
@@ -851,7 +860,7 @@ CompatInferMetaContext BuildInferMetaContext(InferShapeContext* ctx,
                   PADDLE_GET_CONST(std::vector<double>, attr));
               break;
             default:
-              PADDLE_THROW(phi::errors::Unimplemented(
+              PADDLE_THROW(common::errors::Unimplemented(
                   "Unsupported cast op attribute `%s` when construct "
                   "KernelContext in dygraph.",
                   attr_names[i]));

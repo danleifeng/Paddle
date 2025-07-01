@@ -17,6 +17,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "glog/logging.h"
 #include "paddle/common/flags.h"
 #include "paddle/pir/include/core/block.h"
 #include "paddle/pir/include/core/builtin_attribute.h"
@@ -28,8 +29,8 @@
 #include "paddle/pir/include/core/utils.h"
 #include "paddle/pir/include/core/value.h"
 
-COMMON_DECLARE_bool(pir_debug);
-
+COMMON_DECLARE_bool(print_ir);
+COMMON_DECLARE_string(disable_logging_op_attr_list);
 namespace pir {
 
 namespace {
@@ -43,7 +44,9 @@ void BasicIrPrinter::PrintType(Type type) {
     return;
   }
 
-  if (type.isa<BFloat16Type>()) {
+  if (type.isa<UndefinedType>()) {
+    os << "undefined";
+  } else if (type.isa<BFloat16Type>()) {
     os << "bf16";
   } else if (type.isa<Float16Type>()) {
     os << "f16";
@@ -121,21 +124,21 @@ void BasicIrPrinter::PrintAttribute(Attribute attr) {
       os << "false";
     }
   } else if (auto f = attr.dyn_cast<FloatAttribute>()) {
-    os << "(Float)" << f.data();
+    os << f.data();
   } else if (auto d = attr.dyn_cast<DoubleAttribute>()) {
-    os << "(Double)" << d.data();
+    os << d.data();
   } else if (auto i = attr.dyn_cast<Int32Attribute>()) {
-    os << "(Int32)" << i.data();
+    os << i.data();
   } else if (auto i = attr.dyn_cast<Int64Attribute>()) {
-    os << "(Int64)" << i.data();
+    os << i.data();
   } else if (auto i = attr.dyn_cast<IndexAttribute>()) {
-    os << "(Index)" << i.data();
+    os << i.data();
   } else if (auto p = attr.dyn_cast<PointerAttribute>()) {
-    os << "(Pointer)" << p.data();
+    os << p.data();
   } else if (auto p = attr.dyn_cast<Complex64Attribute>()) {
-    os << "(Complex64)" << p.data();
+    os << p.data();
   } else if (auto p = attr.dyn_cast<Complex128Attribute>()) {
-    os << "(Complex128)" << p.data();
+    os << p.data();
   } else if (auto arr = attr.dyn_cast<ArrayAttribute>()) {
     const auto& vec = arr.AsVector();
     os << "[";
@@ -169,10 +172,10 @@ void IrPrinter::PrintProgram(const Program* program) {
   }
 }
 
-void IrPrinter::PrintOperation(Operation* op) {
+void IrPrinter::PrintOperation(const Operation& op) {
   os << indentation();
 
-  if (auto* dialect = op->dialect()) {
+  if (auto* dialect = op.dialect()) {
     if (auto print_fn = dialect->PrintOperation(op)) {
       print_fn(op, *this);
       return;
@@ -182,16 +185,13 @@ void IrPrinter::PrintOperation(Operation* op) {
   PrintGeneralOperation(op);
 }
 
-void IrPrinter::PrintOperationWithNoRegion(Operation* op) {
+void IrPrinter::PrintOperationWithNoRegion(const Operation& op) {
   // TODO(lyk): add API to get opresults directly
   PrintOpResult(op);
-  os << " =";
+  os << " = ";
+  PrintOpName(op);
 
-  os << " \"" << op->name() << "\"";
-
-  if (FLAGS_pir_debug) {
-    os << " [id:" << op->id() << "]";
-  }
+  PrintOpId(op);
 
   // TODO(lyk): add API to get operands directly
   PrintOpOperands(op);
@@ -207,13 +207,13 @@ void IrPrinter::PrintOperationWithNoRegion(Operation* op) {
   PrintOpReturnType(op);
 }
 
-void IrPrinter::PrintGeneralOperation(Operation* op) {
+void IrPrinter::PrintGeneralOperation(const Operation& op) {
   PrintOperationWithNoRegion(op);
-  if (op->num_regions() > 0) {
+  if (op.num_regions() > 0) {
     os << newline;
   }
-  for (size_t i = 0; i < op->num_regions(); ++i) {
-    auto& region = op->region(i);
+  for (size_t i = 0; i < op.num_regions(); ++i) {
+    auto& region = op.region(i);
     PrintRegion(region);
   }
 }
@@ -228,17 +228,17 @@ void IrPrinter::PrintBlock(const Block& block) {
   os << indentation() << "{\n";
   AddIndentation();
   if (!block.kwargs_empty()) {
-    os << indentation() << "^kw:";
-    auto cur = block.kwargs_begin(), end = block.kwargs_end();
-    PrintValue(cur->second);
-    while (++cur != end) {
-      os << ", ";
-      PrintValue(cur->second);
+    os << indentation() << "^kw:\n";
+    AddIndentation();
+    for (auto iter = block.kwargs_begin(); iter != block.kwargs_end(); ++iter) {
+      os << indentation();
+      PrintValue(iter->second);
+      os << "\n";
     }
-    os << "\n";
+    DecreaseIndentation();
   }
   for (auto& item : block) {
-    PrintOperation(&item);
+    PrintOperation(item);
     os << "\n";
   }
   DecreaseIndentation();
@@ -267,16 +267,29 @@ void IrPrinter::PrintValue(Value v) {
                arg.is_kwarg()
                    ? "%kwarg_" + arg.keyword()
                    : "%arg_" + std::to_string(cur_block_argument_number_++));
+    auto& arg_attributes = arg.attributes();
+    os << " {";
+    pir::detail::PrintInterleave(
+        arg_attributes.begin(),
+        arg_attributes.end(),
+        [this](std::pair<std::string, Attribute> it) {
+          this->os << it.first;
+          this->os << ":";
+          this->PrintAttribute(it.second);
+        },
+        [this]() { this->os << ","; });
+
+    os << "}";
   }
 }
 
-void IrPrinter::PrintOpResult(Operation* op) {
+void IrPrinter::PrintOpResult(const Operation& op) {
   os << "(";
-  auto num_op_result = op->num_results();
+  auto num_op_result = op.num_results();
   std::vector<Value> op_results;
   op_results.reserve(num_op_result);
   for (size_t idx = 0; idx < num_op_result; idx++) {
-    op_results.push_back(op->result(idx));
+    op_results.push_back(op.result(idx));
   }
   pir::detail::PrintInterleave(
       op_results.begin(),
@@ -286,13 +299,35 @@ void IrPrinter::PrintOpResult(Operation* op) {
   os << ")";
 }
 
-void IrPrinter::PrintAttributeMap(Operation* op) {
-  AttributeMap attributes = op->attributes();
+std::vector<std::string> ParseFlagsToDisable(std::string Flag) {
+  std::vector<std::string> attrs_to_disable;
+  std::istringstream iss(Flag);
+  std::string attr;
+  while (std::getline(iss, attr, ';')) {
+    attrs_to_disable.push_back(attr);
+  }
+  return attrs_to_disable;
+}
+
+void IrPrinter::PrintAttributeMap(const Operation& op) {
+  AttributeMap attributes = op.attributes();
   std::map<std::string, Attribute, std::less<>> order_attributes(
       attributes.begin(), attributes.end());
 
   // Filter out the callstack attribute
   order_attributes.erase("op_callstack");
+  order_attributes.erase("sym_shape_str");
+
+  if (!FLAGS_disable_logging_op_attr_list.empty()) {
+    std::vector<std::string> attrs_to_disable =
+        ParseFlagsToDisable(FLAGS_disable_logging_op_attr_list);
+    // Remove the specified attributes if they exist in order_attributes
+    for (const auto& attr : attrs_to_disable) {
+      if (order_attributes.count(attr) > 0) {
+        order_attributes.erase(attr);
+      }
+    }
+  }
 
   os << " {";
 
@@ -309,13 +344,22 @@ void IrPrinter::PrintAttributeMap(Operation* op) {
   os << "}";
 }
 
-void IrPrinter::PrintOpOperands(Operation* op) {
+void IrPrinter::PrintOpName(const Operation& op) {
+  os << "\"" << op.name() << "\"";
+}
+void IrPrinter::PrintOpId(const Operation& op) {
+  if (VLOG_IS_ON(1) || FLAGS_print_ir) {
+    os << " [id:" << op.id() << "]";
+  }
+}
+
+void IrPrinter::PrintOpOperands(const Operation& op) {
   os << " (";
-  auto num_op_operands = op->num_operands();
+  auto num_op_operands = op.num_operands();
   std::vector<Value> op_operands;
   op_operands.reserve(num_op_operands);
   for (size_t idx = 0; idx < num_op_operands; idx++) {
-    op_operands.push_back(op->operand_source(idx));
+    op_operands.push_back(op.operand_source(idx));
   }
   pir::detail::PrintInterleave(
       op_operands.begin(),
@@ -325,12 +369,12 @@ void IrPrinter::PrintOpOperands(Operation* op) {
   os << ")";
 }
 
-void IrPrinter::PrintOperandsType(Operation* op) {
-  auto num_op_operands = op->num_operands();
+void IrPrinter::PrintOperandsType(const Operation& op) {
+  auto num_op_operands = op.num_operands();
   std::vector<Type> op_operand_types;
   op_operand_types.reserve(num_op_operands);
   for (size_t idx = 0; idx < num_op_operands; idx++) {
-    auto op_operand = op->operand(idx);
+    auto op_operand = op.operand(idx);
     if (op_operand) {
       op_operand_types.push_back(op_operand.type());
     } else {
@@ -346,12 +390,12 @@ void IrPrinter::PrintOperandsType(Operation* op) {
   os << ")";
 }
 
-void IrPrinter::PrintOpReturnType(Operation* op) {
-  auto num_op_result = op->num_results();
+void IrPrinter::PrintOpReturnType(const Operation& op) {
+  auto num_op_result = op.num_results();
   std::vector<Type> op_result_types;
   op_result_types.reserve(num_op_result);
   for (size_t idx = 0; idx < num_op_result; idx++) {
-    auto op_result = op->result(idx);
+    auto op_result = op.result(idx);
     if (op_result) {
       op_result_types.push_back(op_result.type());
     } else {
@@ -367,10 +411,9 @@ void IrPrinter::PrintOpReturnType(Operation* op) {
 
 void IrPrinter::AddValueAlias(Value v, const std::string& alias) {
   const void* key = v.impl();
-  PADDLE_ENFORCE_EQ(aliases_.find(key),
-                    aliases_.end(),
-                    phi::errors::InvalidArgument("Value already has alias"));
-  aliases_[key] = alias;
+  if (aliases_.find(key) == aliases_.end()) {
+    aliases_[key] = alias;
+  }
 }
 
 class CustomPrinter : public IrPrinter {
@@ -394,7 +437,7 @@ class CustomPrinter : public IrPrinter {
     }
   }
 
-  void PrintOperation(Operation* op) override {
+  void PrintOperation(const Operation& op) override {
     if (hooks_.op_print_hook) {
       hooks_.op_print_hook(op, *this);
     } else {
@@ -425,9 +468,9 @@ void Program::Print(std::ostream& os) const {
   printer.PrintProgram(this);
 }
 
-void Operation::Print(std::ostream& os) {
+void Operation::Print(std::ostream& os) const {
   IrPrinter printer(os);
-  printer.PrintOperation(this);
+  printer.PrintOperation(*this);
 }
 
 void Value::Print(std::ostream& os) const {
@@ -452,6 +495,12 @@ std::ostream& operator<<(std::ostream& os, Type type) {
 
 std::ostream& operator<<(std::ostream& os, Attribute attr) {
   attr.Print(os);
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const Block& block) {
+  IrPrinter printer(os);
+  printer.PrintBlock(block);
   return os;
 }
 

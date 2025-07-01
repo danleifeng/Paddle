@@ -23,9 +23,7 @@
 #include "paddle/fluid/framework/ir/node.h"
 #include "paddle/phi/common/data_type.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 namespace {
 template <typename InType, typename OutType>
@@ -50,7 +48,7 @@ void CastDataTypeInplace(phi::DenseTensor *tensor) {
 void TrtRemoveAMPStrategyOpPass::ApplyImpl(Graph *graph) const {
   PADDLE_ENFORCE_NOT_NULL(
       graph,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "During the trt_remove_strategy_op_pass, the graph "
           "should not be null."));
   FusePassBase::Init("trt_remove_strategy_op_pass", graph);
@@ -62,7 +60,12 @@ void TrtRemoveAMPStrategyOpPass::ApplyImpl(Graph *graph) const {
   std::unordered_set<ir::Node *> fp16_vars;
   std::unordered_set<ir::Node *> cast_ops;
   for (auto *op_node : op_nodes) {
-    CHECK_EQ(op_node->IsOp(), true);
+    PADDLE_ENFORCE_EQ(
+        op_node->IsOp(),
+        true,
+        common::errors::InvalidArgument(
+            "The 'op_node' must be an operator node, but it is not."));
+
     auto *op_desc = op_node->Op();
     if (op_desc->Type() == "cast") {
       auto input_dtype = op_node->inputs[0]->Var()->GetDataType();
@@ -143,15 +146,13 @@ void TrtRemoveAMPStrategyOpPass::ApplyImpl(Graph *graph) const {
       auto output_dtype = op_node->outputs[0]->Var()->GetDataType();
       if ((input_dtype == DataType::FP32 && output_dtype == DataType::FP16) ||
           (input_dtype == DataType::FP16 && output_dtype == DataType::FP32)) {
-        PADDLE_THROW(
-            phi::errors::Fatal("There are cast OPs remaining in the graph."));
+        PADDLE_THROW(common::errors::Fatal(
+            "There are cast OPs remaining in the graph."));
       }
     }
   }
 }
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(trt_remove_amp_strategy_op_pass,
               paddle::framework::ir::TrtRemoveAMPStrategyOpPass);

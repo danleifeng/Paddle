@@ -30,14 +30,13 @@
 #include "paddle/fluid/imperative/layer.h"
 #include "paddle/fluid/imperative/op_base.h"
 #include "paddle/fluid/imperative/tracer.h"
-#include "paddle/fluid/platform/profiler.h"
+#include "paddle/phi/core/platform/profiler.h"
 #include "paddle/phi/kernels/autotune/switch_autotune.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
 COMMON_DECLARE_bool(sort_sum_gradient);
 
-namespace paddle {
-namespace imperative {
+namespace paddle::imperative {
 
 void BasicEngine::Init(
     const std::vector<std::shared_ptr<VarBase>>& tensors,
@@ -48,7 +47,7 @@ void BasicEngine::Init(
   PADDLE_ENFORCE_EQ(
       tensors.size(),
       grad_tensors.size(),
-      phi::errors::Unavailable(
+      common::errors::Unavailable(
           "The size of tensors do not equal the size of grad_tensors,"
           "the size of tensors is %s, but the size of grad_tensors is %s.",
           tensors.size(),
@@ -56,12 +55,12 @@ void BasicEngine::Init(
 
   PADDLE_ENFORCE_EQ(accumulators_.empty(),
                     true,
-                    phi::errors::AlreadyExists(
+                    common::errors::AlreadyExists(
                         "Accumulators are not empty before preparing it for "
                         "backward network execution."));
   PADDLE_ENFORCE_EQ(accumulators_with_grad_node_.empty(),
                     true,
-                    phi::errors::AlreadyExists(
+                    common::errors::AlreadyExists(
                         "Accumulators with grad_node as the key are not empty "
                         "before preparing it for backward network execution."));
 
@@ -74,7 +73,7 @@ void BasicEngine::Init(
     PADDLE_ENFORCE_EQ(
         var->GradVarBase()->GraphIsFreed(),
         false,
-        phi::errors::Unavailable(
+        common::errors::Unavailable(
             "%s trying to backward through the same graph a second "
             "time, but this graph have already been freed. Please "
             "specify Tensor.backward(retain_graph=True) when "
@@ -99,7 +98,7 @@ void BasicEngine::Init(
     PADDLE_ENFORCE_EQ(
         var->HasGradVar(),
         true,
-        phi::errors::NotFound("Tensor %s has no gradient", var->Name()));
+        common::errors::NotFound("Tensor %s has no gradient", var->Name()));
 
     auto& fwd_var = var->Var().Get<phi::DenseTensor>();
     auto* grad_var =
@@ -162,8 +161,8 @@ void BasicEngine::CheckBackwardInputs(const OpBase& op) {
         // correct. var->DataType() returns the default dtype, which is float32.
         // Here, we use the type of the corresponding forward datatype.
 
-        tensor->mutable_data(
-            op.place(), framework::TransToPhiDataType(var->ForwardDataType()));
+        tensor->mutable_data(op.place(),
+                             phi::TransToPhiDataType(var->ForwardDataType()));
         VLOG(6) << "Set ungenerated Grad: " << var->Name()
                 << " as zero with dtype "
                 << framework::DataTypeToString(var->ForwardDataType());
@@ -192,7 +191,7 @@ void BasicEngine::PrepareGradAccumulators(
         for (auto& grad_pending_node : grad_pending_nodes) {
           PADDLE_ENFORCE_NOT_NULL(
               grad_pending_node,
-              phi::errors::NotFound("Grad pending node is nullptr."));
+              common::errors::NotFound("Grad pending node is nullptr."));
           for (auto& grad_pending_op : *grad_pending_node) {
             VLOG(6) << "Determine whether var (" << var->Name()
                     << ") is the input var of grad_pending_op ("
@@ -279,8 +278,8 @@ void BasicEngine::PrepareDeps() {
   PADDLE_ENFORCE_EQ(
       node_deps_.empty(),
       true,
-      phi::errors::AlreadyExists("Op deps are not empty before preparing "
-                                 "it for backward network execution."));
+      common::errors::AlreadyExists("Op deps are not empty before preparing "
+                                    "it for backward network execution."));
 
   std::queue<GradOpNode*> q;
   std::unordered_set<GradOpNode*> visited;
@@ -304,7 +303,7 @@ void BasicEngine::PrepareDeps() {
     for (auto& grad_pending_node : grad_pending_nodes) {
       PADDLE_ENFORCE_NOT_NULL(
           grad_pending_node,
-          phi::errors::NotFound("Grad pending node is nullptr."));
+          common::errors::NotFound("Grad pending node is nullptr."));
       ++node_deps_[grad_pending_node.get()];
       if (visited.count(grad_pending_node.get()) == 0) {
         visited.insert(grad_pending_node.get());
@@ -383,7 +382,7 @@ static void PerformBackwardInplace(const std::string& op_type,
         if (p.first == pair.second) {
           if (!p.second.empty() && p.second[0]) {
             auto& out_var = p.second[0];
-            if (out_var->Type() == framework::proto::VarType::LOD_TENSOR) {
+            if (out_var->Type() == framework::proto::VarType::DENSE_TENSOR) {
               out_tensor =
                   out_var->MutableVar()->GetMutable<phi::DenseTensor>();
             }
@@ -402,8 +401,8 @@ static void PerformBackwardInplace(const std::string& op_type,
 }
 
 void BasicEngine::Execute() {
-  platform::RecordEvent backward_record_event(
-      "backward", platform::TracerEventType::UserDefined, 1);
+  phi::RecordEvent backward_record_event(
+      "backward", phi::TracerEventType::UserDefined, 1);
 
   if (init_nodes_.empty()) {
     return;
@@ -427,8 +426,8 @@ void BasicEngine::Execute() {
     auto& inplace_grad_name_map = shared_cur_node->InplaceGradNameMap();
 
     for (auto& cur_op : *shared_cur_node) {
-      platform::RecordEvent op_type_record_event(
-          cur_op.Type() + " grad_node", platform::TracerEventType::Operator, 1);
+      phi::RecordEvent op_type_record_event(
+          cur_op.Type() + " grad_node", phi::TracerEventType::Operator, 1);
 
       ++op_num;
 
@@ -489,8 +488,8 @@ void BasicEngine::Execute() {
             PADDLE_ENFORCE_EQ(
                 iter != accumulators_.end(),
                 true,
-                phi::errors::NotFound("Cannot find gradient of variable %s",
-                                      var->Name()));
+                common::errors::NotFound("Cannot find gradient of variable %s",
+                                         var->Name()));
           }
 
           // leaf_accumulators_ : hooks and accumulate-grad for leaf tensor,
@@ -549,7 +548,7 @@ void BasicEngine::Execute() {
           PADDLE_ENFORCE_EQ(
               tensor_version,
               wrapper_version_snapshot,
-              phi::errors::PermissionDenied(
+              common::errors::PermissionDenied(
                   "Tensor '%s' used in gradient computation in grad op '%s' "
                   "has been "
                   "modified by an inplace operation. "
@@ -607,7 +606,7 @@ void BasicEngine::Execute() {
           throw exception;
         } catch (std::exception& ex) {
           Clear();
-          PADDLE_THROW(phi::errors::External("%s", ex.what()));
+          PADDLE_THROW(common::errors::External("%s", ex.what()));
         }
       }
 
@@ -656,7 +655,7 @@ void BasicEngine::Execute() {
     for (auto& grad_pending_node : shared_cur_node->GradPendingNodes()) {
       PADDLE_ENFORCE_NOT_NULL(
           grad_pending_node,
-          phi::errors::NotFound("Grad pending node is nullptr."));
+          common::errors::NotFound("Grad pending node is nullptr."));
       auto iter = node_deps_.find(grad_pending_node.get());
       if (iter == node_deps_.end()) {
         continue;
@@ -683,5 +682,4 @@ void BasicEngine::Clear() {
   leaf_accumulators_.clear();
 }
 
-}  // namespace imperative
-}  // namespace paddle
+}  // namespace paddle::imperative

@@ -20,9 +20,7 @@
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 static void GetTransposeAttrsFromOp(const OpDesc &op,
                                     bool *trans_x,
@@ -48,7 +46,7 @@ void FuseGemmEpiloguePass::ApplyImpl(ir::Graph *graph) const {
 ir::Graph *FuseGemmEpiloguePass::FuseLinearFwd(ir::Graph *graph,
                                                bool is_training) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   const std::string scope_name("gemm_epilogue");
   FusePassBase::Init(scope_name, graph);
 
@@ -78,7 +76,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearFwd(ir::Graph *graph,
     std::vector<int64_t> matmul_w_shape = matmul_w->Var()->GetShape();
 
     // Note (Ming Huang): We only support matmul_v2 from paddle.nn.Linear
-    // currently. The conditions below are used to verify wether matmul_v2
+    // currently. The conditions below are used to verify whether matmul_v2
     // is created by paddle.nn.Linear
     auto matmul_op_desc = matmul_op->Op();
     if (!IsGemmFromLinear_(matmul_x_shape, matmul_w_shape)) return;
@@ -128,7 +126,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearActFwd(
     bool is_act_grad_x_from_act,
     EpiloguePassActivationCache *cache) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
 
   const std::string scope_name("gemm_epilogue");
   FusePassBase::Init(scope_name, graph);
@@ -161,7 +159,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearActFwd(
     std::vector<int64_t> matmul_w_shape = matmul_w->Var()->GetShape();
 
     // Note (Ming Huang): We only support matmul_v2 from paddle.nn.Linear
-    // currently. The conditions below are used to verify wether matmul_v2
+    // currently. The conditions below are used to verify whether matmul_v2
     // is created by paddle.nn.Linear
     auto matmul_op_desc = matmul_op->Op();
     if (!IsGemmFromLinear_(matmul_x_shape, matmul_w_shape)) return;
@@ -237,7 +235,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearActFwd(
 ir::Graph *FuseGemmEpiloguePass::FuseLinearBwd(ir::Graph *graph,
                                                bool without_x_gradient) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   const std::string scope_name("gemm_epilogue");
   FusePassBase::Init(scope_name, graph);
 
@@ -286,7 +284,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearBwd(ir::Graph *graph,
     std::vector<int64_t> matmul_grad_w_shape = matmul_grad_w->Var()->GetShape();
 
     // Note (Ming Huang): We only support matmul_v2_grad from paddle.nn.Linear
-    // currently. The conditions below are used to verify wether matmul_v2
+    // currently. The conditions below are used to verify whether matmul_v2
     // is created by paddle.nn.Linear
     auto matmul_grad_op_desc = matmul_grad_op->Op();
     if (!IsGemmFromLinear_(matmul_grad_x_shape, matmul_grad_w_shape)) return;
@@ -369,7 +367,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearActBwd(
     bool is_act_grad_x_from_act,
     EpiloguePassActivationCache *cache) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   const std::string scope_name("gemm_epilogue");
   FusePassBase::Init(scope_name, graph);
 
@@ -425,7 +423,7 @@ ir::Graph *FuseGemmEpiloguePass::FuseLinearActBwd(
     std::vector<int64_t> matmul_grad_w_shape = matmul_grad_w->Var()->GetShape();
 
     // Note (Ming Huang): We only support matmul_v2_grad from paddle.nn.Linear
-    // currently. The conditions below are used to verify wether matmul_v2
+    // currently. The conditions below are used to verify whether matmul_v2
     // is created by paddle.nn.Linear
     auto matmul_grad_op_desc = matmul_grad_op->Op();
     if (!IsGemmFromLinear_(matmul_grad_x_shape, matmul_grad_w_shape)) return;
@@ -511,9 +509,7 @@ bool FuseGemmEpiloguePass::IsGemmFromLinear_(
   return (w_shape.size() == 2 && x_shape.size() >= 2);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fuse_gemm_epilogue_pass,
               paddle::framework::ir::FuseGemmEpiloguePass);

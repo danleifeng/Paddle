@@ -33,9 +33,9 @@
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable.h"
-#include "paddle/fluid/memory/allocation/spin_lock.h"
-#include "paddle/fluid/platform/device_event.h"
 #include "paddle/phi/backends/device_manager.h"
+#include "paddle/phi/core/memory/allocation/spin_lock.h"
+#include "paddle/phi/core/platform/device_event.h"
 
 COMMON_DECLARE_bool(new_executor_serial_run);
 PD_DECLARE_bool(new_executor_static_build);
@@ -119,6 +119,8 @@ class InterpreterBaseImpl {
 
   virtual std::tuple<double, double> InterpreterRunTime() = 0;
 
+  virtual void SetCUDAGraphState(uint8_t cuda_graph_state) = 0;
+
   // Only for debug
   virtual Variable* DebugVar(const std::string& name) const = 0;
 };
@@ -127,7 +129,7 @@ inline void SetDeviceId(const phi::Place& place) {
   // TODO(zhiqiu): reduce the cost
   if (phi::is_gpu_place(place)) {
 #if !defined(PADDLE_WITH_CUDA) && !defined(PADDLE_WITH_HIP)
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Cannot run operator on place %s, please recompile paddle or "
         "reinstall Paddle with CUDA support.",
         place));
@@ -137,7 +139,7 @@ inline void SetDeviceId(const phi::Place& place) {
 #endif
   } else if (phi::is_xpu_place(place)) {
 #ifndef PADDLE_WITH_XPU
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Cannot run operator on place %s, please recompile paddle or "
         "reinstall Paddle with XPU support.",
         place));
@@ -147,7 +149,7 @@ inline void SetDeviceId(const phi::Place& place) {
 #endif
   } else if (phi::is_custom_place(place)) {
 #ifndef PADDLE_WITH_CUSTOM_DEVICE
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Cannot run operator on place %s, please recompile paddle or "
         "reinstall Paddle with CustomDevice support.",
         place));

@@ -33,11 +33,7 @@ class CustomPluginCreater : public OpConverter {
 
     std::string plugin_name;
 
-    if (engine_->with_dynamic_shape()) {
-      plugin_name = op_desc.Type() + "_paddle_trt_dynamic_plugin";
-    } else {
-      plugin_name = op_desc.Type() + "_paddle_trt_plugin";
-    }
+    plugin_name = op_desc.Type() + "_paddle_trt_dynamic_plugin";
 
     nvinfer1::ILayer *layer = nullptr;
     std::vector<nvinfer1::ITensor *> inputs;
@@ -55,7 +51,9 @@ class CustomPluginCreater : public OpConverter {
     }
     auto creator =
         GetPluginRegistry()->getPluginCreator(plugin_name.c_str(), "1");
-    CHECK(creator);
+    PADDLE_ENFORCE_NOT_NULL(creator,
+                            common::errors::PreconditionNotMet(
+                                "The op's plugin should be PluginV2."));
 
     // set attrs
     std::vector<nvinfer1::PluginField> plugin_datas;
@@ -64,7 +62,7 @@ class CustomPluginCreater : public OpConverter {
 
     std::list<int> int_attrs;
     std::list<float> float_attrs;
-    std::list<double> bool_attrs;
+    std::list<double> double_attrs;
     std::list<std::string> string_attrs;
     std::list<std::vector<int>> ints_attrs;
     std::list<std::vector<float>> floats_attrs;
@@ -106,7 +104,7 @@ class CustomPluginCreater : public OpConverter {
         plugin_data.data = string_attrs.back().data();
         plugin_data.type = nvinfer1::PluginFieldType::kCHAR;
         plugin_data.length =
-            string_attrs.back().size() + 1;  // string ends with ‘\0’
+            string_attrs.back().size() + 1;  // string ends with '\0'
       } else if (op_desc.GetAttrType(attr_name) ==
                  framework::proto::AttrType::INTS) {
         ints_attrs.push_back(
@@ -132,7 +130,8 @@ class CustomPluginCreater : public OpConverter {
         plugin_data.type = nvinfer1::PluginFieldType::kINT32;
         plugin_data.length = ints_attrs.back().size();
       } else {
-        CHECK(false) << "UNKNOWN PluginFieldType.";
+        PADDLE_THROW(
+            common::errors::PreconditionNotMet("UNKNOWN PluginFieldType."));
       }
       plugin_datas.push_back(plugin_data);
     }
@@ -141,20 +140,14 @@ class CustomPluginCreater : public OpConverter {
                                               plugin_datas.data()};
 
     auto *plugin = creator->createPlugin(op_desc.Type().c_str(), &plugin_fc);
-    CHECK(plugin);
+    PADDLE_ENFORCE_NOT_NULL(
+        plugin, common::errors::NotFound("Sorry,create plugin failed."));
 
-    if (engine_->with_dynamic_shape()) {
-      layer =
-          engine_->AddDynamicPlugin(inputs.data(),
-                                    inputs.size(),
-                                    (plugin::DynamicPluginTensorRT *)plugin);
-    } else {
-      layer = engine_->AddPlugin(
-          inputs.data(), inputs.size(), (plugin::PluginTensorRT *)plugin);
-    }
+    layer = engine_->AddDynamicPlugin(
+        inputs.data(), inputs.size(), (plugin::DynamicPluginTensorRT *)plugin);
 
-    CHECK(layer);
-
+    PADDLE_ENFORCE_NOT_NULL(
+        layer, common::errors::NotFound("Sorry, add plugin layer failed."));
     // set outputs
     auto &op_output_names = OpMetaInfoHelper::GetOutputs(op_info);
     std::vector<std::string> output_names;
@@ -167,7 +160,7 @@ class CustomPluginCreater : public OpConverter {
   }
 };
 
-class GenericPluginCreater : public OpConverter {
+class GenericPluginCreator : public OpConverter {
  public:
   void operator()(const framework::proto::OpDesc &op,
                   const framework::Scope &scope,
@@ -175,7 +168,9 @@ class GenericPluginCreater : public OpConverter {
     framework::OpDesc op_desc(op, nullptr);
     VLOG(3) << "convert " << op_desc.Type() << " op to generic plugin layer";
 
-    CHECK(block_);
+    PADDLE_ENFORCE_NOT_NULL(
+        block_,
+        common::errors::NotFound("The block is null, can not find the block."));
     const framework::BlockDesc block_desc(
         nullptr, const_cast<framework::proto::BlockDesc *>(block_));
 
@@ -197,7 +192,7 @@ class GenericPluginCreater : public OpConverter {
         phi_kernel_signature.input_names.empty() ||
             phi_kernel_signature.output_names.empty(),
         false,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The %s op's kernel signature (inputs and output) should not null.",
             op_desc.Type()));
 
@@ -212,13 +207,13 @@ class GenericPluginCreater : public OpConverter {
         auto *var = block_desc.FindVar(arg_name);
         PADDLE_ENFORCE_NOT_NULL(
             var,
-            phi::errors::NotFound("There is no variable called %s in block.",
-                                  arg_name.c_str()));
+            common::errors::NotFound("There is no variable called %s in block.",
+                                     arg_name.c_str()));
         PADDLE_ENFORCE_EQ(
             var->GetType(),
-            FluidDT::VarType_Type_LOD_TENSOR,
-            phi::errors::InvalidArgument("TensorRT engine only takes "
-                                         "LoDTensor as input"));
+            FluidDT::VarType_Type_DENSE_TENSOR,
+            common::errors::InvalidArgument("TensorRT engine only takes "
+                                            "DenseTensor as input"));
         in_out_info.inputs_data_type.push_back(
             ProtoTypeToGeneratePluginDataType(var->GetDataType()));
       }
@@ -231,13 +226,13 @@ class GenericPluginCreater : public OpConverter {
         auto *var = block_desc.FindVar(arg_name);
         PADDLE_ENFORCE_NOT_NULL(
             var,
-            phi::errors::NotFound("There is no variable called %s in block.",
-                                  arg_name.c_str()));
+            common::errors::NotFound("There is no variable called %s in block.",
+                                     arg_name.c_str()));
         PADDLE_ENFORCE_EQ(
             var->GetType(),
-            FluidDT::VarType_Type_LOD_TENSOR,
-            phi::errors::InvalidArgument("TensorRT engine only takes "
-                                         "LoDTensor as input"));
+            FluidDT::VarType_Type_DENSE_TENSOR,
+            common::errors::InvalidArgument("TensorRT engine only takes "
+                                            "DenseTensor as input"));
         in_out_info.outputs_data_type.push_back(
             ProtoTypeToGeneratePluginDataType(var->GetDataType()));
       }
@@ -250,7 +245,7 @@ class GenericPluginCreater : public OpConverter {
   }
 };
 
-class CustomGenericPluginCreater : public OpConverter {
+class CustomGenericPluginCreator : public OpConverter {
  public:
   void operator()(const framework::proto::OpDesc &op,
                   const framework::Scope &scope,
@@ -261,8 +256,9 @@ class CustomGenericPluginCreater : public OpConverter {
 
     nvinfer1::ILayer *layer = nullptr;
     std::vector<nvinfer1::ITensor *> inputs;
-
-    CHECK(block_);
+    PADDLE_ENFORCE_NOT_NULL(
+        block_,
+        common::errors::NotFound("The block is null, can not find the block."));
     const framework::BlockDesc block_desc(
         nullptr, const_cast<framework::proto::BlockDesc *>(block_));
 
@@ -288,13 +284,13 @@ class CustomGenericPluginCreater : public OpConverter {
         auto *var = block_desc.FindVar(arg_name);
         PADDLE_ENFORCE_NOT_NULL(
             var,
-            phi::errors::NotFound("There is no variable called %s in block.",
-                                  arg_name.c_str()));
+            common::errors::NotFound("There is no variable called %s in block.",
+                                     arg_name.c_str()));
         PADDLE_ENFORCE_EQ(
             var->GetType(),
-            FluidDT::VarType_Type_LOD_TENSOR,
-            phi::errors::InvalidArgument("TensorRT engine only takes "
-                                         "LoDTensor as input"));
+            FluidDT::VarType_Type_DENSE_TENSOR,
+            common::errors::InvalidArgument("TensorRT engine only takes "
+                                            "DenseTensor as input"));
         in_out_info.inputs_data_type.push_back(
             ProtoTypeToGenerateCustomGenericPluginDataType(var->GetDataType()));
       }
@@ -313,32 +309,33 @@ class CustomGenericPluginCreater : public OpConverter {
         auto *var = block_desc.FindVar(arg_name);
         PADDLE_ENFORCE_NOT_NULL(
             var,
-            phi::errors::NotFound("There is no variable called %s in block.",
-                                  arg_name.c_str()));
+            common::errors::NotFound("There is no variable called %s in block.",
+                                     arg_name.c_str()));
         PADDLE_ENFORCE_EQ(
             var->GetType(),
-            FluidDT::VarType_Type_LOD_TENSOR,
-            phi::errors::InvalidArgument("TensorRT engine only takes "
-                                         "LoDTensor as input"));
+            FluidDT::VarType_Type_DENSE_TENSOR,
+            common::errors::InvalidArgument("TensorRT engine only takes "
+                                            "DenseTensor as input"));
         in_out_info.outputs_data_type.push_back(
             ProtoTypeToGenerateCustomGenericPluginDataType(var->GetDataType()));
       }
     }
 
     auto *plugin = new plugin::CustomGenericPlugin(op, in_out_info, with_fp16);
-    CHECK(plugin);
-
+    PADDLE_ENFORCE_NOT_NULL(
+        plugin, common::errors::NotFound("Sorry,create plugin failed."));
     layer = engine_->AddDynamicPlugin(
         inputs.data(), inputs.size(), (plugin::DynamicPluginTensorRT *)plugin);
-    CHECK(layer);
-
+    PADDLE_ENFORCE_NOT_NULL(
+        layer, common::errors::NotFound("Sorry,add plugin layer failed."));
     ReplenishLayerAndOutput(layer, op_desc.Type(), outputs, test_mode);
   }
 };
 
 }  // namespace paddle::inference::tensorrt
 
-REGISTER_TRT_OP_CONVERTER(custom_plugin_creater, CustomPluginCreater);
-REGISTER_TRT_OP_CONVERTER(generic_plugin_creater, GenericPluginCreater);
-REGISTER_TRT_OP_CONVERTER(custom_generic_plugin_creater,
-                          CustomGenericPluginCreater);
+REGISTER_TRT_OP_CONVERTER(custom_plugin_creater,
+                          CustomPluginCreater);  // typos: disable-line
+REGISTER_TRT_OP_CONVERTER(generic_plugin_creator, GenericPluginCreator);
+REGISTER_TRT_OP_CONVERTER(custom_generic_plugin_creator,
+                          CustomGenericPluginCreator);

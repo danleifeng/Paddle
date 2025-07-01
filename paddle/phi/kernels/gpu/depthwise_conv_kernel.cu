@@ -54,7 +54,7 @@ void DepthwiseConvKernel(const Context& dev_ctx,
         output->dims()[output->dims().size() - 1] %
             input.dims()[input.dims().size() - 1],
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "ShapeError: The output channels must be a multiple of the "
             "input channels. But receivced output channel number is %d "
             "and input channel number is %d",
@@ -64,13 +64,32 @@ void DepthwiseConvKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         output->dims()[1] % input.dims()[1],
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "ShapeError: The output channels must be a multiple of the "
             "input channels. But receivced output channel number is %d "
             "and input channel number is %d",
             output->dims()[1],
             input.dims()[1]));
   }
+
+// Enable if cudnn above 8.2, hip already has cudnn kernel.
+#if defined(CUDNN_VERSION) && CUDNN_VERSION_MIN(8, 2, 0) && \
+    !defined(PADDLE_WITH_HIP)
+  DWConvParams params(has_fuse_relu, data_format, strides, dilations);
+  if (params.UseCudnnDepthwise<Context>(dev_ctx, input, filter)) {
+    phi::DepthwiseConvCudnnKernel<T>(dev_ctx,
+                                     input,
+                                     filter,
+                                     strides_t,
+                                     paddings_t,
+                                     padding_algorithm,
+                                     groups,
+                                     dilations_t,
+                                     data_format,
+                                     out);
+    return;
+  }
+#endif
 
   // update padding and dilation
   auto in_dims = input.dims();

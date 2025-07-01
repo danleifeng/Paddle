@@ -69,8 +69,14 @@ class DownpourPsClientService : public PsService {
                          ::google::protobuf::Closure *done) {
     brpc::ClosureGuard done_guard(done);
     size_t client_id = request->client_id();
-    CHECK(_client->_client_id == client_id)
-        << "request client id not matched self";
+    PADDLE_ENFORCE_EQ(
+        client_id,
+        (_client->_client_id),
+        common::errors::PreconditionNotMet(
+            "Wrong request client's id. Expect to match self. But received "
+            "request client's id = %lu and self = %lu.",
+            client_id,
+            (_client->_client_id)));
     _fl_strategy = request->str_params();
     _is_fl_strategy_ready = true;
     response->set_err_code(0);
@@ -267,7 +273,9 @@ class BrpcPsClient : public PSClient {
                                                size_t num,
                                                bool is_training);
 
-  virtual std::future<int32_t> PrintTableStat(uint32_t table_id);
+  virtual std::future<int32_t> PrintTableStat(uint32_t table_id,
+                                              uint16_t pass_id,
+                                              size_t threshold);
 
   virtual std::future<int32_t> Barrier(size_t table_id, uint32_t barrier_type);
 

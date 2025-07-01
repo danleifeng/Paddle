@@ -127,6 +127,23 @@ void LUKernel(const Context& dev_ctx,
               DenseTensor* out,
               DenseTensor* pivots,
               DenseTensor* infos) {
+  // big tensor currently not supported
+  PADDLE_ENFORCE_GE(
+      x.dims().size(),
+      2,
+      ::common::errors::PreconditionNotMet(
+          "Invalid input x dimensionality: %d (expected ≥2)", x.dims().size()));
+  int64_t largest_matrix = (1LL << 31) - 1;
+  int64_t last = x.dims()[x.dims().size() - 1],
+          second_last = x.dims()[x.dims().size() - 2];
+  int64_t matrix_size = last * second_last;
+  PADDLE_ENFORCE_LE(matrix_size,
+                    largest_matrix,
+                    ::common::errors::PreconditionNotMet(
+                        "Matrix size too large for LU decomposition. Maximum "
+                        "allowed size is 2 ^ 31 - 1 elements, but got %lld",
+                        matrix_size));
+
   const int64_t kMaxBlockDim = 512;
 
   *out = Transpose2DTo6D<Context, T>(dev_ctx, x);
@@ -146,9 +163,6 @@ void LUKernel(const Context& dev_ctx,
   auto ipiv_data = pivots->data<int>();
 
   auto info_dims = common::slice_ddim(outdims, 0, outrank - 2);
-  if (info_dims.size() == 0) {
-    info_dims = common::make_ddim({1});
-  }
   infos->Resize(info_dims);
   dev_ctx.template Alloc<int>(infos);
   auto info_data = infos->data<int>();

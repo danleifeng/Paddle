@@ -24,6 +24,7 @@
 #include <fstream>
 #include <iostream>
 
+#include "paddle/cinn/backends/codegen_cuda_dev.h"
 #include "paddle/cinn/backends/cuda_util.h"
 #include "paddle/cinn/backends/nvrtc/header_generator.h"
 #include "paddle/cinn/common/common.h"
@@ -34,6 +35,7 @@ PD_DECLARE_string(cinn_nvcc_cmd_path);
 PD_DECLARE_string(nvidia_package_dir);
 PD_DECLARE_bool(nvrtc_compile_to_cubin);
 PD_DECLARE_bool(cinn_nvrtc_cubin_with_fmad);
+PD_DECLARE_string(cuda_cccl_dir);
 
 namespace cinn {
 namespace backends {
@@ -49,7 +51,8 @@ static std::vector<std::string> GetNvidiaAllIncludePath(
   std::vector<std::string> include_paths;
   const std::string delimiter = "/";
   // Expand this list if necessary.
-  const std::vector<std::string> sub_modules = {"cublas",
+  const std::vector<std::string> sub_modules = {"cuda_cccl",
+                                                "cublas",
                                                 "cudnn",
                                                 "cufft",
                                                 "cusparse",
@@ -115,7 +118,7 @@ std::vector<std::string> Compiler::FindCUDAIncludePaths() {
      << "CUDA_PATH is not set or CUDA is not installed in the default "
         "installation path."
      << "In other than linux, it is necessary to set CUDA_PATH.";
-  PADDLE_THROW(phi::errors::Fatal(ss.str()));
+  PADDLE_THROW(::common::errors::Fatal(ss.str()));
   return {cuda_include_path};
 }
 
@@ -181,15 +184,36 @@ std::string Compiler::CompileCudaSource(const std::string& code,
   nvrtcResult compile_res =
       nvrtcCompileProgram(prog, param_cstrings.size(), param_cstrings.data());
 
+  if (compile_res != NVRTC_SUCCESS) {
+    std::string new_code = code;
+    std::string from = CodeGenCudaDev::GetSourceHeader();
+    size_t pos = new_code.find(from);
+    if (pos != std::string::npos) {
+      new_code.replace(
+          pos, from.length(), CodeGenCudaDev::GetGeneralSourceHeader());
+    }
+
+    NVRTC_CALL(nvrtcCreateProgram(&prog,
+                                  new_code.c_str(),
+                                  nullptr,
+                                  header_gen.size(),
+                                  header_gen.headers().data(),
+                                  header_gen.include_names().data()));
+    compile_res =
+        nvrtcCompileProgram(prog, param_cstrings.size(), param_cstrings.data());
+  }
+
   {  // get log
     size_t log_size;
     NVRTC_CALL(nvrtcGetProgramLogSize(prog, &log_size));
     std::string log;
     log.resize(log_size);
     NVRTC_CALL(nvrtcGetProgramLog(prog, &log[0]));
-    PADDLE_ENFORCE_EQ(compile_res,
-                      NVRTC_SUCCESS,
-                      phi::errors::Fatal("NVRTC compilation failed"));
+
+    PADDLE_ENFORCE_EQ(
+        compile_res,
+        NVRTC_SUCCESS,
+        ::common::errors::Fatal("NVRTC compilation failed: %s", log));
   }
 
   size_t size;
@@ -212,7 +236,12 @@ std::string Compiler::CompileWithNvcc(const std::string& cuda_c) {
   // read dir source
   std::string dir = "./source";
   if (access(dir.c_str(), 0) == -1) {
-    CHECK(mkdir(dir.c_str(), 7) != -1) << "Fail to mkdir " << dir;
+    PADDLE_ENFORCE_NE(
+        mkdir(dir.c_str(), 7),
+        -1,
+        ::common::errors::PermissionDenied(
+            "Failed to create directory %s. Please check the permissions.",
+            dir.c_str()));
   }
 
   // get unique prefix name
@@ -220,7 +249,12 @@ std::string Compiler::CompileWithNvcc(const std::string& cuda_c) {
 
   auto cuda_c_file = prefix_name_ + ".cu";
   std::ofstream ofs(cuda_c_file, std::ios::out);
-  CHECK(ofs.is_open()) << "Fail to open file " << cuda_c_file;
+  PADDLE_ENFORCE_EQ(ofs.is_open(),
+                    true,
+                    ::common::errors::Unavailable(
+                        "Failed to open file %s. Please check if the file path "
+                        "is correct and the file is accessible.",
+                        cuda_c_file.c_str()));
   ofs << cuda_c;
   ofs.close();
 
@@ -252,7 +286,12 @@ void Compiler::CompileToPtx() {
   options += " " + prefix_name_ + ".cu";
 
   VLOG(2) << "Nvcc Compile Options : " << options;
-  CHECK(system(options.c_str()) == 0) << options;
+  PADDLE_ENFORCE_EQ(
+      system(options.c_str()),
+      0,
+      ::common::errors::InvalidArgument("Failed to execute command: %s. Please "
+                                        "check the command and try again.",
+                                        options.c_str()));
 }
 
 void Compiler::CompileToCubin() {
@@ -263,7 +302,12 @@ void Compiler::CompileToCubin() {
   options += " " + prefix_name_ + ".ptx";
 
   VLOG(2) << "Nvcc Compile Options : " << options;
-  CHECK(system(options.c_str()) == 0) << options;
+  PADDLE_ENFORCE_EQ(
+      system(options.c_str()),
+      0,
+      ::common::errors::InvalidArgument("Failed to execute command: %s. Please "
+                                        "check the command and try again.",
+                                        options.c_str()));
 }
 
 std::string Compiler::GetDeviceArch() {
@@ -284,7 +328,12 @@ std::string Compiler::ReadFile(const std::string& file_name,
                                std::ios_base::openmode mode) {
   // open cubin file
   std::ifstream ifs(file_name, mode);
-  CHECK(ifs.is_open()) << "Fail to open file " << file_name;
+  PADDLE_ENFORCE_EQ(ifs.is_open(),
+                    true,
+                    ::common::errors::Unavailable(
+                        "Failed to open file %s. Please check if the file path "
+                        "is correct and the file is accessible.",
+                        file_name.c_str()));
   ifs.seekg(std::ios::end);
   auto len = ifs.tellg();
   ifs.seekg(0);

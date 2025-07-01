@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "paddle/fluid/framework/scope.h"
+#include "paddle/fluid/pir/dialect/operator/ir/control_flow_op.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
 
@@ -58,7 +59,9 @@ class DeadCodeEliminationPass : public pir::Pass {
     for (auto& op : block) {
       if (op.HasTrait<pir::SideEffectTrait>() ||
           op.isa<paddle::dialect::DataOp>() ||
-          paddle::dialect::IsCustomOp(&op)) {
+          op.isa<paddle::dialect::WhileOp>() ||
+          paddle::dialect::IsCustomOp(&op) ||
+          paddle::dialect::IsInplaceOp(&op)) {
         continue;
       }
       if (op.use_empty()) {

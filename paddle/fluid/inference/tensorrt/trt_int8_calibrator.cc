@@ -17,9 +17,7 @@
 #include "glog/logging.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 // set the batch size before constructing the thread to execute engine
 int TRTInt8Calibrator::getBatchSize() const TRT_NOEXCEPT { return batch_size_; }
@@ -85,7 +83,7 @@ bool TRTInt8Calibrator::setBatch(
   for (const auto& it : data) {
     auto dataptr = data_buffers_.find(it.first);
     if (dataptr == data_buffers_.end()) {
-      PADDLE_THROW(phi::errors::Fatal(
+      PADDLE_THROW(common::errors::Fatal(
           "%s input name '%s' does not match with the buffer names.",
           engine_name_,
           it.first));
@@ -120,10 +118,10 @@ bool TRTInt8Calibrator::getBatch(void** bindings,
     if (it == data_buffers_.end()) {
       try {
         PADDLE_THROW(
-            phi::errors::Fatal("Calibration engine asked for unknown tensor "
-                               "name '%s' at position %d.",
-                               names[i],
-                               i));
+            common::errors::Fatal("Calibration engine asked for unknown tensor "
+                                  "name '%s' at position %d.",
+                                  names[i],
+                                  i));
       } catch (std::exception& e) {
       }
     }
@@ -159,6 +157,4 @@ TRTInt8Calibrator::~TRTInt8Calibrator() {
   VLOG(4) << "Destroying calibrator for " << engine_name_;
 }
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt

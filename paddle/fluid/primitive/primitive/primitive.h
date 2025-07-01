@@ -14,5 +14,5 @@
 
 #pragma once
 
-#include "paddle/fluid/primitive/manual/manual_primitive.h"
 #include "paddle/fluid/primitive/primitive/generated_primitive.h"
+#include "paddle/fluid/primitive/primitive/manual_primitive.h"

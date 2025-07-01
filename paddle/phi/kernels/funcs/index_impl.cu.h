@@ -42,8 +42,9 @@ __global__ void VectorizedIndexKernel(T *out,
     kps::WriteData<T, VecSize, 1, false>(
         out + data_offset, &result[0], BLOCK_NUM_X * VecSize);
   }
-  size_t num = numel - data_offset;
-  if (static_cast<int>(num) > 0) {
+
+  if (numel > data_offset) {
+    size_t num = numel - data_offset;
     kps::InitWithDataIndex<size_t, VecSize, 1>(&args[0], data_offset);
     kps::ElementwiseUnary<size_t, T, VecSize, 1, Functor>(
         &result[0], &args[0], func);
@@ -53,10 +54,10 @@ __global__ void VectorizedIndexKernel(T *out,
 
 template <typename T, typename Functor>
 void IndexKernel(const KPDevice &dev_ctx, DenseTensor *out, Functor func) {
-  int numel = out->numel();
+  int64_t numel = out->numel();
   T *out_data = dev_ctx.template Alloc<T>(out);
   if (numel <= 0) return;
-  int vec_size = phi::GetVectorizedSize(out_data);
+  int vec_size = std::min(4, phi::GetVectorizedSize(out_data));
 #ifdef PADDLE_WITH_XPU_KP
   int block = 64;
   int grid = 8;
@@ -83,7 +84,7 @@ void IndexKernel(const KPDevice &dev_ctx, DenseTensor *out, Functor func) {
           <<<grid, block, 0, stream>>>(out_data, numel, main_offset, func);
       break;
     default: {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unsupported vectorized size: %d !", vec_size));
       break;
     }

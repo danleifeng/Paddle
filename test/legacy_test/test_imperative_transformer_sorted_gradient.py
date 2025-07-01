@@ -643,7 +643,7 @@ class EncoderLayer(Layer):
         for i in range(n_layer):
             self._encoder_sublayers.append(
                 self.add_sublayer(
-                    'esl_%d' % i,
+                    f'esl_{i}',
                     EncoderSubLayer(
                         n_head,
                         d_key,
@@ -922,7 +922,7 @@ class DecoderLayer(Layer):
         for i in range(n_layer):
             self._decoder_sub_layers.append(
                 self.add_sublayer(
-                    'dsl_%d' % i,
+                    f'dsl_{i}',
                     DecoderSubLayer(
                         n_head,
                         d_key,
@@ -1337,9 +1337,9 @@ class TestDygraphTransformerSortGradient(unittest.TestCase):
                 static_token_num_value = out[3]
                 if i == batch_num - 1:
                     for k in range(4, len(out)):
-                        static_param_updated[
-                            static_param_name_list[k - 4]
-                        ] = out[k]
+                        static_param_updated[static_param_name_list[k - 4]] = (
+                            out[k]
+                        )
 
         # compare eager result with imperative result
         with guard():

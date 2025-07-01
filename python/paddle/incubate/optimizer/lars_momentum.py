@@ -13,7 +13,7 @@
 # limitations under the License.
 import warnings
 
-from paddle import _C_ops, _legacy_C_ops
+from paddle import _C_ops, _legacy_C_ops, pir
 from paddle.base import framework
 from paddle.framework import (
     in_dynamic_mode,
@@ -51,8 +51,8 @@ class LarsMomentumOptimizer(Optimizer):
             regularizer using :ref:`api_paddle_ParamAttr` already, the regularization setting here in optimizer will be \
             ignored for this parameter. Otherwise, the regularization setting here in optimizer will take effect.  \
             Default None, meaning there is no regularization.
-        grad_clip (GradientClipBase, optional): Gradient cliping strategy, it's an instance of
-            some derived class of ``GradientClipBase`` . There are three cliping strategies
+        grad_clip (GradientClipBase, optional): Gradient clipping strategy, it's an instance of
+            some derived class of ``GradientClipBase`` . There are three clipping strategies
             ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` ,
             :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
         name (str, optional): This parameter is used by developers to print debugging information. \
@@ -125,8 +125,8 @@ class LarsMomentumOptimizer(Optimizer):
         self._master_weights = {}
 
     def _create_accumulators(self, block, parameters):
-        assert isinstance(block, framework.Block)
-
+        if not isinstance(block, (framework.Block, pir.Block)):
+            raise TypeError("block is not instance of Block.")
         for p in parameters:
             if self._multi_precision and self._is_dtype_fp16_or_bf16(p.dtype):
                 master_p = self._create_master_weight(p)
@@ -143,7 +143,8 @@ class LarsMomentumOptimizer(Optimizer):
             self._add_accumulator(self._velocity_acc_str, p)
 
     def _append_optimize_op(self, block, param_and_grad):
-        assert isinstance(block, framework.Block)
+        if not isinstance(block, (framework.Block, pir.Block)):
+            raise TypeError("block is not instance of Block.")
         _lars_weight_decay = self._lars_weight_decay
         param_name = param_and_grad[0].name
         if len(self._exclude_from_weight_decay) > 0:
@@ -210,6 +211,8 @@ class LarsMomentumOptimizer(Optimizer):
                 self._rescale_grad,
             )
         elif in_pir_mode():
+            if isinstance(master_weight, pir.Value):
+                master_weight = [master_weight]
             _, _, _ = _C_ops.lars_momentum_(
                 [param_and_grad[0]],
                 [param_and_grad[1]],

@@ -21,8 +21,7 @@ limitations under the License. */
 #include "paddle/phi/backends/xpu/xpu_context.h"
 #endif
 
-namespace phi {
-namespace funcs {
+namespace phi::funcs {
 
 template <typename T>
 void CopyValidData(phi::DenseTensor* dst_tensor,
@@ -46,7 +45,7 @@ void CopyValidData(phi::DenseTensor* dst_tensor,
     PADDLE_ENFORCE_GE(
         pad_seq_len,
         valid_seq_len,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The padded sequence length can not "
             "be less than its original length. Expected %ld >= %ld, but got "
             "%ld < %ld. Please check input value.",
@@ -96,7 +95,7 @@ static void fast_mem_init(void* dest,
 }
 
 template <typename T>
-class PaddingLoDTensorFunctor<phi::CPUContext, T> {
+class PaddingDenseTensorFunctor<phi::CPUContext, T> {
  public:
   void operator()(const phi::CPUContext& context UNUSED,
                   const phi::DenseTensor& seq_tensor,
@@ -125,7 +124,7 @@ class PaddingLoDTensorFunctor<phi::CPUContext, T> {
     PADDLE_ENFORCE_EQ(
         pad_value.numel() == 1 || pad_value.numel() == step_width,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The numel of 'pad_value' can only be 1 or be equal to the "
             "'step_width', but got %ld != 1 and %ld. Please check the input "
             "value.",
@@ -156,7 +155,7 @@ class PaddingLoDTensorFunctor<phi::CPUContext, T> {
 };
 
 template <typename T>
-class UnpaddingLoDTensorFunctor<phi::CPUContext, T> {
+class UnpaddingDenseTensorFunctor<phi::CPUContext, T> {
  public:
   void operator()(const phi::CPUContext& context UNUSED,
                   const phi::DenseTensor& pad_tensor,
@@ -193,7 +192,7 @@ class UnpaddingLoDTensorFunctor<phi::CPUContext, T> {
 
 #ifdef PADDLE_WITH_XPU
 template <typename T>
-class UnpaddingLoDTensorFunctor<phi::XPUContext, T> {
+class UnpaddingDenseTensorFunctor<phi::XPUContext, T> {
  public:
   void operator()(const phi::XPUContext& context,
                   const phi::DenseTensor& pad_tensor,
@@ -235,19 +234,18 @@ class UnpaddingLoDTensorFunctor<phi::XPUContext, T> {
 };
 #endif
 
-template class PaddingLoDTensorFunctor<phi::CPUContext, int>;
-template class PaddingLoDTensorFunctor<phi::CPUContext, int64_t>;
-template class PaddingLoDTensorFunctor<phi::CPUContext, float>;
-template class PaddingLoDTensorFunctor<phi::CPUContext, double>;
+template class PaddingDenseTensorFunctor<phi::CPUContext, int>;
+template class PaddingDenseTensorFunctor<phi::CPUContext, int64_t>;
+template class PaddingDenseTensorFunctor<phi::CPUContext, float>;
+template class PaddingDenseTensorFunctor<phi::CPUContext, double>;
 
-template class UnpaddingLoDTensorFunctor<phi::CPUContext, int>;
-template class UnpaddingLoDTensorFunctor<phi::CPUContext, int64_t>;
-template class UnpaddingLoDTensorFunctor<phi::CPUContext, float>;
-template class UnpaddingLoDTensorFunctor<phi::CPUContext, double>;
+template class UnpaddingDenseTensorFunctor<phi::CPUContext, int>;
+template class UnpaddingDenseTensorFunctor<phi::CPUContext, int64_t>;
+template class UnpaddingDenseTensorFunctor<phi::CPUContext, float>;
+template class UnpaddingDenseTensorFunctor<phi::CPUContext, double>;
 
 #ifdef PADDLE_WITH_XPU
-template class UnpaddingLoDTensorFunctor<phi::XPUContext, float>;
+template class UnpaddingDenseTensorFunctor<phi::XPUContext, float>;
 #endif
 
-}  // namespace funcs
-}  // namespace phi
+}  // namespace phi::funcs

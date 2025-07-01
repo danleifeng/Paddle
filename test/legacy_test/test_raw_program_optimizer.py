@@ -47,13 +47,16 @@ class TestRawProgramOptimizer(unittest.TestCase):
 
     def test_single_gpu(self):
         paddle.enable_static()
-        fleet.init(is_collective=True)
-        sharding_program = paddle.static.Program()
-        sharding_startup_program = paddle.static.Program()
-        strategy = fleet.DistributedStrategy()
-        strategy.without_graph_optimization = True
-        with base.program_guard(sharding_program, sharding_startup_program):
-            with base.unique_name.guard():
+        with paddle.pir_utils.OldIrGuard():
+            fleet.init(is_collective=True)
+            sharding_program = paddle.static.Program()
+            sharding_startup_program = paddle.static.Program()
+            strategy = fleet.DistributedStrategy()
+            strategy.without_graph_optimization = True
+            with (
+                base.program_guard(sharding_program, sharding_startup_program),
+                base.unique_name.guard(),
+            ):
                 input_x = paddle.static.data(
                     name="x", shape=[None, 32], dtype='float32'
                 )
@@ -67,11 +70,11 @@ class TestRawProgramOptimizer(unittest.TestCase):
                 )
                 optimizer.minimize(cost)
 
-        trainer_id = fleet.worker_index()
-        exe = paddle.static.Executor(paddle.CUDAPlace(trainer_id))
-        rank = fleet.worker_index()
-        exe.run(sharding_startup_program)
-        exe.run(program=sharding_program, feed=self.gen_data())
+            trainer_id = fleet.worker_index()
+            exe = paddle.static.Executor(paddle.CUDAPlace(trainer_id))
+            rank = fleet.worker_index()
+            exe.run(sharding_startup_program)
+            exe.run(program=sharding_program, feed=self.gen_data())
 
 
 if __name__ == "__main__":

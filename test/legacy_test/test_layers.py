@@ -25,7 +25,6 @@ import paddle
 import paddle.nn.functional as F
 from paddle import base
 from paddle.base import core, dygraph
-from paddle.pir_utils import test_with_pir_api
 from paddle.tensor import random
 
 
@@ -237,7 +236,6 @@ class TestLayer(LayerTest):
 
             self.assertRaises(TypeError, test_type)
 
-    @test_with_pir_api
     def test_SyncBatchNorm(self):
         if core.is_compiled_with_cuda():
             with self.static_graph():
@@ -401,6 +399,7 @@ class TestLayer(LayerTest):
             a = paddle.static.data(name='a', shape=[-1, 1], dtype='int64')
             b = paddle.static.data(name='b', shape=[-1, 1], dtype='int64')
             cond = paddle.less_than(x=a, y=b)
+            cond_ = paddle.less(x=a, y=b)
             static_ret = self.get_static_graph_result(
                 feed={"a": value_a, "b": value_b}, fetch_list=[cond]
             )[0]
@@ -408,9 +407,11 @@ class TestLayer(LayerTest):
             da = paddle.to_tensor(value_a)
             db = paddle.to_tensor(value_b)
             dcond = paddle.less_than(x=da, y=db)
+            dcond_ = paddle.less(x=da, y=db)
 
             for i in range(len(static_ret)):
                 self.assertTrue(dcond.numpy()[i] == static_ret[i])
+                self.assertTrue(dcond_.numpy()[i] == static_ret[i])
 
         # less equal
         with self.static_graph():
@@ -632,7 +633,7 @@ class TestBook(LayerTest):
     def _get_np_data(self, shape, dtype, append_batch_size=True):
         np.random.seed(self.seed)
         if append_batch_size:
-            shape = [self._batch_size] + shape
+            shape = [self._batch_size, *shape]
         if dtype == 'float32':
             return np.random.random(shape).astype(dtype)
         elif dtype == 'float64':
@@ -659,7 +660,7 @@ class TestBook(LayerTest):
                     shape, dtype, append_batch_size
                 )
             if append_batch_size:
-                shape = [-1] + shape
+                shape = [-1, *shape]
             data = paddle.static.data(
                 name=name,
                 shape=shape,
@@ -998,7 +999,6 @@ class TestBook(LayerTest):
             out = paddle.nn.functional.square_error_cost(input=x, label=y)
             return out
 
-    @test_with_pir_api
     def test_affine_grid(self):
         with self.static_graph():
             data = paddle.static.data(
@@ -1018,7 +1018,6 @@ class TestBook(LayerTest):
             self.assertIsNotNone(data_0)
             self.assertIsNotNone(data_1)
 
-    @test_with_pir_api
     def test_stridedslice(self):
         axes = [0, 1, 2]
         starts = [1, 0, 2]

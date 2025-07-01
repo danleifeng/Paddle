@@ -16,16 +16,21 @@
 
 #include "paddle/cinn/hlir/dialect/operator/ir/manual_op.h"
 #include "paddle/cinn/hlir/framework/pir/utils.h"
+#include "paddle/cinn/utils/string.h"
 #include "paddle/fluid/pir/transforms/sub_graph_detector.h"
 #include "paddle/pir/include/core/builtin_op.h"
 #include "paddle/pir/include/pass/pass.h"
 #include "paddle/pir/include/pass/pass_registry.h"
+
+COMMON_DECLARE_bool(cinn_debug);
 
 namespace {
 using GroupOpsVec = std::vector<pir::Operation*>;
 using CompatibleInfo = cinn::hlir::framework::pir::CompatibleInfo;
 
 void VerifyOperationOrder(const pir::Block& block);
+
+std::string FormatDuration(std::chrono::milliseconds ms);
 
 class BuildCinnPass : public pir::Pass {
  public:
@@ -47,20 +52,52 @@ class BuildCinnPass : public pir::Pass {
 
  private:
   void ProcessBlock(pir::Block* block) {
+    auto start_t = std::chrono::high_resolution_clock::now();
+    auto num_ops = block->size();
     std::vector<GroupOpsVec> groups =
-        ::pir::SubgraphDetector(block, CompatibleInfo::IsSupportForCinn)();
+        ::pir::DetectSubGraphs(block, CompatibleInfo::IsSupportForCinn);
     AddStatistics(groups.size());
     for (auto& group_ops : groups) {
       if (group_ops.size() == 1 && group_ops[0]->name() == "pd_op.full") {
         continue;
       }
       VLOG(4) << "current group_ops.size(): " << group_ops.size();
-      ::pir::ReplaceWithGroupOp(block, group_ops);
+      ::pir::ReplaceWithGroupOp(block, group_ops, false);
+    }
+    auto end_t = std::chrono::high_resolution_clock::now();
+    if (FLAGS_cinn_debug) {
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+          end_t - start_t);
+      LOG(INFO) << "Time of building group ops (size=" << num_ops
+                << "): " << FormatDuration(duration);
     }
   }
 };
 
+static void VLOG_LINES(const std::string& str) {
+  const auto& lines = cinn::utils::Split(str, "\n");
+  for (const auto& line : lines) {
+    VLOG(4) << line;
+  }
+}
+
+static std::string OpsDebugStr(std::vector<pir::Operation*> ops) {
+  std::stringstream ss;
+  pir::IrPrinter printer(ss);
+  for (const auto* op : ops) {
+    printer.PrintOperation(*op);
+    ss << "{" << op->id() << "}\n";
+  }
+  return ss.str();
+}
+
 void VerifyOperationOrder(const pir::Block& block) {
+  std::vector<pir::Operation*> block_ops;
+  for (auto& op : block) {
+    block_ops.push_back(&op);
+  }
+  VLOG(4) << "VerifyOperationOrder: Block ops is: " << block_ops.size();
+  VLOG_LINES(OpsDebugStr(block_ops));
   auto order_info =
       [&]() -> std::unordered_map<const pir::Operation*, int64_t> {
     std::unordered_map<const pir::Operation*, int64_t> map;
@@ -79,13 +116,17 @@ void VerifyOperationOrder(const pir::Block& block) {
           op->GetParentOp()->isa<cinn::dialect::GroupOp>()) {
         current_op = op->GetParentOp();
       }
-      CHECK(order_info.at(defining_op) < order_info.at(current_op))
-          << "The order of operations is not correct!"
-          << " Received defining_op(" << defining_op->id() << " "
-          << order_info.at(defining_op) << ") is behind current_op("
-          << current_op->id() << " " << order_info.at(current_op) << ")";
+      std::stringstream error_msg;
+      error_msg << "The order of operations is not correct! "
+                << "Received defining_op(" << defining_op->id() << " "
+                << order_info.at(defining_op) << ") is behind current_op("
+                << current_op->id() << " " << order_info.at(current_op) << ")";
+      PADDLE_ENFORCE_LT(order_info.at(defining_op),
+                        order_info.at(current_op),
+                        common::errors::Fatal(error_msg.str()));
     }
   };
+
   const auto& CheckGroupOpOrder = [&](pir::Operation* op) -> void {
     auto group_op = op->dyn_cast<cinn::dialect::GroupOp>();
     for (auto& inner_op : *group_op.block()) {
@@ -102,6 +143,17 @@ void VerifyOperationOrder(const pir::Block& block) {
       CheckOpOrder(&op);
     }
   }
+}
+
+std::string FormatDuration(std::chrono::milliseconds ms) {
+  auto minutes = std::chrono::duration_cast<std::chrono::minutes>(ms);
+  ms -= std::chrono::duration_cast<std::chrono::milliseconds>(minutes);
+  auto seconds = std::chrono::duration_cast<std::chrono::seconds>(ms);
+  ms -= std::chrono::duration_cast<std::chrono::milliseconds>(seconds);
+  std::stringstream ss;
+  ss << minutes.count() << " min " << seconds.count() << " s " << ms.count()
+     << " ms";
+  return ss.str();
 }
 
 }  // namespace

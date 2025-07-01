@@ -38,6 +38,11 @@ void IrVerify(Expr e) {
   IrVerifyVisitor visitor;
   visitor.Visit(&e, &e);
 }
+
+void IrVerify(const ir::_Module_ *module) {
+  IrVerifyVisitor visitor;
+  visitor.Visit(&Reference<ir::_Module_>(module));
+}
 }  // namespace ir_utils
 }  // namespace ir
 }  // namespace cinn

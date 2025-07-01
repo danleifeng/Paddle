@@ -147,19 +147,16 @@ def update_api_info_file(fail_case_list, api_info_file):
 
     # update api info file
     with open(api_info_file, 'w') as f:
-        for api_info_line in api_info_list:
-            f.write(api_info_line)
+        f.writelines(api_info_line for api_info_line in api_info_list)
 
 
 def summary_results(check_results, api_info_file):
     """Summary results and return sys.exit code."""
     for case_name in check_results["speed"]:
-        logging.error(f"Check speed result with case \"{case_name}\" failed.")
+        logging.error(f'Check speed result with case "{case_name}" failed.')
 
     for case_name in check_results["accuracy"]:
-        logging.error(
-            f"Check accuracy result with case \"{case_name}\" failed."
-        )
+        logging.error(f'Check accuracy result with case "{case_name}" failed.')
 
     if len(check_results["speed"]) and api_info_file:
         update_api_info_file(check_results["speed"], api_info_file)

@@ -93,9 +93,9 @@ void SGDDenseParamSparseGradKernel(
   dev_ctx.template Alloc<T>(param_out);
 
   PADDLE_ENFORCE_EQ(
-      &param,
-      param_out,
-      phi::errors::InvalidArgument(
+      param.IsSharedBufferWith(*param_out),
+      true,
+      common::errors::InvalidArgument(
           "The input tensor Param of SgdOp should be equal with ParamOut "
           "if variable's type is SelectedRows."));
 
@@ -103,7 +103,7 @@ void SGDDenseParamSparseGradKernel(
   auto out_dims = param_out->dims();
   PADDLE_ENFORCE_EQ(in_height,
                     out_dims[0],
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The input tensor Grad's height of SgdOp should be "
                         "equal with ParamOut's dims. But received Grad's "
                         "height [%s] and ParamOut's dims [%s]",
@@ -114,12 +114,12 @@ void SGDDenseParamSparseGradKernel(
   auto& in_rows = grad.rows();
   int64_t* in_rows_data = nullptr;
   xpu::VectorParam<int64_t> in_rows_vec{
-      in_rows.data(), static_cast<int>(in_rows.size()), in_rows_data};
+      in_rows.data(), static_cast<int64_t>(in_rows.size()), in_rows_data};
 
   int64_t in_row_numel = in_value.numel() / in_rows.size();
   PADDLE_ENFORCE_EQ(in_row_numel,
                     param_out->numel() / in_height,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The in_row_numel of SgdOp should be equal with "
                         "param_out's numel / in_height."));
 

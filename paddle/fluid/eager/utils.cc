@@ -21,6 +21,7 @@
 
 #include "paddle/common/layout.h"
 #include "paddle/phi/api/all.h"
+#include "paddle/phi/api/lib/data_transform.h"
 #include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/tensor_meta.h"
 
@@ -37,11 +38,25 @@ void SetGradOutputDistAttrIter::visit_element(paddle::Tensor* element,
                "SetGradOutputDistAttrIter.";
     return;
   }
-  // Here the element is empty or defined DistTensor
-  VLOG(4) << "The input element is set DistTensor impl when calling "
-             "SetGradOutputDistAttrIter.";
-  element->set_impl(std::make_shared<phi::distributed::DistTensor>(
-      phi::DDim(), meta.DistAttr()));
+  if (meta.IsDistMeta()) {
+    // Here the element is empty or defined DistTensor
+    VLOG(4) << "The input element is set DistTensor impl when calling "
+               "SetGradOutputDistAttrIter.";
+    element->set_impl(std::make_shared<phi::distributed::DistTensor>(
+        phi::DDim(), meta.DistAttr()));
+  } else {
+    // Here the element is empty or defined DenseTensor
+    VLOG(4) << "The input element is set DistTensor impl using dense meta "
+               "when calling SetGradOutputDistAttrIter.";
+    phi::distributed::Placements placements;
+    for (int64_t i = 0; i < mesh_.ndim(); ++i) {
+      placements.emplace_back(std::make_shared<phi::distributed::Replicate>());
+    }
+    auto dist_attr = phi::distributed::ToTensorDistAttr(
+        mesh_, placements, meta.GetTensorMeta().dims);
+    element->set_impl(
+        std::make_shared<phi::distributed::DistTensor>(phi::DDim(), dist_attr));
+  }
 }
 
 void SetGradOutputDistAttrIter::visit(paddle::Tensor* element) {
@@ -78,7 +93,7 @@ AutogradMeta* EagerUtils::autograd_meta(paddle::Tensor* target) {
 AutogradMeta* EagerUtils::unsafe_autograd_meta(const paddle::Tensor& target) {
   auto* p_autograd_meta = target.get_autograd_meta();
   PADDLE_ENFORCE(p_autograd_meta,
-                 phi::errors::Fatal(
+                 common::errors::Fatal(
                      "Null autograd_meta gotten from unsafe_autograd_meta()"));
   return static_cast<AutogradMeta*>(p_autograd_meta);
 }
@@ -237,12 +252,12 @@ void EagerUtils::CheckInplace(const paddle::Tensor& target,
                               const AutogradMeta* autograd_meta,
                               bool require_any_grad) {
   if (require_any_grad && autograd_meta) {
-    PADDLE_ENFORCE_EQ(
-        !autograd_meta->StopGradient() && IsLeafTensor(target),
-        false,
-        phi::errors::InvalidArgument("Leaf Var (%s) that doesn't stop gradient "
-                                     "can't use inplace strategy.",
-                                     target.name()));
+    PADDLE_ENFORCE_EQ(!autograd_meta->StopGradient() && IsLeafTensor(target),
+                      false,
+                      common::errors::InvalidArgument(
+                          "Leaf Var (%s) that doesn't stop gradient "
+                          "can't use inplace strategy.",
+                          target.name()));
   }
 }
 
@@ -260,7 +275,7 @@ std::vector<std::shared_ptr<egr::EagerVariable>> EagerUtils::TrySyncToVars(
     paddle::Tensor* tensor) {
   PADDLE_ENFORCE_NOT_NULL(
       tensor,
-      phi::errors::Fatal(
+      common::errors::Fatal(
           "Should Not Pass Empty tensor pointer in, since only output can "
           "reach this, please check output value and make sure it's not null"));
   return {TrySyncToVar(*tensor)};
@@ -275,10 +290,11 @@ std::vector<std::shared_ptr<egr::EagerVariable>> EagerUtils::TrySyncToVars(
     auto* tensor = tensors[i];
     PADDLE_ENFORCE_NOT_NULL(
         tensor,
-        phi::errors::Fatal("Tensor is null and cannot be copied. "
-                           "We are tring to TrySyncToVars tensor from its "
-                           "shared_ptr, this error may indicate some outputs "
-                           "are nullptr"));
+        common::errors::Fatal(
+            "Tensor is null and cannot be copied. "
+            "We are trying to TrySyncToVars tensor from its "
+            "shared_ptr, this error may indicate some outputs "
+            "are nullptr"));
     res.emplace_back(TrySyncToVar(*tensor));
   }
   return res;
@@ -312,8 +328,8 @@ void EagerUtils::HandleViewBetweenInputAndOutput(
   PADDLE_ENFORCE_EQ(
       input_var->Var().IsInitialized(),
       true,
-      phi::errors::InvalidArgument("Tensor %s has not been initialized!",
-                                   input_var->name()));
+      common::errors::InvalidArgument("Tensor %s has not been initialized!",
+                                      input_var->name()));
 
   if (phi::DenseTensor::classof(input_var->GetTensorBase().get())) {
     auto input_dense_tensor =
@@ -321,8 +337,8 @@ void EagerUtils::HandleViewBetweenInputAndOutput(
     PADDLE_ENFORCE_EQ(
         input_dense_tensor->IsInitialized(),
         true,
-        phi::errors::InvalidArgument("DenseTensor %s has not been initialized!",
-                                     input_var->name()));
+        common::errors::InvalidArgument(
+            "DenseTensor %s has not been initialized!", input_var->name()));
 
     auto* view_output_tensor =
         view_output_var->MutableVar()->GetMutable<phi::DenseTensor>();
@@ -338,10 +354,10 @@ void EagerUtils::HandleViewBetweenInputAndOutput(
 void EagerUtils::HandleViewBetweenInputAndOutput(
     const paddle::Tensor& input_tensor, paddle::Tensor* view_output_tensor) {
   PADDLE_ENFORCE_EQ(
-      input_tensor.initialized(),
+      input_tensor.has_allocation(),
       true,
-      phi::errors::InvalidArgument("Tensor %s has not been initialized!",
-                                   input_tensor.name()));
+      common::errors::InvalidArgument("Tensor %s has not been initialized!",
+                                      input_tensor.name()));
 
   if (input_tensor.is_dense_tensor()) {
     auto input_dense_tensor =
@@ -350,7 +366,7 @@ void EagerUtils::HandleViewBetweenInputAndOutput(
       view_output_tensor->set_impl(std::make_shared<phi::DenseTensor>());
     } else {
       PADDLE_ENFORCE(view_output_tensor->is_dense_tensor(),
-                     phi::errors::Unavailable(
+                     common::errors::Unavailable(
                          "DenseTensor can not be inplaced with other Tensor."));
     }
     auto view_output_dense_tensor =
@@ -377,7 +393,7 @@ void EagerUtils::HandleViewBetweenInputAndOutput(
                   ->dist_attr()));
     } else {
       PADDLE_ENFORCE(view_output_tensor->is_dist_tensor(),
-                     phi::errors::Unavailable(
+                     common::errors::Unavailable(
                          "DistTensor can not be inplaced with other Tensor."));
     }
     auto view_output_dense_tensor =
@@ -402,11 +418,12 @@ std::vector<paddle::Tensor> EagerUtils::GetOutputs(
   for (const auto& out : outs) {
     PADDLE_ENFORCE_NOT_NULL(
         out.get(),
-        phi::errors::Fatal("Eager Tensor %s is null and cannot be copied. "
-                           "We are tring to Get Output tensor from its "
-                           "shared_ptr, this error may indicate some outputs "
-                           "are nullptr",
-                           out->name()));
+        common::errors::Fatal(
+            "Eager Tensor %s is null and cannot be copied. "
+            "We are trying to Get Output tensor from its "
+            "shared_ptr, this error may indicate some outputs "
+            "are nullptr",
+            out->name()));
     res.emplace_back(out->GetTensorBase(), out->name());
   }
   return res;
@@ -416,10 +433,11 @@ paddle::Tensor EagerUtils::GetOutput(
     const std::shared_ptr<EagerVariable>& out) {
   PADDLE_ENFORCE_NOT_NULL(
       out.get(),
-      phi::errors::Fatal("Eager Tensor %s is null and cannot be copied. We "
-                         "are tring to Get Output tensor from its shared_ptr, "
-                         "this error may indicate output is nullptr",
-                         out->name()));
+      common::errors::Fatal(
+          "Eager Tensor %s is null and cannot be copied. We "
+          "are trying to Get Output tensor from its shared_ptr, "
+          "this error may indicate output is nullptr",
+          out->name()));
   return paddle::Tensor(out->GetTensorBase(), out->name());
 }
 
@@ -427,10 +445,10 @@ void EagerUtils::GetOutput(const std::shared_ptr<EagerVariable>& out,
                            paddle::Tensor* out_var) {
   PADDLE_ENFORCE_NOT_NULL(
       out_var,
-      phi::errors::Fatal("Tensor is null and cannot be copied. "
-                         "We are tring to OverwriteOutput from its "
-                         "shared_ptr, this error may indicate some outputs "
-                         "are nullptr"));
+      common::errors::Fatal("Tensor is null and cannot be copied. "
+                            "We are trying to OverwriteOutput from its "
+                            "shared_ptr, this error may indicate some outputs "
+                            "are nullptr"));
   out_var->set_impl(out->GetTensorBase());
   out_var->set_name(out->name());
 }
@@ -449,10 +467,11 @@ void EagerUtils::GetOutputs(
   for (size_t i = 0; i < outs.size(); i++) {
     PADDLE_ENFORCE_NOT_NULL(
         out_var[i],
-        phi::errors::Fatal("Tensor is null and cannot be copied. "
-                           "We are tring to OverwriteOutput from its "
-                           "shared_ptr, this error may indicate some outputs "
-                           "are nullptr"));
+        common::errors::Fatal(
+            "Tensor is null and cannot be copied. "
+            "We are trying to OverwriteOutput from its "
+            "shared_ptr, this error may indicate some outputs "
+            "are nullptr"));
     out_var[i]->set_impl(outs[i]->GetTensorBase());
   }
 }
@@ -466,10 +485,10 @@ void EagerUtils::GetOutputs(const std::shared_ptr<EagerVariable>& out,
                             const std::vector<paddle::Tensor*>& out_var) {
   PADDLE_ENFORCE_NOT_NULL(
       out_var[0],
-      phi::errors::Fatal("Tensor is null and cannot be copied. "
-                         "We are tring to OverwriteOutput from its "
-                         "shared_ptr, this error may indicate some outputs "
-                         "are nullptr"));
+      common::errors::Fatal("Tensor is null and cannot be copied. "
+                            "We are trying to OverwriteOutput from its "
+                            "shared_ptr, this error may indicate some outputs "
+                            "are nullptr"));
   out_var[0]->set_impl(out->GetTensorBase());
 }
 
@@ -509,7 +528,7 @@ std::shared_ptr<egr::GradNodeBase> EagerUtils::GetGradAccumulationNode(
         return accumulation_ptr;
       } else {
         // Current GradNode is not a egr::GradNodeAccumulation
-        PADDLE_THROW(phi::errors::Fatal(
+        PADDLE_THROW(common::errors::Fatal(
             "GetGradAccumulationNode should only be called on leaf tensor, but "
             "target tensor: %s has GradNode which is not a "
             "GradNodeAccumulation, and this should not happened unless target "
@@ -608,7 +627,7 @@ void EagerUtils::FillZeroForEmptyGradInput(paddle::Tensor* in_grad,
   if (!in_grad->initialized()) {
     PADDLE_ENFORCE(
         grad_in_meta.HasTensorMeta(),
-        phi::errors::Fatal(
+        common::errors::Fatal(
             "Unable to fill empty grad inputs due to empty GradSlotMeta"));
     const auto& tensor_meta = grad_in_meta.GetTensorMeta();
     if (grad_in_meta.IsDistMeta()) {
@@ -795,7 +814,7 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
                                                    dist_t->dist_attr());
       }
     } else {
-      if (t.initialized()) {
+      if (t.has_allocation()) {
         tensor_info_str += paddle::string::Sprintf(TENSOR_INFO_TEMPLATE,
                                                    t.impl()->type_info().name(),
                                                    t.dtype(),
@@ -828,10 +847,10 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
                                              GradNodeStr(t),
                                              ad_meta->StopGradient());
       auto* data_ptr = dynamic_cast<phi::DenseTensor*>(t.impl().get());
-      if (t.is_initialized() && data_ptr) {
+      if (t.has_allocation() && data_ptr) {
         return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                        tensor_name_str,
-                                       t.initialized(),
+                                       t.has_allocation(),
                                        t.impl(),
                                        tensor_info_str,
                                        *data_ptr,
@@ -839,7 +858,7 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
       } else {
         return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                        tensor_name_str,
-                                       t.initialized(),
+                                       t.has_allocation(),
                                        t.impl(),
                                        tensor_info_str,
                                        "None",
@@ -847,10 +866,10 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
       }
     } else {
       auto* data_ptr = dynamic_cast<phi::DenseTensor*>(t.impl().get());
-      if (t.is_initialized() && data_ptr) {
+      if (t.has_allocation() && data_ptr) {
         return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                        tensor_name_str,
-                                       t.initialized(),
+                                       t.has_allocation(),
                                        t.impl(),
                                        tensor_info_str,
                                        *data_ptr,
@@ -858,7 +877,7 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
       } else {
         return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                        tensor_name_str,
-                                       t.initialized(),
+                                       t.has_allocation(),
                                        t.impl(),
                                        tensor_info_str,
                                        "None",
@@ -880,14 +899,14 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
                                              ad_meta->StopGradient());
       return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                      tensor_name_str,
-                                     t.initialized(),
+                                     t.has_allocation(),
                                      t.impl(),
                                      tensor_info_str,
                                      ad_info_str);
     } else {
       return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                      tensor_name_str,
-                                     t.initialized(),
+                                     t.has_allocation(),
                                      t.impl(),
                                      tensor_info_str,
                                      "None");
@@ -898,14 +917,14 @@ std::string EagerUtils::TensorStr(const paddle::Tensor& t) {
         "TensorInfo: [ %s ]}";
     return paddle::string::Sprintf(TENSOR_PRINT_TEMPLATE,
                                    tensor_name_str,
-                                   t.initialized(),
+                                   t.has_allocation(),
                                    t.impl(),
                                    tensor_info_str);
   } else if (VLOG_IS_ON(4)) {
     const char* TENSOR_PRINT_TEMPLATE =
         "{ Name: %s, Initialized: %d, Ptr: %d }";
     return paddle::string::Sprintf(
-        TENSOR_PRINT_TEMPLATE, tensor_name_str, t.initialized(), t.impl());
+        TENSOR_PRINT_TEMPLATE, tensor_name_str, t.has_allocation(), t.impl());
   } else {
     return "[ Not specified tensor log level ]";
   }
@@ -937,6 +956,144 @@ std::string EagerUtils::TensorStr(
       tensors_str += TensorStr(tensor) + ", ";
     }
     return "[ " + tensors_str + " ]";
+  }
+}
+
+void DistTensorTypeParser::operator()(const paddle::Tensor& x) {
+  if (x.defined() && x.is_dist_tensor()) {
+    *mesh = &(std::dynamic_pointer_cast<phi::distributed::DistTensor>(x.impl())
+                  ->process_mesh());
+    result = true;
+  }
+}
+
+void DistTensorTypeParser::operator()(
+    const paddle::optional<paddle::Tensor>& x) {
+  if (x) {
+    if (x.get_ptr()->defined() && x.get_ptr()->is_dist_tensor()) {
+      *mesh = &(std::dynamic_pointer_cast<phi::distributed::DistTensor>(
+                    x.get_ptr()->impl())
+                    ->process_mesh());
+      result = true;
+    }
+  }
+}
+
+void DistTensorTypeParser::operator()(const std::vector<paddle::Tensor>& x) {
+  if (!x.empty()) {
+    for (auto& t : x) {
+      if (t.defined() && t.is_dist_tensor()) {
+        *mesh =
+            &(std::dynamic_pointer_cast<phi::distributed::DistTensor>(t.impl())
+                  ->process_mesh());
+        result = true;
+        break;
+      }
+    }
+  }
+}
+
+void DistTensorTypeParser::operator()(
+    const paddle::optional<std::vector<paddle::Tensor>>& x) {
+  if (x) {
+    if (!(x.get_ptr()->empty())) {
+      for (auto& t : *(x.get_ptr())) {
+        if (t.defined() && t.is_dist_tensor()) {
+          *mesh = &(
+              std::dynamic_pointer_cast<phi::distributed::DistTensor>(t.impl())
+                  ->process_mesh());
+          result = true;
+          break;
+        }
+      }
+    }
+  }
+}
+
+void DistTensorConverter::convert(paddle::Tensor* x) {
+  ConvertToDistTensor(x, mesh);
+}
+
+void DistTensorConverter::operator()(paddle::Tensor* x) {
+  DistTensorConverter::convert(x);
+}
+
+void DistTensorConverter::operator()(paddle::optional<paddle::Tensor>* x) {
+  if (*x) {
+    DistTensorConverter::convert(x->get_ptr());
+  }
+}
+
+void DistTensorConverter::operator()(std::vector<paddle::Tensor>* x) {
+  if (!x->empty()) {
+    for (auto& t : *x) {
+      DistTensorConverter::convert(&t);
+    }
+  }
+}
+
+void DistTensorConverter::operator()(
+    paddle::optional<std::vector<paddle::Tensor>>* x) {
+  if (*x) {
+    if (!(x->get_ptr()->empty())) {
+      for (auto& t : *(x->get_ptr())) {
+        if (!t.is_dist_tensor()) {
+          DistTensorConverter::convert(&t);
+        }
+      }
+    }
+  }
+}
+
+void ConvertToDistTensor(paddle::Tensor* x,
+                         const phi::distributed::ProcessMesh* mesh) {
+  if (!x->defined()) {
+    return;
+  }
+  if (x->is_dist_tensor()) {
+    auto dist_ptr =
+        std::dynamic_pointer_cast<phi::distributed::DistTensor>(x->impl());
+    if (!dist_ptr->skip_check_mesh() && x->dims().size() > 0) {
+      // NOTE(pkuzyc): In MoE expert parallelism, the mesh of the
+      // inputs and outputs of different experts are different, so
+      // skip checking mesh in the following two cases:
+      // 1. The ``skip_check_mesh_`` flag is true. The MoE-related apis
+      // sets this flag to indicate that the difference between tensor's
+      // mesh is allowed.
+      // 2. The tensor is a 0-D tensor. Specifically, in MoE expert
+      // parallelism, the learning rate's mesh is global, but expert
+      // weights' mesh is the subset of the global mesh, this is also
+      // allowed so skip checking the mesh of 0-D tensor.
+      PADDLE_ENFORCE_EQ(
+          std::dynamic_pointer_cast<phi::distributed::DistTensor>(x->impl())
+              ->process_mesh(),
+          *mesh,
+          common::errors::InvalidArgument(
+              "Input %s has different mesh. However all inputs should "
+              "have the same mesh.",
+              x->name()));
+    }
+    return;
+  } else {
+    PADDLE_ENFORCE_EQ(
+        phi::DenseTensor::classof(x->impl().get()),
+        true,
+        common::errors::InvalidArgument(
+            "Failed to convert input %s impl to phi::distributed::DistTensor "
+            "as it's not phi::DenseTensor.",
+            x->name()));
+    phi::distributed::Placements placements;
+    for (int64_t i = 0; i < mesh->ndim(); ++i) {
+      placements.emplace_back(std::make_shared<phi::distributed::Replicate>());
+    }
+
+    auto dense_t = std::static_pointer_cast<phi::DenseTensor>(x->impl());
+    // auto parallel in dygraph doesn't support strided kernel.
+    if (!dense_t->meta().is_contiguous()) {
+      *dense_t = paddle::experimental::Trans2Contiguous(*dense_t);
+    }
+    x->set_impl(std::make_shared<phi::distributed::DistTensor>(
+        dense_t, *mesh, placements));
   }
 }
 }  // namespace egr

@@ -153,6 +153,7 @@ def fc(
     Examples:
         .. code-block:: python
 
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
             >>> import paddle
             >>> paddle.enable_static()
 
@@ -165,7 +166,7 @@ def fc(
             ...     weight_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=0.5)),
             ...     bias_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=1.0)))
             >>> print(out)
-            var fc_0.tmp_1 : LOD_TENSOR.shape(1, 2, 1).dtype(float32).stop_gradient(False)
+            var fc_0.tmp_1 : DENSE_TENSOR.shape(1, 2, 1).dtype(float32).stop_gradient(False)
 
             >>> # When input is multiple tensors
             >>> x0 = paddle.static.data(name="x0", shape=[1, 2, 2], dtype="float32")
@@ -177,7 +178,7 @@ def fc(
             ...     weight_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=0.5)),
             ...     bias_attr=paddle.ParamAttr(initializer=paddle.nn.initializer.Constant(value=1.0)))
             >>> print(out)
-            var fc_1.tmp_3 : LOD_TENSOR.shape(1, 2).dtype(float32).stop_gradient(False)
+            var fc_1.tmp_3 : DENSE_TENSOR.shape(1, 2).dtype(float32).stop_gradient(False)
 
     """
 
@@ -212,17 +213,18 @@ def fc(
             if num_flatten_dims == -1:
                 num_flatten_dims = len(input_shape) - 1
             param_shape = [
-                reduce(lambda a, b: a * b, input_shape[num_flatten_dims:], 1)
-            ] + [size]
+                reduce(lambda a, b: a * b, input_shape[num_flatten_dims:], 1),
+                size,
+            ]
             w = helper.create_parameter(
                 attr=param_attr, shape=param_shape, dtype=dtype, is_bias=False
             )
             if in_pir_mode():
                 if len(input_var.shape) > 2:
-                    new_shape = (
-                        input_var.shape[0],
-                        np.prod(input_var.shape[1:]),
-                    )
+                    new_shape = [
+                        *input_var.shape[:num_flatten_dims],
+                        np.prod(input_var.shape[num_flatten_dims:]),
+                    ]
                     input_var = paddle.reshape(input_var, new_shape)
                 tmp = paddle.matmul(input_var, w)
             else:
@@ -418,14 +420,14 @@ def continuous_value_model(input, cvm, use_cvm=True):
     If :attr:`use_cvm` is False, it will remove show and click from :attr:`input` , and output shape is :math:`[N, D - 2]` .
     :attr:`cvm` is show_click info, whose shape is :math:`[N, 2]` .
     Args:
-        input (Variable): The input variable. A 2-D LoDTensor with shape :math:`[N, D]` , where N is the batch size, D is `2 + the embedding dim` . `lod level = 1` .
+        input (Variable): The input variable. A 2-D DenseTensor with shape :math:`[N, D]` , where N is the batch size, D is `2 + the embedding dim` . `lod level = 1` .
         A Tensor with type float32, float64.
         cvm (Variable): Show and click variable. A 2-D Tensor with shape :math:`[N, 2]` , where N is the batch size, 2 is show and click.
         A Tensor with type float32, float64.
         use_cvm  (bool):  Use show_click or not. if use, the output dim is the same as input.
                           if not use, the output dim is `input dim - 2` (remove show and click)
     Returns:
-        Variable: A 2-D LodTensor with shape :math:`[N, M]` . if :attr:`use_cvm` = True, M is equal to input dim D. if False, M is equal to `D - 2`. \
+        Variable: A 2-D DenseTensor with shape :math:`[N, M]` . if :attr:`use_cvm` = True, M is equal to input dim D. if False, M is equal to `D - 2`. \
         A Tensor with same type as input.
     Examples:
         .. code-block:: python
@@ -454,214 +456,6 @@ def continuous_value_model(input, cvm, use_cvm=True):
         attrs={"use_cvm": use_cvm},
     )
     return out
-
-
-@static_only
-def data_norm(
-    input,
-    act=None,
-    epsilon=1e-05,
-    param_attr=None,
-    data_layout='NCHW',
-    in_place=False,
-    name=None,
-    moving_mean_name=None,
-    moving_variance_name=None,
-    do_model_average_for_mean_and_var=True,
-    slot_dim=-1,
-    sync_stats=False,
-    summary_decay_rate=0.9999999,
-    enable_scale_and_shift=False,
-):
-    r"""
-
-    **Data Normalization Layer**
-
-    This op can be used as a normalizer function for conv2d and fully_connected operations.
-    The required data format for this layer is one of the following:
-
-    1. NHWC `[batch, in_height, in_width, in_channels]`
-
-    2. NCHW `[batch, in_channels, in_height, in_width]`
-
-    :math:`input` is the input features over a mini-batch.
-
-    ..  math::
-
-        \mu_{\beta} &\gets \frac{1}{m} \sum_{i=1}^{m} x_i \qquad &//
-        \ mini-batch\ mean \\
-        \sigma_{\beta}^{2} &\gets \frac{1}{m} \sum_{i=1}^{m}(x_i -
-        \mu_{\beta})^2 \qquad &//\ mini-batch\ variance \\
-        \hat{x_i} &\gets \frac{x_i - \mu_\beta} {\sqrt{
-        \sigma_{\beta}^{2} + \epsilon}} \qquad &//\ normalize \\
-        y_i &\gets \gamma \hat{x_i} + \beta \qquad &//\ scale\ and\ shift
-
-    Args:
-        input (Tensor): The input Tensor.
-        act (str, optional): Activation type, linear|relu|prelu|... Default: None.
-        epsilon(float, optional): Whether to add small values into the variance during calculations
-            to prevent division by zero. Default: 1e-05.
-        param_attr (ParamAttr, optional): The parameter attribute for Parameter `scale`. Default: None.
-        data_layout (str, optional): Specify the data format of the input, and the data format of the output
-            will be consistent with that of the input. An optional string from: `"NCHW"`, `"NHWC"`.
-            The default is `"NCHW"`. When it is `"NCHW"`, the data is stored in the order of:
-            `[batch_size, input_channels, input_height, input_width]`. Default: `"NCHW"`.
-        in_place (bool, optional): Make the input and output of batch norm reuse memory. Default: False.
-        name (str, optional): A name for this layer (optional). If set None, the layer
-            will be named automatically. Default: None.
-        moving_mean_name (str, optional): The name of moving_mean which store the global Mean. Default: None.
-        moving_variance_name (str, optional): The name of the moving_variance which store the global Variance. Default: None.
-        do_model_average_for_mean_and_var (bool, optional): Whether parameter mean and variance
-            should do model average when model average is enabled. Default: True.
-        slot_dim (int, optional): The embedding dimension of one slot. Slot is a set of one specific feature. In pslib mode,
-            we distinguish feature ids by slot and pull their embeddings from parameter server (pslib). The first
-            place of the embedding is the historical show number (occurrence time of this feature id with a label 0).
-            If the input of this op is concated by slot-wise embeddings, and the show number is zero when this slot
-            is new or empty, the normalization result may be impractical. To avoid this, we add slot_dim to locate
-            the show number and judge if the show number is zero. If so, we choose to skip normalization on this
-            embedding. Default: -1.
-        sync_stats (bool, optional): When running with multiple GPU cards, using allreduce to sync the
-            summary messages. Default: False.
-        summary_decay_rate (float, optional): The decay rate when updating summary. Default: 0.9999999.
-        enable_scale_and_shift (bool, optional): do scale&shift after normalization. Default: False.
-
-    Returns:
-        Tensor: A tensor which is the result after applying data normalization on the input.
-
-    Examples:
-
-        .. code-block:: python
-
-            >>> import paddle
-            >>> paddle.enable_static()
-
-            >>> x = paddle.randn(shape=[32, 100])
-            >>> hidden2 = paddle.static.nn.data_norm(input=x)
-    """
-    helper = LayerHelper('data_norm', **locals())
-    dtype = helper.input_dtype()
-
-    input_shape = input.shape
-    if len(input_shape) < 2:
-        raise ValueError(
-            f"The shape pf Input < 2 (got {len(input_shape)}D input, input shape is: {input_shape})"
-        )
-    if data_layout == 'NCHW':
-        channel_num = input_shape[1]
-    else:
-        if data_layout == 'NHWC':
-            channel_num = input_shape[-1]
-        else:
-            raise ValueError("unsupported data layout:" + data_layout)
-
-    param_shape = [channel_num]
-
-    batch_size_default = 1e4
-    batch_sum_default = 0.0
-    batch_square_sum_default = 1e4
-    scale_w_default = 1.0
-    bias_default = 0.0
-
-    if param_attr and isinstance(param_attr, dict):
-        batch_size_default = param_attr.get("batch_size", 1e4)
-        batch_sum_default = param_attr.get("batch_sum", 0.0)
-        batch_square_sum_default = param_attr.get("batch_square", 1e4)
-    if enable_scale_and_shift:
-        scale_w_default = param_attr.get("scale_w", 1.0)
-        bias_default = param_attr.get("bias", 0.0)
-
-    # create scale and shift(bias) when enable_scale_and_shift is True
-    if name is None:
-        name = "dn"
-    if enable_scale_and_shift:
-        scale_w = helper.create_parameter(
-            attr=ParamAttr(
-                name=name + '.scale_w',
-                initializer=Constant(value=float(scale_w_default)),
-                trainable=True,
-            ),
-            shape=param_shape,
-            dtype=input.dtype,
-        )
-        bias = helper.create_parameter(
-            attr=ParamAttr(
-                name=name + '.bias',
-                initializer=Constant(value=float(bias_default)),
-                trainable=True,
-            ),
-            shape=param_shape,
-            dtype=input.dtype,
-        )
-    # create parameter
-    batch_size = helper.create_parameter(
-        attr=ParamAttr(
-            name=name + '.batch_size',
-            initializer=Constant(value=float(batch_size_default)),
-            trainable=True,
-        ),
-        shape=param_shape,
-        dtype=input.dtype,
-    )
-
-    batch_sum = helper.create_parameter(
-        attr=ParamAttr(
-            name=name + '.batch_sum',
-            initializer=Constant(value=float(batch_sum_default)),
-            trainable=True,
-        ),
-        shape=param_shape,
-        dtype=input.dtype,
-    )
-
-    batch_square_sum = helper.create_parameter(
-        attr=ParamAttr(
-            name=name + '.batch_square_sum',
-            initializer=Constant(value=float(batch_square_sum_default)),
-            trainable=True,
-        ),
-        shape=param_shape,
-        dtype=input.dtype,
-    )
-
-    means = helper.create_variable(dtype=dtype, stop_gradient=True)
-    scales = helper.create_variable(dtype=dtype, stop_gradient=True)
-
-    data_norm_out = input if in_place else helper.create_variable(dtype=dtype)
-
-    inputs = {
-        "X": input,
-        "BatchSize": batch_size,
-        "BatchSum": batch_sum,
-        "BatchSquareSum": batch_square_sum,
-    }
-    attrs = {
-        "epsilon": epsilon,
-        "data_layout": data_layout,
-        "sync_stats": sync_stats,
-        "summary_decay_rate": summary_decay_rate,
-    }
-    if slot_dim > 0:
-        attrs["slot_dim"] = slot_dim
-    if enable_scale_and_shift:
-        attrs["enable_scale_and_shift"] = enable_scale_and_shift
-    if enable_scale_and_shift:
-        inputs["scale_w"] = scale_w
-        inputs["bias"] = bias
-    helper.append_op(
-        type="data_norm",
-        inputs=inputs,
-        outputs={
-            "Y": data_norm_out,
-            "Means": means,
-            "Scales": scales,
-            "BatchSize": batch_size,
-            "BatchSum": batch_sum,
-            "BatchSquareSum": batch_square_sum,
-        },
-        attrs=attrs,
-    )
-
-    return helper.append_activation(data_norm_out)
 
 
 def group_norm(
@@ -1027,7 +821,7 @@ def conv2d(
 
     padding = _update_padding(padding, data_format)
 
-    filter_shape = [num_filters, int(num_filter_channels)] + filter_size
+    filter_shape = [num_filters, int(num_filter_channels), *filter_size]
 
     def _get_default_param_initializer():
         filter_elem_num = filter_size[0] * filter_size[1] * num_channels
@@ -1322,7 +1116,7 @@ def conv3d(
     padding = _update_padding(padding, data_format)
 
     input_shape = input.shape
-    filter_shape = [num_filters, num_filter_channels] + filter_size
+    filter_shape = [num_filters, num_filter_channels, *filter_size]
 
     def _get_default_param_initializer():
         filter_elem_num = (
@@ -1718,7 +1512,7 @@ def conv2d_transpose(
             f"but received the groups of input is {groups}"
         )
 
-    filter_shape = [input_channel, num_filters // groups] + filter_size
+    filter_shape = [input_channel, num_filters // groups, *filter_size]
 
     img_filter = helper.create_parameter(
         dtype=input.dtype, shape=filter_shape, attr=helper.param_attr
@@ -2076,7 +1870,7 @@ def conv3d_transpose(
             f"Received: Attr(num_filters) is {num_filters}, the groups is {groups}"
         )
 
-    filter_shape = [input_channel, num_filters // groups] + filter_size
+    filter_shape = [input_channel, num_filters // groups, *filter_size]
     img_filter = helper.create_parameter(
         dtype=input.dtype, shape=filter_shape, attr=helper.param_attr
     )
@@ -2292,7 +2086,7 @@ def deformable_conv(
     dilation = paddle.utils.convert_to_list(dilation, 2, 'dilation')
 
     input_shape = input.shape
-    filter_shape = [num_filters, int(num_filter_channels)] + filter_size
+    filter_shape = [num_filters, int(num_filter_channels), *filter_size]
 
     def _get_default_param_initializer():
         filter_elem_num = filter_size[0] * filter_size[1] * num_channels
@@ -2831,8 +2625,6 @@ def batch_norm(
                 is_test,
                 'data_layout',
                 data_layout,
-                'fuse_with_relu',
-                False,
                 'use_global_stats',
                 use_global_stats,
             )
@@ -2844,8 +2636,6 @@ def batch_norm(
                 is_test,
                 'data_layout',
                 data_layout,
-                'fuse_with_relu',
-                False,
                 'use_global_stats',
                 use_global_stats,
             )
@@ -2950,7 +2740,7 @@ def prelu(x, mode, param_attr=None, data_format="NCHW", name=None):
         element: All elements do not share alpha. Each element has its own alpha.
 
     Parameters:
-        x (Tensor): The input Tensor or LoDTensor with data type float32.
+        x (Tensor): The input Tensor or DenseTensor with data type float32.
         mode (str): The mode for weight sharing.
         param_attr (ParamAttr|None, optional): The parameter attribute for the learnable \
             weight (alpha), it can be create by ParamAttr. None by default. \
@@ -2967,6 +2757,7 @@ def prelu(x, mode, param_attr=None, data_format="NCHW", name=None):
 
         .. code-block:: python
 
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
             >>> import paddle
             >>> paddle.enable_static()
 
@@ -3017,7 +2808,7 @@ def prelu(x, mode, param_attr=None, data_format="NCHW", name=None):
         assert (
             len(x.shape) >= 1
         ), "The size of input shape should be equal or larger than 1 in prelu() when mode is 'element'"
-        alpha_shape = [1] + list(x.shape)[1:]
+        alpha_shape = [1, *list(x.shape)[1:]]
     dtype = helper.input_dtype(input_param_name='x')
     alpha = helper.create_parameter(
         attr=helper.param_attr,
@@ -3095,14 +2886,14 @@ class PyFuncRegistry:
 
         ret = []
         for each_ret in func_ret:
-            if each_ret is None or isinstance(each_ret, core.LoDTensor):
+            if each_ret is None or isinstance(each_ret, core.DenseTensor):
                 ret.append(each_ret)
                 continue
 
             if not isinstance(each_ret, np.ndarray):
                 each_ret = np.array(each_ret)
 
-            tensor = core.LoDTensor()
+            tensor = core.DenseTensor()
             tensor.set(each_ret, core.CPUPlace())
             ret.append(tensor)
 
@@ -3382,7 +3173,8 @@ def row_conv(input, future_context_size, param_attr=None, act=None):
 
         .. code-block:: python
 
-            >>> # for LodTensor inputs
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
+            >>> # for DenseTensor inputs
             >>> import paddle
             >>> paddle.enable_static()
             >>> x = paddle.static.data(name='x', shape=[9, 16],
@@ -3491,7 +3283,7 @@ def spectral_norm(weight, dim=0, power_iters=1, eps=1e-12, name=None):
 
     # create input and parameters
     input_shape = weight.shape
-    assert weight.numel() > 0, "Any dimension of input cannot be equal to 0."
+    assert 0 not in input_shape, "Any dimension of input cannot be equal to 0."
 
     if dim not in [0, 1]:
         raise ValueError(
@@ -3728,12 +3520,12 @@ def embedding(
 
         Case 2:
 
-        input is a LoDTensor with 1-level LoD. padding_idx = 0
+        input is a DenseTensor with 1-level LoD. padding_idx = 0
             input.lod = [[2, 3]]
             input.data = [[1], [3], [2], [4], [0]]
             input.shape = [5, 1]
         Given size = [128, 16]
-        output is a LoDTensor:
+        output is a DenseTensor:
             out.lod = [[2, 3]]
             out.shape = [5, 1, 16]
             out.data = [[[0.129435295, 0.244512452, ..., 0.436322452]],
@@ -3745,7 +3537,7 @@ def embedding(
 
 
     Args:
-        input(Tensor): A Tensor or LoDTensor with type int64, which contains the id information.
+        input(Tensor): A Tensor or DenseTensor with type int64, which contains the id information.
             The value of the input id should satisfy :math:`0<= id < size[0]` .
         size(tuple|list): The shape of lookup table parameter. It should have two elements which
             indicates the size of the dictionary of embeddings and the size of each embedding vector respectively.
@@ -3769,11 +3561,12 @@ def embedding(
             It must be float32 or float64. Default: float32.
 
     Returns:
-        Tensor: Embedding Tensor or LoDTensor mapped by input. The data type is the same as :attr:`dtype` .
+        Tensor: Embedding Tensor or DenseTensor mapped by input. The data type is the same as :attr:`dtype` .
 
     Static Examples:
         .. code-block:: python
 
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
             >>> import paddle
             >>> import numpy as np
             >>> paddle.enable_static()
@@ -3786,7 +3579,7 @@ def embedding(
             >>> exe = paddle.static.Executor(place)
             >>> exe.run(paddle.static.default_startup_program())
 
-            >>> x = np.array([[7, 2, 4, 5],[4, 3, 2, 9]], dtype=np.int64) # type: ignore[var-annotated]
+            >>> x = np.array([[7, 2, 4, 5],[4, 3, 2, 9]], dtype=np.int64)
             >>> out, = exe.run(paddle.static.default_main_program(), feed={'x':x}, fetch_list=[output])
             >>> print(out)
             [[[1. 1. 1.]
@@ -3817,9 +3610,7 @@ def embedding(
     padding_idx = (
         -1
         if padding_idx is None
-        else padding_idx
-        if padding_idx >= 0
-        else (size[0] + padding_idx)
+        else padding_idx if padding_idx >= 0 else (size[0] + padding_idx)
     )
     helper.append_op(
         type='lookup_table_v2',
@@ -3885,12 +3676,12 @@ def sparse_embedding(
 
         Case 2:
 
-        input is a LoDTensor with 1-level LoD. padding_idx = 0
+        input is a DenseTensor with 1-level LoD. padding_idx = 0
             input.lod = [[2, 3]]
             input.data = [[1], [3], [2], [4], [0]]
             input.shape = [5, 1]
         Given size = [128, 16]
-        output is a LoDTensor:
+        output is a DenseTensor:
             out.lod = [[2, 3]]
             out.shape = [5, 1, 16]
             out.data = [[[0.129435295, 0.244512452, ..., 0.436322452]],
@@ -3901,7 +3692,7 @@ def sparse_embedding(
         It will pad all-zero data when ids is 0.
 
     Args:
-        input(Tensor): A Tensor or LoDTensor with type int64, which contains the id
+        input(Tensor): A Tensor or DenseTensor with type int64, which contains the id
             information. The value of the input id should satisfy :math:`0<= id < size[0]` .
         size(tuple|list): The shape of lookup table parameter (vocab_size, emb_size). It
             should have two elements which indicates the size of the dictionary of embeddings
@@ -3929,11 +3720,12 @@ def sparse_embedding(
             float64. Default: float32.
 
     Returns:
-        Tensor: Embedding Tensor or LoDTensor mapped by input. The data type is the same as :attr:`dtype` .
+        Tensor: Embedding Tensor or DenseTensor mapped by input. The data type is the same as :attr:`dtype` .
 
     Examples:
         .. code-block:: python
 
+            >>> # doctest: +SKIP("This has diff in xdoctest env")
             >>> import paddle
 
             >>> paddle.enable_static()
@@ -3984,9 +3776,7 @@ def sparse_embedding(
     padding_idx = (
         -1
         if padding_idx is None
-        else padding_idx
-        if padding_idx >= 0
-        else (size[0] + padding_idx)
+        else padding_idx if padding_idx >= 0 else (size[0] + padding_idx)
     )
 
     if table_class not in [
@@ -4154,8 +3944,9 @@ class ExponentialMovingAverage:
 
         self._ema_vars = {}
         for param, tmp in self._params_tmps:
-            with param.block.program._optimized_guard([param, tmp]), name_scope(
-                'moving_average'
+            with (
+                param.block.program._optimized_guard([param, tmp]),
+                name_scope('moving_average'),
             ):
                 self._ema_vars[param.name] = self._create_ema_vars(param)
 
@@ -4237,8 +4028,9 @@ class ExponentialMovingAverage:
         )
         param_master_emas = []
         for param, tmp in self._params_tmps:
-            with param.block.program._optimized_guard([param, tmp]), name_scope(
-                'moving_average'
+            with (
+                param.block.program._optimized_guard([param, tmp]),
+                name_scope('moving_average'),
             ):
                 param_ema = self._ema_vars[param.name]
                 if param.name + '.master' in self._ema_vars:

@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import numbers
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -24,6 +24,8 @@ from paddle.base import framework
 from paddle.distribution import distribution
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
 
 
@@ -193,7 +195,7 @@ class Geometric(distribution.Distribution):
                 f"Expected type of k is number.Real|framework.Variable|Value, but got {type(k)}"
             )
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Sample from Geometric distribution with sample shape.
 
         Args:
@@ -219,7 +221,7 @@ class Geometric(distribution.Distribution):
         with paddle.no_grad():
             return self.rsample(shape)
 
-    def rsample(self, shape: Sequence[int] = ()) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate samples of the specified shape.
 
         Args:

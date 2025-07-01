@@ -11,14 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import copy
 import logging
 from collections import OrderedDict
-from typing import List, Tuple
+from typing import TYPE_CHECKING
 
 import paddle
-from paddle.base import Variable
 from paddle.distributed.auto_parallel.static.utils import (
     is_backward_op,
     is_gradient_clip_op,
@@ -35,6 +35,9 @@ from paddle.static import program_guard
 
 from ..utils.log_utils import get_logger
 from .pass_base import PassBase, register_pass
+
+if TYPE_CHECKING:
+    from paddle.base import Variable
 
 _supported_optimizer_type = [
     "adam",
@@ -53,18 +56,24 @@ logger = get_logger(logging.INFO, "MasterGradPass")
 
 
 def _is_master_grad_cast_op(block, op):
-    if op.type != "cast":
+    op_name = op.type
+    if op_name != "cast":
         return False
-    assert len(op.input_arg_names) == 1
-    assert len(op.output_arg_names) == 1
-    input_var_name = op.input_arg_names[0]
+    input_names = op.input_arg_names
+    output_names = op.output_arg_names
+
+    assert len(input_names) == 1
+    assert len(output_names) == 1
+
+    input_var_name = input_names[0]
+
     return (
         "@master_grad_fp16" in input_var_name
         or "@master_grad_bf16" in input_var_name
     )
 
 
-def get_output_in_varlist(op, var_names) -> List[str]:
+def get_output_in_varlist(op, var_names) -> list[str]:
     grad_names = []
     for output_name in op.output_arg_names:
         if output_name in var_names:
@@ -99,7 +108,7 @@ class MasterGradPass(PassBase):
         )
         logger.debug(f"After main program: {main_program}")
 
-    def _add_cast_op(self, cur_block, grad_names: List[str], dist_context):
+    def _add_cast_op(self, cur_block, grad_names: list[str], dist_context):
         grad_first_ids = OrderedDict()
         for idx, op in enumerate(cur_block.ops):
             if is_optimize_op(op):
@@ -193,7 +202,7 @@ class MasterGradPass(PassBase):
         self,
         main_program,
         startup_program,
-        params_grads: List[Tuple[Variable, Variable]],
+        params_grads: list[tuple[Variable, Variable]],
         dist_context,
     ):
         grad_names = [g.name for _, g in params_grads]
@@ -264,9 +273,11 @@ class MasterGradPass(PassBase):
             dist_context._serial_optimizer._learning_rate
         )
         serial_optimizer._sorted = False
-        with program_guard(main_program, startup_program):
-            with main_program.switch_name_generator_guard("opt_"):
-                _ = serial_optimizer.apply_gradients(params_grads)
+        with (
+            program_guard(main_program, startup_program),
+            main_program.switch_name_generator_guard("opt_"),
+        ):
+            _ = serial_optimizer.apply_gradients(params_grads)
         self._completer.complete_update_annotation(main_program)
 
     def _add_master_grad(self, main_program, params_grads, dist_context):

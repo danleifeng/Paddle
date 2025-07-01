@@ -34,7 +34,6 @@ from paddle.incubate.layers.nn import (
     rank_attention,
     shuffle_batch,
 )
-from paddle.pir_utils import test_with_pir_api
 from paddle.tensor import random
 
 paddle.enable_static()
@@ -376,7 +375,7 @@ class TestLayer(LayerTest):
             static_pir_result = _test_static(inp_np_x, inp_np_y)
         np.testing.assert_array_equal(static_pir_result, static_rlt)
 
-    def test_embeding(self):
+    def test_embedding(self):
         inp_word = np.array([[[1]]]).astype('int64')
         dict_size = 20
         with self.static_graph():
@@ -527,9 +526,7 @@ class TestLayer(LayerTest):
 
         def _test_static_specific(input):
             with self.static_graph():
-                X = paddle.static.data(
-                    name='X', shape=shape, dtype='float32', lod_level=1
-                )
+                X = paddle.static.data(name='X', shape=shape, dtype='float32')
                 ret = paddle.static.nn.group_norm(
                     input=X,
                     groups=2,
@@ -552,9 +549,7 @@ class TestLayer(LayerTest):
 
         def _test_static(input):
             with self.static_graph():
-                X = paddle.static.data(
-                    name='X', shape=shape, dtype='float32', lod_level=1
-                )
+                X = paddle.static.data(name='X', shape=shape, dtype='float32')
                 groupNorm = paddle.nn.GroupNorm(
                     num_channels=shape[1],
                     num_groups=2,
@@ -684,7 +679,6 @@ class TestLayer(LayerTest):
         with paddle.pir_utils.IrGuard():
             _test_errors()
 
-    @test_with_pir_api
     def test_spectral_norm(self):
         if core.is_compiled_with_cuda():
             place = core.CUDAPlace(0)
@@ -697,7 +691,7 @@ class TestLayer(LayerTest):
 
         with self.static_graph():
             Weight = paddle.static.data(
-                name='Weight', shape=shape, dtype='float32', lod_level=1
+                name='Weight', shape=shape, dtype='float32'
             )
             ret = paddle.static.nn.spectral_norm(
                 weight=Weight, dim=1, power_iters=2
@@ -714,7 +708,7 @@ class TestLayer(LayerTest):
 
         with self.static_graph():
             Weight = paddle.static.data(
-                name='Weight', shape=shape, dtype='float32', lod_level=1
+                name='Weight', shape=shape, dtype='float32'
             )
             spectralNorm = paddle.nn.SpectralNorm(shape, dim=1, power_iters=2)
             ret = spectralNorm(Weight)
@@ -817,7 +811,6 @@ class TestLayer(LayerTest):
                 conv3d1.bias.numpy(), conv3d2.bias.numpy()
             )
 
-    @test_with_pir_api
     def test_while_loop(self):
         with self.static_graph():
             i = paddle.tensor.fill_constant(shape=[1], dtype='int64', value=0)
@@ -859,7 +852,6 @@ class TestLayer(LayerTest):
 
         np.testing.assert_array_equal(static_ret[0], dy_ret[0].numpy())
 
-    @test_with_pir_api
     def test_cond(self):
         def less_than_branch(a, b):
             return paddle.add(a, b)
@@ -911,7 +903,6 @@ class TestLayer(LayerTest):
 
         np.testing.assert_array_equal(static_res, dynamic_res)
 
-    @test_with_pir_api
     def test_case(self):
         def fn_1():
             return paddle.tensor.fill_constant(
@@ -985,7 +976,6 @@ class TestLayer(LayerTest):
         np.testing.assert_array_equal(static_res1, dynamic_res1)
         np.testing.assert_array_equal(static_res2, dynamic_res2)
 
-    @test_with_pir_api
     def test_switch_case(self):
         def fn_1():
             return paddle.tensor.fill_constant(
@@ -1134,7 +1124,7 @@ class TestBook(LayerTest):
     def _get_np_data(self, shape, dtype, append_batch_size=True):
         np.random.seed(self.seed)
         if append_batch_size:
-            shape = [self._batch_size] + shape
+            shape = [self._batch_size, *shape]
         if dtype == 'float32':
             return np.random.random(shape).astype(dtype)
         elif dtype == 'float64':
@@ -1161,7 +1151,7 @@ class TestBook(LayerTest):
                     shape, dtype, append_batch_size
                 )
             if append_batch_size:
-                shape = [-1] + shape
+                shape = [-1, *shape]
             data = paddle.static.data(
                 name=name,
                 shape=shape,
@@ -1387,9 +1377,7 @@ class TestBook(LayerTest):
     def test_row_conv(self):
         # TODO(minqiyang): dygraph do not support lod now
         with self.static_graph():
-            x = paddle.static.data(
-                name='x', shape=[-1, 16], dtype='float32', lod_level=1
-            )
+            x = paddle.static.data(name='x', shape=[-1, 16], dtype='float32')
             out = paddle.static.nn.row_conv(input=x, future_context_size=2)
             return out
 
@@ -1406,9 +1394,7 @@ class TestBook(LayerTest):
     def test_shuffle_batch(self):
         # TODO(minqiyang): dygraph do not support lod now
         with self.static_graph():
-            x = paddle.static.data(
-                name='X', shape=[-1, 4, 50], dtype='float32', lod_level=0
-            )
+            x = paddle.static.data(name='X', shape=[-1, 4, 50], dtype='float32')
             out1 = shuffle_batch(x)
             paddle.seed(1000)
             out2 = shuffle_batch(x)

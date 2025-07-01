@@ -37,10 +37,10 @@
           comment : The added input 'Atol' is not dispensable.
     - checkpoint : Delete two float attributes [rtol] and [atol],
         then add 2 string attributes [atol, rtol]. Don't be surprised.
-        This is because float cannot represent hight-precision
+        This is because float cannot represent height-precision
         floating-point values, and our framework doesn't support
         the use of double attributes. As a result, string instead
-        of double is used here to represent high-precision
+        of double is used here to represent height-precision
         floating-point values.
       action :
         - add_attr : rtol
@@ -88,6 +88,14 @@
       action :
         - add_input : ValueTensor
           comment : In order to support multi-tag task.
+
+- op : c_split
+  version :
+    - checkpoint : Upgrade c_split delete 1 attribute[use_calc_stream].
+      action :
+        - delete_attr : use_calc_stream
+          comment : eject CUDA operations to calculation stream.
+          default : false
 
 - op : clip
   version :
@@ -311,6 +319,22 @@
           comment : If true, im_shape pixel offset is 1.
           default : "true"
 
+- op : global_gather
+  version :
+    - checkpoint : Upgrade global_gather delete 1 attribute[use_calc_stream].
+      action :
+        - delete_attr : use_calc_stream
+          comment : eject CUDA operations to calculation stream.
+          default : false
+
+- op : global_scatter
+  version :
+    - checkpoint : Upgrade global_scatter delete 1 attribute[use_calc_stream].
+      action :
+        - delete_attr : use_calc_stream
+          comment : eject CUDA operations to calculation stream.
+          default : false
+
 - op : greater_equal
   version :
     - checkpoint : Upgrade compare ops, add a new attribute [force_cpu]
@@ -475,6 +499,22 @@
           comment : Compute as vector when axis is None and input is matrix.
           default : "false"
 
+- op : partial_allgather
+  version :
+    - checkpoint : Upgrade partial_allgather delete 1 attribute[use_calc_stream].
+      action :
+        - delete_attr : use_calc_stream
+          comment : eject CUDA operations to calculation stream.
+          default : false
+
+- op : partial_send
+  version :
+    - checkpoint : Upgrade partial_send delete 1 attribute[use_calc_stream].
+      action :
+        - delete_attr : use_calc_stream
+          comment : eject CUDA operations to calculation stream.
+          default : false
+
 - op : pixel_shuffle
   version :
     - checkpoint : Compatible upgrade of pixel_shuffle, add a new attribute [data_format]
@@ -526,7 +566,7 @@
 
 - op : round
   version :
-    - checkpoint : Add a new attribute [deciamls] to round
+    - checkpoint : Add a new attribute [decimals] to round
       action :
         - add_attr : decimals
           comment : The number of decimal places rounded

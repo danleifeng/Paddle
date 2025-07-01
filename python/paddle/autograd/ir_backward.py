@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import warnings
+from typing import TYPE_CHECKING
 
 import paddle.pir
 from paddle.autograd.backward_utils import (
@@ -31,6 +32,7 @@ from paddle.autograd.backward_utils import (
     dynamic_shape_prim_vjp_guard,
     get_grad_semantic_info,
     get_real_op_inputs,
+    get_real_op_outputs,
     get_split_op,
     inverse_sort_op,
     is_builtin_op,
@@ -43,14 +45,24 @@ from paddle.autograd.backward_utils import (
     return_map_value,
     return_map_value_list,
     some_in_set,
+    update_if_output_stopgradient,
     update_no_grad_set_by_stopgradient,
+    update_tuple_pop_origin_inputs,
+    update_while_output_stopgradient,
+    value_in_block,
     warning_once,
     while_prune_check,
 )
+from paddle.base.framework import pir_op_name_guard
 from paddle.base.libpaddle.pir import (
     build_pipe_for_block,
     get_used_external_value,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from paddle.pir import Value
 
 """
     grad: for template test, will combine in paddle.grad .
@@ -72,6 +84,10 @@ def append_full_like(float_value, copy_value, value, state, backward_ops):
             )
             full_like_op = value_grad.get_defining_op()
             backward_ops_ = [full_like_op]
+        elif copy_value.is_combine():
+            raise ValueError(
+                "This kind of scene, where VectorType grad be fulled with zeros should not occur."
+            )
         else:
             value_grad = paddle.full_like(
                 copy_value,
@@ -86,13 +102,19 @@ def append_full_like(float_value, copy_value, value, state, backward_ops):
             state.op_to_opgrad[value.get_defining_op()],
             backward_ops_,
         )
-        state.value_to_valuegrad[value] = [[value_grad]]
+        if copy_value.is_combine():
+            state.value_to_valuegrad[value] = [value_grad]
+        else:
+            state.value_to_valuegrad[value] = [[value_grad]]
         return value_grad
 
 
 def append_add_n(
     op, value, state, backward_ops, bwd_value_to_block_argument_map
 ):
+    _MAX_ADD_NUM_ = paddle.framework._global_flags()[
+        'FLAGS_max_inplace_grad_add'
+    ]
     with paddle.amp.auto_cast(enable=False):
         # value is input of more than one fwd_op,
         # so more than one bwd_op create input_grad,
@@ -104,10 +126,45 @@ def append_add_n(
                     return_map_value(item[0], bwd_value_to_block_argument_map)
                 )
 
+        from paddle.amp.auto_cast import amp_global_state
+
+        cast_op = []
+        if (
+            amp_global_state().use_master_grad
+            and amp_global_state().amp_dtype in ['float16', 'bfloat6']
+            and op.name() == 'builtin.parameter'
+            and value.dtype in [paddle.float16, paddle.bfloat16]
+        ):
+            add_n_list = [paddle.cast(v, 'float32') for v in add_n_list]
+            cast_op = [v.get_defining_op() for v in add_n_list]
+
         if len(add_n_list) == 0:
             for tmp in state.value_to_valuegrad[value]:
                 state.value_to_sumvaluegrad[value].append(tmp)
             state.value_to_valuegrad[value] = []
+        elif len(add_n_list) <= _MAX_ADD_NUM_:
+            grad_value = add_n_list[0]
+            index = 1
+            grad_op_list = []
+            while index < len(add_n_list):
+                grad_value = paddle._C_ops.add_(grad_value, add_n_list[index])
+                grad_op_list.append(grad_value.get_defining_op())
+                index += 1
+            update_bwdop_structure(
+                backward_ops, state.op_to_opgrad[op], cast_op + grad_op_list
+            )
+            for tmp in state.value_to_valuegrad[value]:
+                state.value_to_sumvaluegrad[value].append(tmp)
+            state.value_to_valuegrad[value] = [[grad_value]]
+        elif len(add_n_list) == 1:
+            update_bwdop_structure(
+                backward_ops,
+                state.op_to_opgrad[op],
+                cast_op,
+            )
+            for tmp in state.value_to_valuegrad[value]:
+                state.value_to_sumvaluegrad[value].append(tmp)
+            state.value_to_valuegrad[value] = [add_n_list]
         else:
             if value.is_dense_tensor_array_type():
                 add_n_value = paddle._C_ops.add_n_array(add_n_list)
@@ -117,7 +174,9 @@ def append_add_n(
             add_n_op = add_n_value.get_defining_op()
             combine_op = add_n_op.operand_source(0).get_defining_op()
             update_bwdop_structure(
-                backward_ops, state.op_to_opgrad[op], [combine_op, add_n_op]
+                backward_ops,
+                state.op_to_opgrad[op],
+                [*cast_op, combine_op, add_n_op],
             )
 
             for tmp in state.value_to_valuegrad[value]:
@@ -129,6 +188,14 @@ def update_bwdop_structure(backward_ops, op_to_opgrad_list, grad_op_list):
     for grad_op in grad_op_list:
         backward_ops.append(grad_op)
         op_to_opgrad_list.append(grad_op)
+
+
+def update_bwdop_structure_(
+    backward_ops, op_to_opgrad_list, grad_op_list, st, ed
+):
+    for i in range(st, ed):
+        backward_ops.append(grad_op_list[i])
+        op_to_opgrad_list.append(grad_op_list[i])
 
 
 def prepare_grad_outputs(grad_outputs, outputs, state):
@@ -164,13 +231,11 @@ def prepare_grad_outputs(grad_outputs, outputs, state):
         else:
             if output.shape != grad.shape:
                 raise ValueError(
-                    "The shape of grad_output[%d] %s should be the same as the shape of output[%d] %s"
-                    % (i, str(grad.shape), i, str(output.shape))
+                    f"The shape of grad_output[{i}] {grad.shape} should be the same as the shape of output[{i}] {output.shape}"
                 )
             if output.dtype != grad.dtype:
                 warnings.warn(
-                    "The dtype of grad_output[%d] %s is not same as the dtype of output[%d] %s"
-                    % (i, str(grad.dtype), i, str(output.dtype))
+                    f"The dtype of grad_output[{i}] {grad.dtype} is not same as the dtype of output[{i}] {output.dtype}"
                 )
             feedop = grad.get_defining_op()
             update_bwdop_structure(
@@ -188,6 +253,8 @@ def prepare_grad_outputs(grad_outputs, outputs, state):
         if output in visited_output:
             continue
         for opresult in output.get_defining_op().results():
+            if opresult.is_combine():
+                continue
             if opresult in state.value_to_valuegrad:
                 visited_output.add(opresult)
                 continue
@@ -221,13 +288,13 @@ def prune_ops(total_ops, inputs_set, outputs_set, no_grad_set):
     # from input to output
     if inputs_set:
         for i, op in enumerate(total_ops):
-            if some_in_set(op.results(), inputs_set):
+            if some_in_set(get_real_op_outputs(op), inputs_set):
                 union_op_flags[i] = True
                 continue
 
             if some_in_set(get_real_op_inputs(op), inputs_set):
                 union_op_flags[i] = True
-                for value in op.results():
+                for value in get_real_op_outputs(op):
                     if value not in no_grad_set:
                         inputs_set.add(value)
             else:
@@ -235,7 +302,7 @@ def prune_ops(total_ops, inputs_set, outputs_set, no_grad_set):
 
     # from output to input
     for i, op in reversed(list(enumerate(total_ops))):
-        if some_in_set(op.results(), outputs_set):
+        if some_in_set(get_real_op_outputs(op), outputs_set):
             union_op_flags[i] = True
             for operand in get_real_op_inputs(op):
                 if operand not in no_grad_set:
@@ -359,6 +426,7 @@ def append_backward_ops(
             if (
                 value not in state.value_to_valuegrad
                 or state.value_to_valuegrad[value] == []
+                or state.value_to_valuegrad[value][0][0] is None
             ):
                 if not value.use_empty() and get_split_op(value) is not None:
                     # pattern case:
@@ -516,6 +584,16 @@ def append_backward_ops(
                     state.value_to_valuegrad[input].append([input_grad])
             i += 1
 
+    def update_if_double_grad_input_grad_map(input_grads, all_inputs):
+        assert len(input_grads) == len(
+            all_inputs
+        ), "input_grads should same to all_inputs"
+        for input, input_grad in zip(all_inputs, input_grads):
+            if isinstance(input_grad, list):
+                state.value_to_valuegrad[input].append(input_grad)
+            else:
+                state.value_to_valuegrad[input].append([input_grad])
+
     def append_yield(
         block,
         base_op,
@@ -562,7 +640,15 @@ def append_backward_ops(
                     new_value = return_map_value(
                         value, control_flow_value_to_copyvalue_map
                     )
-                    append_full_like(0.0, new_value, value, state, backward_ops)
+                    if not value_in_block(new_value, block):
+                        # new_value.defining_op is another if block's tuple_pop
+                        state.value_to_valuegrad[value] = [
+                            [paddle.pir.fake_value()]
+                        ]
+                    else:
+                        append_full_like(
+                            0.0, new_value, value, state, backward_ops
+                        )
 
                 input_grad = return_map_value(
                     state.value_to_valuegrad[value][0][0],
@@ -594,9 +680,9 @@ def append_backward_ops(
         for outside_output, inside_output in zip(
             base_op.results(), inside_outputs
         ):
-            state.inside_value_to_outside_value_map[
-                inside_output
-            ] = outside_output
+            state.inside_value_to_outside_value_map[inside_output] = (
+                outside_output
+            )
         forward_ops = effective_forward_ops[:-1]
     else:
         forward_ops = effective_forward_ops
@@ -627,24 +713,36 @@ def append_backward_ops(
 
                 if op.name() == "cf.tuple_push":
                     stackop = op.operand_source(0).get_defining_op()
-                    with dynamic_shape_prim_vjp_guard(op, inputs):
-                        copy_out = paddle.framework.core.call_vjp(
-                            op,
-                            inputs,
-                            outputs,
-                            output_grads,
-                            input_grad_stopgradients,
-                        )
+                    if stackop.result(2).use_empty():
+                        with dynamic_shape_prim_vjp_guard(op, inputs):
+                            copy_out = paddle.framework.core.call_vjp(
+                                op,
+                                inputs,
+                                outputs,
+                                output_grads,
+                                input_grad_stopgradients,
+                            )
 
-                    pop_op = bwd_block.ops[-1]
-                    while_tuple_ops.append(pop_op)
-                    while_tuple_ops.append(op)
-                    while_tuple_ops.append(stackop)
-                    bwd_ops = [pop_op]
-                    for output, copy_output in zip(inputs[1:], copy_out[1:]):
-                        control_flow_value_to_copyvalue_map[
-                            output[0]
-                        ] = copy_output[0]
+                        pop_op = bwd_block.ops[-1]
+                        while_tuple_ops.append(pop_op)
+                        while_tuple_ops.append(op)
+                        while_tuple_ops.append(stackop)
+
+                        update_bwdop_structure(
+                            backward_ops, state.op_to_opgrad[op], [pop_op]
+                        )
+                        for output, copy_output in zip(
+                            inputs[1:], copy_out[1:]
+                        ):
+                            control_flow_value_to_copyvalue_map[output[0]] = (
+                                copy_output[0]
+                            )
+                    else:
+                        update_bwdop_structure(
+                            backward_ops,
+                            state.op_to_opgrad[op],
+                            [stackop.result(2).first_use().owner()],
+                        )
                 else:
                     # all(zero_flag) support this op has no contribution for grad
                     # should be delete (prune sub_graph)
@@ -671,6 +769,42 @@ def append_backward_ops(
                         origin_inputs = get_real_op_inputs(op)
                         for sub_block in op.blocks():
                             build_pipe_for_block(sub_block)
+                        # only for double grad if op
+                        true_block = op.as_if_op().true_block()
+                        false_block = op.as_if_op().false_block()
+
+                        true_block_pop_inputs = []
+                        true_block_pop_input_grad_stopgradients = []
+                        if true_block.ops[0].name() == "cf.tuple_pop":
+                            for result in true_block.ops[0].results():
+                                true_block_pop_inputs.append([result])
+                                true_block_pop_input_grad_stopgradients.append(
+                                    [result.stop_gradient]
+                                )
+                        false_block_pop_inputs = []
+                        false_block_pop_input_grad_stopgradients = []
+                        if false_block.ops[0].name() == 'cf.tuple_pop':
+                            for result in false_block.ops[0].results():
+                                false_block_pop_inputs.append([result])
+                                false_block_pop_input_grad_stopgradients.append(
+                                    [result.stop_gradient]
+                                )
+
+                        if (
+                            true_block_pop_inputs != []
+                            or false_block_pop_inputs != []
+                        ):
+                            inputs = (
+                                inputs
+                                + true_block_pop_inputs
+                                + false_block_pop_inputs
+                            )
+                            input_grad_stopgradients = (
+                                input_grad_stopgradients
+                                + true_block_pop_input_grad_stopgradients
+                                + false_block_pop_input_grad_stopgradients
+                            )
+
                         with dynamic_shape_prim_vjp_guard(op, inputs):
                             input_grads = paddle.framework.core.call_vjp(
                                 op,
@@ -680,7 +814,9 @@ def append_backward_ops(
                                 input_grad_stopgradients,
                             )
                         grad_op = bwd_block.ops[-1]
-                        bwd_ops = [grad_op]
+                        update_bwdop_structure(
+                            backward_ops, state.op_to_opgrad[op], [grad_op]
+                        )
 
                         inputs_used_by_other_op = []
                         for sub_fwd_block, sub_bwd_block in zip(
@@ -700,6 +836,7 @@ def append_backward_ops(
                             sub_control_flow_value_to_copyvalue_map = (
                                 control_flow_value_to_copyvalue_map.copy()
                             )
+
                             append_backward_ops(
                                 op,
                                 [input[0] for input in inputs[1:]],
@@ -713,14 +850,45 @@ def append_backward_ops(
                                 control_flow_value_to_copyvalue_map=sub_control_flow_value_to_copyvalue_map,
                             )
                             for input_tuple in inputs_used_by_other_op:
-                                state.value_to_valuegrad[
-                                    input_tuple[0]
-                                ] = input_tuple[1]
+                                state.value_to_valuegrad[input_tuple[0]] = (
+                                    input_tuple[1]
+                                )
 
+                        update_if_output_stopgradient(
+                            grad_op,
+                            grad_op.as_if_op().true_block().ops[-1],
+                            grad_op.as_if_op().false_block().ops[-1],
+                        )
                         for input_tuple in inputs_used_by_other_op:
                             state.value_to_valuegrad[input_tuple[0]] = []
                         # update input_grad map
-                        update_input_grad_map(op, input_grads, origin_inputs)
+                        if (
+                            true_block_pop_inputs != []
+                            or false_block_pop_inputs != []
+                        ):
+                            true_block_pop_inputs = (
+                                update_tuple_pop_origin_inputs(
+                                    true_block_pop_inputs
+                                )
+                            )
+                            false_block_pop_inputs = (
+                                update_tuple_pop_origin_inputs(
+                                    false_block_pop_inputs
+                                )
+                            )
+                            # delete cond inputs
+                            origin_inputs = (
+                                origin_inputs[1:]
+                                + true_block_pop_inputs
+                                + false_block_pop_inputs
+                            )
+                            update_if_double_grad_input_grad_map(
+                                input_grads, origin_inputs
+                            )
+                        else:
+                            update_input_grad_map(
+                                op, input_grads, origin_inputs
+                            )
                     elif op.name() == "pd_op.while":
                         origin_inputs = get_real_op_inputs(op)
                         # prepare while[cond, loop_vars, other_input] other_input's grad
@@ -758,6 +926,7 @@ def append_backward_ops(
                                 )
                             )
                         build_pipe_for_block(while_block)
+
                         with dynamic_shape_prim_vjp_guard(op, inputs):
                             input_grads = paddle.framework.core.call_vjp(
                                 op,
@@ -766,9 +935,11 @@ def append_backward_ops(
                                 output_grads,
                                 input_grad_stopgradients,
                             )
-                        grad_op = bwd_block.ops[-1]
-                        bwd_ops = [grad_op]
 
+                        grad_op = bwd_block.ops[-1]
+                        update_bwdop_structure(
+                            backward_ops, state.op_to_opgrad[op], [grad_op]
+                        )
                         # update grad_op structure
                         (
                             _,
@@ -796,18 +967,15 @@ def append_backward_ops(
                             sub_bwd_value_to_block_argument_map,
                             sub_control_flow_value_to_copyvalue_map,
                         )
+
+                        update_while_output_stopgradient(
+                            grad_op, while_grad_block.ops[-1]
+                        )
                         # update input_grad map
                         update_input_grad_map(op, input_grads, origin_inputs)
                     elif op.name() == "pd_op.pylayer":
                         # create grad_op
                         before_ops_num = len(bwd_block.ops)
-
-                        # TODO(MarioLulab): `PyLayer.backward` has not supported return `None` yet. Will be supported soon.
-                        if any(zero_flag):
-                            raise ValueError(
-                                "pylayer_op.backward have not supported return `None` yet. Will be supported soon."
-                            )
-
                         with dynamic_shape_prim_vjp_guard(op, inputs):
                             input_grads = paddle.framework.core.call_vjp(
                                 op,
@@ -817,12 +985,13 @@ def append_backward_ops(
                                 input_grad_stopgradients,
                             )
                         after_ops_num = len(bwd_block.ops)
-
-                        # update grad_op structure
-                        bwd_ops = [
-                            bwd_block.ops[i]
-                            for i in range(before_ops_num, after_ops_num)
-                        ]
+                        update_bwdop_structure_(
+                            backward_ops,
+                            state.op_to_opgrad[op],
+                            bwd_block.ops,
+                            before_ops_num,
+                            after_ops_num,
+                        )
                         # update input_grad map
                         update_input_grad_map(
                             op, input_grads, get_real_op_inputs(op)
@@ -831,7 +1000,10 @@ def append_backward_ops(
                         # create grad_op
 
                         before_ops_num = len(bwd_block.ops)
-                        with dynamic_shape_prim_vjp_guard(op, inputs):
+                        with (
+                            dynamic_shape_prim_vjp_guard(op, inputs),
+                            pir_op_name_guard(op.name() + '_grad'),
+                        ):
                             input_grads = paddle.framework.core.call_vjp(
                                 op,
                                 inputs,
@@ -840,29 +1012,28 @@ def append_backward_ops(
                                 input_grad_stopgradients,
                             )
                         after_ops_num = len(bwd_block.ops)
-
-                        # update grad_op structure
-                        bwd_ops = [
-                            bwd_block.ops[i]
-                            for i in range(before_ops_num, after_ops_num)
-                        ]
-
+                        update_bwdop_structure_(
+                            backward_ops,
+                            state.op_to_opgrad[op],
+                            bwd_block.ops,
+                            before_ops_num,
+                            after_ops_num,
+                        )
                         # update input_grad map
                         update_input_grad_map(
                             op, input_grads, op.operands_source()
                         )
-
-                update_bwdop_structure(
-                    backward_ops, state.op_to_opgrad[op], bwd_ops
-                )
 
             else:
                 if (
                     op.num_operands() == 0
                     and op.num_results() != 0
                     or op.name() == "pd_op.full_like"
+                    or op.name() == "cf.tuple_pop"
                 ):
                     for value in op.results():
+                        if value not in state.value_to_valuegrad:
+                            continue
                         if len(state.value_to_valuegrad[value]) > 1:
                             append_add_n(
                                 op,
@@ -956,8 +1127,95 @@ def create_backward_prune_set(
     return outputs_set, inputs_set, no_gradvar_set
 
 
-def calc_gradient_helper(outputs, inputs, grad_outputs, no_grad_set):
-    block = outputs[0].get_defining_op().get_parent_block()
+def _complete_grad_op_chunk_id(block, state):
+    dist_skip_op_list = ["builtin.split", "builtin.combine"]
+
+    def infer_dist_skip_op_chunk_id(op):
+        if op.name() == "builtin.split":
+            op_chunk_id = (
+                op.operand_source(0).get_defining_op().dist_attr.chunk_id
+            )
+        elif op.name() == "builtin.combine":
+            op_chunk_id = op.result(0).get_defining_op().dist_attr.chunk_id
+        else:
+            # TODO(luchang): need to support more ops such as pd_op.pylayer and so on
+            op_chunk_id = -1
+        return op_chunk_id
+
+    # TODO(Ruibiao): Reorganize these unclear codes about chunk_id
+    def get_op_chunk_id(op):
+        if op.has_attr("chunk_id"):
+            op_chunk_id = op.chunk_id
+        elif op.dist_attr is None:
+            op_chunk_id = -1
+            if op.name() in dist_skip_op_list:
+                op_chunk_id = infer_dist_skip_op_chunk_id(op)
+        else:
+            op_chunk_id = op.dist_attr.chunk_id
+            if op_chunk_id == -1 and op.name() == "dist_op.reshard":
+                prev_op = op.operand_source(0).get_defining_op()
+                if prev_op.name() in dist_skip_op_list:
+                    op_chunk_id = infer_dist_skip_op_chunk_id(prev_op)
+                else:
+                    op_chunk_id = prev_op.dist_attr.chunk_id
+        return op_chunk_id
+
+    is_dist_program = False
+    for op in block.ops:
+        if op.dist_attr is not None:
+            is_dist_program = True
+            break
+
+    if not is_dist_program:
+        return
+
+    for op in reversed(block.ops):
+        if op not in state.op_to_opgrad:
+            continue
+
+        fwd_op_chunk_id = get_op_chunk_id(op)
+
+        for bwd_op in state.op_to_opgrad[op]:
+            if op.has_attr("chunk_id"):
+                bwd_op.set_int_attr("chunk_id", op.chunk_id)
+                continue
+            elif bwd_op.dist_attr is None:
+                continue
+
+            if bwd_op.name() in ["pd_op.add_", "pd_op.add_n_"]:
+                bwd_op_chunk_id = -1
+                for operand_idx in range(bwd_op.num_operands()):
+                    prev_op_chunk_id = get_op_chunk_id(
+                        bwd_op.operand_source(operand_idx).get_defining_op()
+                    )
+                    if bwd_op_chunk_id == -1:
+                        bwd_op_chunk_id = prev_op_chunk_id
+                    else:
+                        assert bwd_op_chunk_id == prev_op_chunk_id, (
+                            f"Inconsistent prev_op chunk id with {bwd_op_chunk_id} != {prev_op_chunk_id}\n"
+                            "{bwd_op.operand_source(operand_idx-1).get_defining_op()}\n"
+                            "{bwd_op.operand_source(operand_idx).get_defining_op()}"
+                        )
+            else:
+                bwd_op_chunk_id = fwd_op_chunk_id
+
+            bwd_op.dist_attr = (
+                paddle.base.libpaddle.pir.create_op_dist_attribute(
+                    bwd_op.dist_attr.process_mesh,
+                    bwd_op.dist_attr.operands(),
+                    bwd_op.dist_attr.results(),
+                    bwd_op_chunk_id,
+                )
+            )
+
+
+def calc_gradient_helper(
+    outputs: Value | Sequence[Value],
+    inputs: Value | Sequence[Value],
+    grad_outputs: Value | Sequence[Value | None] | None = None,
+    no_grad_set: set[Value] | None = None,
+) -> ValueDict:
+    block = paddle.base.libpaddle.pir.get_current_insertion_point().block()
     state = State(block)
     if all_stop_gradient_true(block):
         logging.warning(
@@ -1006,10 +1264,14 @@ def calc_gradient_helper(outputs, inputs, grad_outputs, no_grad_set):
         state,
         ValueDict(),
     )
+
     # now value_to_valuegrad should be value <-> value (add sum op for the same values's grad value)
     outputs_set, inputs_set, no_gradvar_set = create_backward_prune_set(
         outputs_fwd_set, inputs_fwd_set, no_grad_set, state
     )
+
+    # set chunk id for grad ops
+    _complete_grad_op_chunk_id(block, state)
 
     remove_ops = []
     if not is_inplace_net(backward_ops) and inputs:
@@ -1033,12 +1295,18 @@ def calc_gradient_helper(outputs, inputs, grad_outputs, no_grad_set):
         if bwd_op.result(0).use_empty():
             remove_op(block, bwd_op, state)
     state.turn_map()
+
     input_grad_map = state.value_to_valuegrad
 
     return input_grad_map
 
 
-def calc_gradient(outputs, inputs, grad_outputs, no_grad_set):
+def calc_gradient(
+    outputs: Value | Sequence[Value],
+    inputs: Value | Sequence[Value],
+    grad_outputs: Value | Sequence[Value | None] | None = None,
+    no_grad_set: set[Value] | None = None,
+) -> list[Value | None]:
     """
     calculate gradient of input
 
@@ -1084,15 +1352,15 @@ def calc_gradient(outputs, inputs, grad_outputs, no_grad_set):
 
 
 def grad(
-    outputs,
-    inputs,
-    grad_outputs=None,
-    retain_graph=None,
-    create_graph=False,
-    only_inputs=True,
-    allow_unused=False,
-    no_grad_vars=None,
-):
+    outputs: Value | Sequence[Value],
+    inputs: Value | Sequence[Value],
+    grad_outputs: Value | Sequence[Value | None] | None = None,
+    retain_graph: bool | None = None,
+    create_graph: bool | None = False,
+    only_inputs: bool | None = True,
+    allow_unused: bool | None = False,
+    no_grad_vars: Value | Sequence[Value] | set[Value] | None = None,
+) -> list[Value | None]:
     '''
     .. note::
         **This API is ONLY available in imperative mode.**

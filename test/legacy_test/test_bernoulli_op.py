@@ -13,20 +13,20 @@
 # limitations under the License.
 
 import unittest
+from random import random
 
 import numpy as np
 from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
-def output_hist(out):
+def output_hist(out, p=0.5):
     hist, _ = np.histogram(out, bins=2)
     hist = hist.astype("float32")
     hist /= float(out.size)
-    prob = 0.5 * np.ones(2)
+    prob = np.array([1 - p, p])
     return hist, prob
 
 
@@ -64,13 +64,32 @@ class TestBernoulliApi(unittest.TestCase):
         hist, prob = output_hist(out.numpy())
         np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
 
-    @test_with_pir_api
     def test_static(self):
         x = paddle.rand([1024, 1024])
         out = paddle.bernoulli(x)
         exe = paddle.static.Executor(paddle.CPUPlace())
         out = exe.run(paddle.static.default_main_program(), fetch_list=[out])
         hist, prob = output_hist(out[0])
+        np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
+
+
+class TestBernoulliApi2(unittest.TestCase):
+    def test_dygraph(self):
+        paddle.disable_static()
+        x = paddle.rand([1024, 1024])
+        p = random()
+        out = paddle.bernoulli(x, p=p)
+        paddle.enable_static()
+        hist, prob = output_hist(out.numpy(), p=p)
+        np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
+
+    def test_static(self):
+        x = paddle.rand([1024, 1024])
+        p = random()
+        out = paddle.bernoulli(x, p=p)
+        exe = paddle.static.Executor(paddle.CPUPlace())
+        out = exe.run(paddle.static.default_main_program(), fetch_list=[out])
+        hist, prob = output_hist(out[0], p=p)
         np.testing.assert_allclose(hist, prob, rtol=0, atol=0.01)
 
 

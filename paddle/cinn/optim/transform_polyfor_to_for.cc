@@ -17,8 +17,6 @@
 #include <cmath>
 #include <vector>
 
-#include "paddle/cinn/common/arithmetic.h"
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/ir_util.h"
 #include "paddle/cinn/common/type.h"
 #include "paddle/cinn/ir/ir_mutator.h"
@@ -40,14 +38,14 @@ Expr PlusOneWithMinMax(Expr expr) {
   if (min_n) {
     min_n->a() = min_n->a() + 1;
     min_n->b() = min_n->b() + 1;
-    Simplify(&min_n->a());
-    Simplify(&min_n->b());
+    min_n->a() = optim::ArithSimplify(min_n->a());
+    min_n->b() = optim::ArithSimplify(min_n->b());
     return expr;
   } else if (max_n) {
     max_n->a() = max_n->a() + 1;
     max_n->b() = max_n->b() + 1;
-    Simplify(&max_n->a());
-    Simplify(&max_n->b());
+    max_n->a() = optim::ArithSimplify(max_n->a());
+    max_n->b() = optim::ArithSimplify(max_n->b());
     return expr;
   }
   return expr + 1;
@@ -98,28 +96,35 @@ struct PolyForWithSimpleConditionToForMutator : public ir::IRMutator<Expr*> {
     if (!can_extract_extent) {
       if (node->condition.As<ir::LE>()) {
         auto le = node->condition.As<ir::LE>();
-        CHECK(le->a().As<ir::Sub>());
-        PADDLE_ENFORCE_EQ(
-            le->b().As<ir::IntImm>()->value,
-            0UL,
-            phi::errors::InvalidArgument("The value of le is incorrect."
-                                         "Expected value is 0, but receive %d.",
-                                         le->b().As<ir::IntImm>()->value));
+
+        PADDLE_ENFORCE_NOT_NULL(
+            le->a().As<ir::Sub>(),
+            ::common::errors::InvalidArgument("The value of le is incorrect."
+                                              "Expected value is 0"));
+        PADDLE_ENFORCE_EQ(le->b().As<ir::IntImm>()->value,
+                          0UL,
+                          ::common::errors::InvalidArgument(
+                              "The value of le is incorrect."
+                              "Expected value is 0, but receive %d.",
+                              le->b().As<ir::IntImm>()->value));
         auto sub = le->a().As<ir::Sub>();
         node->condition = ir::LE::Make(sub->a(), sub->b());
       } else if (node->condition.As<ir::LT>()) {
         auto lt = node->condition.As<ir::LT>();
-        CHECK(lt->a().As<ir::Sub>());
-        PADDLE_ENFORCE_EQ(
-            lt->b().As<ir::IntImm>()->value,
-            0UL,
-            phi::errors::InvalidArgument("The value of lt is incorrect."
-                                         "Expected value is 0, but receive %d.",
-                                         lt->b().As<ir::IntImm>()->value));
+        PADDLE_ENFORCE_NOT_NULL(
+            lt->a().As<ir::Sub>(),
+            ::common::errors::InvalidArgument("The value of lt is incorrect."
+                                              "Expected value is 0"));
+        PADDLE_ENFORCE_EQ(lt->b().As<ir::IntImm>()->value,
+                          0UL,
+                          ::common::errors::InvalidArgument(
+                              "The value of lt is incorrect."
+                              "Expected value is 0, but receive %d.",
+                              lt->b().As<ir::IntImm>()->value));
         auto sub = lt->a().As<ir::Sub>();
         node->condition = ir::LT::Make(sub->a(), sub->b());
       } else {
-        PADDLE_THROW(phi::errors::InvalidArgument("Unkown Type!"));
+        PADDLE_THROW(::common::errors::InvalidArgument("Unknown Type!"));
       }
 
       lt_n = node->condition.As<ir::LT>();
@@ -129,9 +134,15 @@ struct PolyForWithSimpleConditionToForMutator : public ir::IRMutator<Expr*> {
 
     Expr lhs = lt_n ? lt_n->a() : le_n->a();
     Expr rhs = lt_n ? lt_n->b() : PlusOneWithMinMax(le_n->b());
-    rhs = cinn::common::AutoSimplify(rhs);
+    rhs = optim::ArithSimplify(rhs);
 
-    if (op->is_vectorized()) CHECK(op->vectorize_info().valid());
+    if (op->is_vectorized())
+      PADDLE_ENFORCE_EQ(
+          op->vectorize_info().valid(),
+          true,
+          ::common::errors::InvalidArgument(
+              "The value of op->vectorize_info().valid() is incorrect."
+              "Expected value is true"));
 
     Expr new_for = ir::For::Make(op->iterator,
                                  op->init,

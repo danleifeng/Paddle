@@ -119,7 +119,7 @@ void CPUPyramidHashOPKernel(const Context& dev_ctx,
       PADDLE_ENFORCE_EQ(
           phi::math::bloomfilter_check(_filter),
           1,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "The white filter is not loaded successfully, please make sure "
               "'white_list_len': %d is valid for Input(WhiteList).",
               white_list_len));
@@ -129,7 +129,7 @@ void CPUPyramidHashOPKernel(const Context& dev_ctx,
       PADDLE_ENFORCE_EQ(
           phi::math::bloomfilter_check(_black_filter),
           1,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "The black filter is not loaded successfully, please make sure "
               "'black_list_len': %d is valid for Input(BlackList).",
               black_list_len));
@@ -179,13 +179,13 @@ void CPUPyramidHashOPKernel(const Context& dev_ctx,
 
   int top_l = static_cast<int>(top_offset[top_offset.size() - 1]);
 
-  phi::LoD top_lod;
+  phi::LegacyLoD top_lod;
   top_lod.push_back(top_offset);
   top->set_lod(top_lod);
   top->Resize(common::make_ddim({top_l, _num_emb}));
   auto* top_data = dev_ctx.template Alloc<T>(top);
 
-  phi::LoD drop_pos_lod;
+  phi::LegacyLoD drop_pos_lod;
   drop_pos_lod.push_back(drop_pos_offset);
   drop_pos->set_lod(drop_pos_lod);
 

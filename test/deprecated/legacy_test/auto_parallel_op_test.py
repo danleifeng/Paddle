@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import os
 import pathlib
@@ -20,7 +21,7 @@ import sys
 import tempfile
 import uuid
 from collections import defaultdict
-from typing import Dict, List, Tuple, cast
+from typing import cast
 
 import numpy as np
 
@@ -222,16 +223,20 @@ def dump_test_info(
         if isinstance(place, paddle.base.libpaddle.CUDAPlace):
             test_info["place"] = "gpu"
         eager_auto_parallel_threshold = {
-            "atol": op_test.eager_auto_parallel_atol
-            if hasattr(op_test, "eager_auto_parallel_atol")
-            else None,
-            "rtol": op_test.eager_auto_parallel_atol
-            if hasattr(op_test, "eager_auto_parallel_atol")
-            else None,
+            "atol": (
+                op_test.eager_auto_parallel_atol
+                if hasattr(op_test, "eager_auto_parallel_atol")
+                else None
+            ),
+            "rtol": (
+                op_test.eager_auto_parallel_atol
+                if hasattr(op_test, "eager_auto_parallel_atol")
+                else None
+            ),
         }
-        test_info[
-            "eager_auto_parallel_threshold"
-        ] = eager_auto_parallel_threshold
+        test_info["eager_auto_parallel_threshold"] = (
+            eager_auto_parallel_threshold
+        )
         test_info["python_out_sig"] = (
             op_test.python_out_sig
             if hasattr(op_test, "python_out_sig")
@@ -299,7 +304,7 @@ def run_subprocess(start_command, env, timeout):
         )
 
 
-def convert_input_placements_to_dims_map(placements: Dict, inputs: Dict):
+def convert_input_placements_to_dims_map(placements: dict, inputs: dict):
     all_dims_map = {}
     for name, item in inputs.items():
         if name not in placements:
@@ -324,7 +329,7 @@ def convert_input_placements_to_dims_map(placements: Dict, inputs: Dict):
 
 
 def convert_input_dims_map_to_placements(
-    dims_map: Dict, inputs: Dict, mesh_ndim: int
+    dims_map: dict, inputs: dict, mesh_ndim: int
 ):
     placements_map = {}
     for name, item in inputs.items():
@@ -347,14 +352,14 @@ def convert_input_dims_map_to_placements(
     return placements_map
 
 
-# TODO: This method has been implementd in
+# TODO: This method has been implemented in
 # paddle/phi/core/distributed/auto_parallel/placement_types.h, bind it
 # python and it's logic.
-def placements_to_dims_map(placements: List, tensor_ndim: int) -> Tuple[int]:
+def placements_to_dims_map(placements: list, tensor_ndim: int) -> tuple[int]:
     r = [-1] * tensor_ndim
     for i, placement in enumerate(placements):
         if placement.is_shard():
-            shard_dim = cast(dist.Shard, placement).get_dim()
+            shard_dim = cast("dist.Shard", placement).get_dim()
             if r[shard_dim] > -1:
                 raise ValueError(
                     f"Tensor dim {shard_dim} is already sharded on mesh dim {r[shard_dim]},"
@@ -369,23 +374,23 @@ def placements_to_dims_map(placements: List, tensor_ndim: int) -> Tuple[int]:
 # paddle/phi/core/distributed/auto_parallel/placement_types.h, and bind it to
 # python
 def dims_map_to_placements(
-    dim_map: Tuple[int], mesh_ndim: int, sums: Tuple[int] = ()
-) -> Tuple[dist.Placement]:
+    dim_map: tuple[int], mesh_ndim: int, sums: tuple[int] = ()
+) -> tuple[dist.Placement]:
     """
     Construct a placements from dim_map list and pending sum.
 
     Args:
-        dim_map (Tuple[int]): a list of integer that represents sharding on each
+        dim_map (tuple[int]): a list of integer that represents sharding on each
             tensor dimension, see `dim_map` property doc for details
         mesh_ndim (int): the ndim of Process mesh.
-        sums (Tuple[int]): a list of integer that represents the dist tensor have
+        sums (tuple[int]): a list of integer that represents the dist tensor have
             pending sum on which device mesh dimension.
 
     Return:
         a placement sequence.
     """
     # by default replicate on device mesh dims
-    placements: List[dist.Placement] = [
+    placements: list[dist.Placement] = [
         dist.Replicate() for _ in range(mesh_ndim)
     ]
 
@@ -397,9 +402,9 @@ def dims_map_to_placements(
         if m >= 0:
             placement = placements[m]
             if placement.is_shard():
-                placement = cast(dist.Shard, placement)
+                placement = cast("dist.Shard", placement)
                 raise RuntimeError(
-                    f"DeviceMesh dimension cann't be mapped to two dimension of the same tensor: {i} and {placement.dim}"
+                    f"DeviceMesh dimension can't be mapped to two dimension of the same tensor: {i} and {placement.dim}"
                 )
             elif placement.is_partial():
                 raise RuntimeError(
@@ -423,7 +428,7 @@ class AutoParallelForwardChecker:
     def __init__(
         self,
         op_type,
-        pthon_api,
+        python_api,
         dtype,
         placements_map,
         inputs,
@@ -436,7 +441,7 @@ class AutoParallelForwardChecker:
         self.checker_name = "AutoParallelForwardChecker"
         self.init_checker(
             op_type,
-            pthon_api,
+            python_api,
             dtype,
             placements_map,
             inputs,
@@ -450,7 +455,7 @@ class AutoParallelForwardChecker:
     def init_checker(
         self,
         op_type,
-        pthon_api,
+        python_api,
         dtype,
         placements_map,
         inputs,
@@ -461,7 +466,7 @@ class AutoParallelForwardChecker:
         python_out_sig=None,
     ):
         self.op_type = op_type
-        self.public_python_api = pthon_api
+        self.public_python_api = python_api
         self.dtype = np.dtype(dtype)
         self.placements_map = placements_map
         self.inputs = inputs
@@ -507,15 +512,9 @@ class AutoParallelForwardChecker:
                     rtol=self.atol,
                     atol=self.rtol,
                     err_msg=(
-                        'Check eager auto parallel failed. Mismatch between eager auto parallel outputs '
-                        'and eager outputs on %s, the eager forward output tensor\'s index is : %d \n'
-                        'eager auto parallel output tensor:\n%s\n eager output tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            i,
-                            actual_ret[i],
-                            self.eager_forward_desire[i],
-                        )
+                        f"Check eager auto parallel failed. Mismatch between eager auto parallel outputs "
+                        f"and eager outputs on {self.place!s}. The eager forward output tensor's index is : {i} \n"
+                        f"eager auto parallel output tensor:\n{actual_ret[i]}\n eager output tensor:\n{self.eager_forward_desire[i]}\n"
                     ),
                 )
 
@@ -668,7 +667,7 @@ class AutoParallelGradChecker(AutoParallelForwardChecker):
     def __init__(
         self,
         op_type,
-        pthon_api,
+        python_api,
         dtype,
         placements_map,
         inputs,
@@ -684,7 +683,7 @@ class AutoParallelGradChecker(AutoParallelForwardChecker):
     ):
         super().__init__(
             op_type,
-            pthon_api,
+            python_api,
             dtype,
             placements_map,
             inputs,
@@ -727,14 +726,8 @@ class AutoParallelGradChecker(AutoParallelForwardChecker):
                     atol=self.rtol,
                     err_msg=(
                         'Check eager auto parallel failed. Mismatch between eager auto parallel outputs '
-                        'and eager outputs on %s, the eager forward output tensor\'s index is : %d \n'
-                        'eager auto parallel output tensor:\n%s\n eager output tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            i,
-                            actual_forward_res[i],
-                            self.eager_forward_desire[i],
-                        )
+                        f'and eager outputs on {self.place}, the eager forward output tensor\'s index is : {i} \n'
+                        f'eager auto parallel output tensor:\n{actual_forward_res[i]}\n eager output tensor:\n{self.eager_forward_desire[i]}\n'
                     ),
                 )
 
@@ -753,14 +746,8 @@ class AutoParallelGradChecker(AutoParallelForwardChecker):
                     atol=self.rtol,
                     err_msg=(
                         'Check eager auto parallel backward failed. Mismatch between eager auto parallel grad outputs '
-                        'and eager grad outputs on %s, the eager grad output tensor\'s index is : %d \n'
-                        'eager auto parallel grad output tensor:\n%s\n eager grad output tensor:\n%s\n'
-                        % (
-                            str(self.place),
-                            i,
-                            actual_grad_res[i],
-                            self.eager_grad_desire[i],
-                        )
+                        f'and eager grad outputs on {self.place}, the eager grad output tensor\'s index is : {i} \n'
+                        f'eager auto parallel grad output tensor:\n{actual_grad_res[i]}\n eager grad output tensor:\n{self.eager_grad_desire[i]}\n'
                     ),
                 )
 
@@ -773,9 +760,11 @@ class AutoParallelGradChecker(AutoParallelForwardChecker):
                 paddle.to_tensor(
                     data=np_v,
                     place=self.place,
-                    dtype="bfloat16"
-                    if OpTestUtils.is_bfloat16_type(np_v.dtype)
-                    else np_v.dtype,
+                    dtype=(
+                        "bfloat16"
+                        if OpTestUtils.is_bfloat16_type(np_v.dtype)
+                        else np_v.dtype
+                    ),
                 )
             )
         return eager_vs
@@ -855,7 +844,7 @@ class AutoParallelGradChecker(AutoParallelForwardChecker):
                 xs.append(inputs_dict[self.inputs_to_check])
             vs = self.gen_eager_grad_outputs()
             no_grad_vars = self.gen_no_grad_set(
-                var_dict={**inputs_dict, **outputs_dict}
+                var_dict=inputs_dict | outputs_dict
             )
             grad_res = paddle.grad(
                 ys, xs, vs, allow_unused=True, no_grad_vars=no_grad_vars

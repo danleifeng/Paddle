@@ -15,7 +15,7 @@
 # Define functions about array.
 from __future__ import annotations
 
-from typing import Any, Sequence, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 import paddle
 from paddle import _typing
@@ -25,18 +25,19 @@ from ..base.framework import in_pir_mode
 from ..common_ops_import import Variable
 from ..framework import LayerHelper, core, in_dynamic_mode
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 __all__ = []
 T = TypeVar("T")
 
 
 @overload
-def array_length(array: list[Any]) -> int:
-    ...
+def array_length(array: list[Any]) -> int: ...
 
 
 @overload
-def array_length(array: paddle.Tensor) -> paddle.Tensor:
-    ...
+def array_length(array: paddle.Tensor) -> paddle.Tensor: ...
 
 
 def array_length(array):
@@ -44,7 +45,7 @@ def array_length(array):
     This OP is used to get the length of the input array.
 
     Args:
-        array (list|Tensor): The input array that will be used to compute the length. In dynamic mode, ``array`` is a Python list. But in static graph mode, array is a Tensor whose VarType is LOD_TENSOR_ARRAY.
+        array (list|Tensor): The input array that will be used to compute the length. In dynamic mode, ``array`` is a Python list. But in static graph mode, array is a Tensor whose VarType is DENSE_TENSOR_ARRAY.
 
     Returns:
         Tensor, 0-D Tensor with shape [], which is the length of array.
@@ -81,7 +82,7 @@ def array_length(array):
     else:
         if (
             not isinstance(array, Variable)
-            or array.type != core.VarDesc.VarType.LOD_TENSOR_ARRAY
+            or array.type != core.VarDesc.VarType.DENSE_TENSOR_ARRAY
         ):
             raise TypeError(
                 "array should be tensor array variable in array_length Op"
@@ -99,13 +100,11 @@ def array_length(array):
 
 
 @overload
-def array_read(array: list[T], i: paddle.Tensor) -> T:
-    ...
+def array_read(array: list[T], i: paddle.Tensor) -> T: ...
 
 
 @overload
-def array_read(array: paddle.Tensor, i: paddle.Tensor) -> paddle.Tensor:
-    ...
+def array_read(array: paddle.Tensor, i: paddle.Tensor) -> paddle.Tensor: ...
 
 
 def array_read(array, i):
@@ -126,7 +125,7 @@ def array_read(array, i):
             output = [0.4, 0.2]
 
     Args:
-        array (list|Tensor): The input array. In dynamic mode, ``array`` is a Python list. But in static graph mode, array is a Tensor whose ``VarType`` is ``LOD_TENSOR_ARRAY``.
+        array (list|Tensor): The input array. In dynamic mode, ``array`` is a Python list. But in static graph mode, array is a Tensor whose ``VarType`` is ``DENSE_TENSOR_ARRAY``.
         i (Tensor): 1-D Tensor, whose shape is [1] and dtype is int64. It represents the
             specified read position of ``array``.
 
@@ -174,7 +173,7 @@ def array_read(array, i):
         helper = LayerHelper('array_read', **locals())
         if (
             not isinstance(array, Variable)
-            or array.type != core.VarDesc.VarType.LOD_TENSOR_ARRAY
+            or array.type != core.VarDesc.VarType.DENSE_TENSOR_ARRAY
         ):
             raise TypeError("array should be tensor array variable")
         out = helper.create_variable_for_type_inference(dtype=array.dtype)
@@ -189,22 +188,19 @@ def array_read(array, i):
 @overload
 def array_write(
     x: paddle.Tensor, i: paddle.Tensor, array: None = None
-) -> list[Any] | paddle.Tensor:
-    ...
+) -> list[Any] | paddle.Tensor: ...
 
 
 @overload
 def array_write(
     x: paddle.Tensor, i: paddle.Tensor, array: list[paddle.Tensor]
-) -> list[paddle.Tensor]:
-    ...
+) -> list[paddle.Tensor]: ...
 
 
 @overload
 def array_write(
     x: paddle.Tensor, i: paddle.Tensor, array: paddle.Tensor
-) -> paddle.Tensor:
-    ...
+) -> paddle.Tensor: ...
 
 
 def array_write(
@@ -218,12 +214,12 @@ def array_write(
 
     Args:
         x (Tensor): The input data to be written into array. It's multi-dimensional
-            Tensor or LoDTensor. Data type: float32, float64, int32, int64 and bool.
+            Tensor. Data type: float32, float64, int32, int64 and bool.
         i (Tensor): 0-D Tensor with shape [], which represents the position into which
             ``x`` is written.
         array (list|Tensor, optional): The array into which ``x`` is written. The default value is None,
             when a new array will be created and returned as a result. In dynamic mode, ``array`` is a Python list.
-            But in static graph mode, array is a Tensor whose ``VarType`` is ``LOD_TENSOR_ARRAY``.
+            But in static graph mode, array is a Tensor whose ``VarType`` is ``DENSE_TENSOR_ARRAY``.
 
     Returns:
         list|Tensor, The input ``array`` after ``x`` is written into.
@@ -280,7 +276,8 @@ def array_write(
         if array is None:
             array = paddle._pir_ops.create_array(x.dtype)
 
-        x = paddle.cast(x, array.dtype)
+        if array.dtype != paddle.base.libpaddle.DataType.UNDEFINED:
+            x = paddle.cast(x, array.dtype)
         paddle._pir_ops.array_write_(array, x, i)
         return array
     else:
@@ -290,7 +287,7 @@ def array_write(
         if array is not None:
             if (
                 not isinstance(array, Variable)
-                or array.type != core.VarDesc.VarType.LOD_TENSOR_ARRAY
+                or array.type != core.VarDesc.VarType.DENSE_TENSOR_ARRAY
             ):
                 raise TypeError(
                     "array should be tensor array variable in array_write Op"
@@ -298,7 +295,7 @@ def array_write(
         if array is None:
             array = helper.create_variable(
                 name=f"{helper.name}.out",
-                type=core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+                type=core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
                 dtype=x.dtype,
             )
         helper.append_op(
@@ -324,7 +321,7 @@ def create_array(
 
     Returns:
         list|Tensor, An empty array. In dynamic mode, ``array`` is a Python list. But in static graph mode, array is a Tensor
-        whose ``VarType`` is ``LOD_TENSOR_ARRAY``.
+        whose ``VarType`` is ``DENSE_TENSOR_ARRAY``.
 
     Examples:
         .. code-block:: python
@@ -364,14 +361,15 @@ def create_array(
             dtype = paddle.base.framework.convert_np_dtype_to_dtype_(dtype)
         out = paddle._pir_ops.create_array(dtype)
         for val in array:
-            val = paddle.cast(val, dtype)
+            if dtype != paddle.base.libpaddle.DataType.UNDEFINED:
+                val = paddle.cast(val, dtype)
             paddle._pir_ops.array_write_(out, val, array_length(out))
         return out
     else:
         helper = LayerHelper("array", **locals())
         tensor_array: paddle.Tensor = helper.create_variable(
             name=f"{helper.name}.out",
-            type=core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+            type=core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
             dtype=dtype,
         )
 

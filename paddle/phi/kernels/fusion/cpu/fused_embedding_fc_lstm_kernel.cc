@@ -183,11 +183,11 @@ class FusedEmbeddingFCLSTMKernel {
       PADDLE_ENFORCE_LT(
           ids_data[i],
           row_number,
-          phi::errors::OutOfRange(
+          common::errors::OutOfRange(
               "Value of Ids %d should less than dict size %d.", i, row_number));
       PADDLE_ENFORCE_GE(ids_data[i],
                         0,
-                        phi::errors::OutOfRange(
+                        common::errors::OutOfRange(
                             "Value of Ids %d should greater than ZERO.", i));
       memcpy(xx_data + i * row_width,
              embeddings_data + ids_data[i] * row_width,
@@ -288,18 +288,18 @@ class FusedEmbeddingFCLSTMKernel {
     dev_ctx.template Alloc<T>(hidden_out);
     dev_ctx.template Alloc<T>(cell_out);
 
-    phi::funcs::LoDTensor2BatchFunctor<Context, T> to_batch;
+    phi::funcs::DenseTensor2BatchFunctor<Context, T> to_batch;
     auto blas = phi::funcs::GetBlas<Context, T>(dev_ctx);
 
     for (int64_t i = 0; i < ids_numel; ++i) {
       PADDLE_ENFORCE_LT(
           ids_data[i],
           row_number,
-          phi::errors::OutOfRange(
+          common::errors::OutOfRange(
               "Value of Ids %d should less than dict size %d.", i, row_number));
       PADDLE_ENFORCE_GE(ids_data[i],
                         0,
-                        phi::errors::OutOfRange(
+                        common::errors::OutOfRange(
                             "Value of Ids %d should greater than ZERO.", i));
       memcpy(xx_data + i * row_width,
              embeddings_data + ids_data[i] * row_width,
@@ -410,7 +410,7 @@ class FusedEmbeddingFCLSTMKernel {
 #undef MOVE_ONE_BATCH
 #undef DEFINE_CUR
 
-    phi::funcs::Batch2LoDTensorFunctor<Context, T> to_seq;
+    phi::funcs::Batch2DenseTensorFunctor<Context, T> to_seq;
     batched_h_out->set_lod(batched_lod);
     to_seq(dev_ctx, *batched_h_out, hidden_out);
     batched_c_out->set_lod(batched_lod);

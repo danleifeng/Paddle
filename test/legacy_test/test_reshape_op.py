@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16, skip_check_grad_ci
 
 import paddle
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 from paddle.static import Program, program_guard
 
 
@@ -35,14 +34,14 @@ class TestReshapeOp(OpTest):
         self.inputs = {"X": np.random.random(self.ori_shape).astype("float32")}
         self.attrs = {"shape": self.new_shape}
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype("float32"),
         }
 
     def init_data(self):
         self.ori_shape = (2, 60)
         self.new_shape = (12, 10)
-        self.infered_shape = (12, 10)
+        self.inferred_shape = (12, 10)
 
     def test_check_output(self):
         self.check_output(no_check_set=['XShape'], check_pir=True)
@@ -69,28 +68,57 @@ class TestReshapeOp_ZeroDim1(TestReshapeOp):
         self.inputs = {"X": np.random.random(self.ori_shape).astype("float32")}
         self.attrs = {"shape": self.new_shape}
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype("float32"),
         }
 
     def init_data(self):
         self.ori_shape = ()
         self.new_shape = (1,)
-        self.infered_shape = (1,)
+        self.inferred_shape = (1,)
 
 
 class TestReshapeOp_ZeroDim2(TestReshapeOp_ZeroDim1):
     def init_data(self):
         self.ori_shape = ()
         self.new_shape = (-1,)
-        self.infered_shape = (1,)
+        self.inferred_shape = (1,)
 
 
 class TestReshapeOp_ZeroDim3(OpTest):
     def init_data(self):
         self.ori_shape = (1,)
         self.new_shape = ()
-        self.infered_shape = ()
+        self.inferred_shape = ()
+
+
+class TestReshapeOp_ZeroSize(OpTest):
+    def init_data(self):
+        self.ori_shape = (0, 2)
+        self.new_shape = (2, 0)
+        self.inferred_shape = (2, 0)
+
+    def setUp(self):
+        self.init_data()
+        self.op_type = "reshape2"
+        self.python_api = paddle.tensor.reshape
+        self.public_python_api = paddle.tensor.reshape
+        self.python_out_sig = ['Out']
+        self.inputs = {"X": np.random.random(self.ori_shape).astype("float32")}
+        self.attrs = {"shape": self.new_shape}
+        self.outputs = {
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
+            'XShape': np.random.random(self.ori_shape).astype("float32"),
+        }
+
+    def test_check_output(self):
+        self.check_output(no_check_set=['XShape'])
+
+    def test_check_grad(self):
+        self.check_grad(
+            ["X"],
+            "Out",
+        )
 
 
 @unittest.skipIf(
@@ -108,7 +136,7 @@ class TestReshapeBF16Op(OpTest):
         self.python_out_sig = ['Out']
         self.dtype = np.uint16
         x = np.random.random(self.ori_shape).astype("float32")
-        out = x.reshape(self.infered_shape)
+        out = x.reshape(self.inferred_shape)
         self.inputs = {"X": convert_float_to_uint16(x)}
         self.attrs = {"shape": self.new_shape}
         self.outputs = {
@@ -121,7 +149,7 @@ class TestReshapeBF16Op(OpTest):
     def init_data(self):
         self.ori_shape = (2, 60)
         self.new_shape = (12, 10)
-        self.infered_shape = (12, 10)
+        self.inferred_shape = (12, 10)
 
     def test_check_output(self):
         self.check_output(no_check_set=['XShape'], check_pir=True)
@@ -148,14 +176,14 @@ class TestReshapeFP16Op(OpTest):
         self.inputs = {"X": np.random.random(self.ori_shape).astype(self.dtype)}
         self.attrs = {"shape": self.new_shape}
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype(self.dtype),
         }
 
     def init_data(self):
         self.ori_shape = (2, 60)
         self.new_shape = (12, 10)
-        self.infered_shape = (12, 10)
+        self.inferred_shape = (12, 10)
 
     def test_check_output(self):
         self.check_output(no_check_set=['XShape'], check_pir=True)
@@ -174,14 +202,14 @@ class TestReshapeOpDimInfer1(TestReshapeOp):
     def init_data(self):
         self.ori_shape = (5, 25)
         self.new_shape = (5, -1, 5)
-        self.infered_shape = (5, -1, 5)
+        self.inferred_shape = (5, -1, 5)
 
 
 class TestReshapeOpDimInfer2(TestReshapeOp):
     def init_data(self):
         self.ori_shape = (10, 2, 6)
         self.new_shape = (10, 0, 3, -1)
-        self.infered_shape = (10, 2, 3, -1)
+        self.inferred_shape = (10, 2, 3, -1)
 
 
 # situation 2: have shape(list, no tensor), have actual shape(Tensor)
@@ -246,14 +274,14 @@ class TestReshapeOp_attr_ShapeTensor(OpTest):
         }
         self.attrs = {'shape': self.shape}
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype("float32"),
         }
 
     def init_data(self):
         self.ori_shape = (4, 25)
         self.new_shape = (10, 10)
-        self.infered_shape = (10, 10)
+        self.inferred_shape = (10, 10)
         self.shape = (-1, -1)
 
     def test_check_output(self):
@@ -275,7 +303,7 @@ class TestReshapeOpDimInfer1_attr_ShapeTensor(TestReshapeOp_attr_ShapeTensor):
     def init_data(self):
         self.ori_shape = (5, 20)
         self.new_shape = (5, -1, 20)
-        self.infered_shape = (5, -1, 20)
+        self.inferred_shape = (5, -1, 20)
         self.shape = (5, -1, -1)
 
 
@@ -283,7 +311,7 @@ class TestReshapeOpDimInfer2_attr_ShapeTensor(TestReshapeOp_attr_ShapeTensor):
     def init_data(self):
         self.ori_shape = (10, 2, 6)
         self.new_shape = (10, 0, 3, -1)
-        self.infered_shape = (10, 2, 3, -1)
+        self.inferred_shape = (10, 2, 3, -1)
         self.shape = (10, 0, 3, -1)
 
 
@@ -303,14 +331,14 @@ class TestReshapeOp_attr_OnlyShape(OpTest):
         }
         self.attrs = {}
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype("float32"),
         }
 
     def init_data(self):
         self.ori_shape = (4, 25)
         self.new_shape = (10, 10)
-        self.infered_shape = (10, 10)
+        self.inferred_shape = (10, 10)
 
     def test_check_output(self):
         self.check_output(
@@ -331,7 +359,7 @@ class TestReshapeOpDimInfer1_attr_OnlyShape(TestReshapeOp_attr_OnlyShape):
     def init_data(self):
         self.ori_shape = (5, 20)
         self.new_shape = (5, -1, 10)
-        self.infered_shape = (5, -1, 10)
+        self.inferred_shape = (5, -1, 10)
         self.shape = (5, -1, -1)
 
 
@@ -339,7 +367,7 @@ class TestReshapeOpDimInfer2_attr_OnlyShape(TestReshapeOp_attr_OnlyShape):
     def init_data(self):
         self.ori_shape = (10, 2, 6)
         self.new_shape = (10, 0, 3, -1)
-        self.infered_shape = (10, 2, 3, -1)
+        self.inferred_shape = (10, 2, 3, -1)
         self.shape = (10, 0, 3, -1)
 
 
@@ -360,7 +388,7 @@ class TestReshapeInt8Op(OpTest):
             'use_mkldnn': self.use_mkldnn,
         }
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype(np.float32),
         }
 
@@ -370,7 +398,7 @@ class TestReshapeInt8Op(OpTest):
     def init_data(self):
         self.ori_shape = (10, 2, 6)
         self.new_shape = (10, 0, 3, -1)
-        self.infered_shape = (10, 2, 3, -1)
+        self.inferred_shape = (10, 2, 3, -1)
 
     def test_check_output(self):
         self.check_output_with_place(
@@ -404,7 +432,7 @@ class TestReshapeOpBool(TestReshapeOp):
         }
         self.attrs = {"shape": self.new_shape}
         self.outputs = {
-            "Out": self.inputs["X"].reshape(self.infered_shape),
+            "Out": self.inputs["X"].reshape(self.inferred_shape),
             'XShape': np.random.random(self.ori_shape).astype("float32"),
         }
 
@@ -423,7 +451,6 @@ class TestReshapeAPI(unittest.TestCase):
     def _executed_api(self):
         self.reshape = paddle.reshape
 
-    @test_with_pir_api
     def _test_api(self):
         paddle.enable_static()
         input = np.random.random([2, 25]).astype("float32")
@@ -459,7 +486,6 @@ class TestReshapeAPI(unittest.TestCase):
         np.testing.assert_array_equal(res_3, input.reshape([5, 10]))
         np.testing.assert_array_equal(res_4, input.reshape(shape))
 
-    @test_with_pir_api
     def _test_static_dtype(self):
         places = [paddle.CPUPlace()] + (
             [paddle.CUDAPlace(0)] if base.core.is_compiled_with_cuda() else []
@@ -566,7 +592,6 @@ class TestReshapeOpError(unittest.TestCase):
         self.data = paddle.static.data
         self.reshape = paddle.reshape
 
-    @test_with_pir_api
     def _test_errors(self):
         paddle.enable_static()
         with program_guard(Program(), Program()):
@@ -614,7 +639,6 @@ class TestReshapeOpError(unittest.TestCase):
             self.assertRaises(AssertionError, test_shape_3)
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_paddle_api_error(self):
         self._set_paddle_api()
         self._test_errors()
@@ -705,7 +729,6 @@ class TestReshapeAPI_ZeroDim(unittest.TestCase):
 
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_static(self):
         main_prog = base.Program()
         with base.program_guard(main_prog, base.Program()):

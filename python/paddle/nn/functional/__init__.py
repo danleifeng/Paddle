@@ -87,13 +87,18 @@ from .extension import (
     temporal_shift,
 )
 from .flash_attention import (
-    flash_attention_with_sparse_mask,
+    flash_attention_v3_varlen,
     flash_attn_qkvpacked,
     flash_attn_varlen_qkvpacked,
+    flashmask_attention,
     scaled_dot_product_attention,
     sdp_kernel,  # noqa: F401
 )
-from .input import embedding, one_hot
+from .input import (
+    embedding,
+    embedding_renorm_,  # noqa: F401
+    one_hot,
+)
 from .loss import (
     adaptive_log_softmax_with_loss,
     binary_cross_entropy,
@@ -125,6 +130,8 @@ from .loss import (
     triplet_margin_loss,
     triplet_margin_with_distance_loss,
 )
+from .moe_permute import moe_permute
+from .moe_unpermute import moe_unpermute
 from .norm import (
     batch_norm,
     group_norm,
@@ -288,8 +295,11 @@ __all__ = [
     'soft_margin_loss',
     'gaussian_nll_loss',
     'scaled_dot_product_attention',
-    'flash_attention_with_sparse_mask',
+    'flashmask_attention',
     'flash_attn_qkvpacked',
+    "flash_attention_v3_varlen",
     'flash_attn_varlen_qkvpacked',
     'group_norm',
+    'moe_permute',
+    'moe_unpermute',
 ]

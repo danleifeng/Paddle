@@ -340,11 +340,12 @@ class FC(paddle.nn.Layer):
             param_shape = [
                 reduce(
                     lambda a, b: a * b, input_shape[self._num_flatten_dims :], 1
-                )
-            ] + [self._size]
+                ),
+                self._size,
+            ]
             self.__w.append(
                 self.add_parameter(
-                    '_w%d' % i,
+                    f'_w{i}',
                     self.create_parameter(
                         attr=param,
                         shape=param_shape,

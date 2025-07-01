@@ -17,11 +17,12 @@ import unittest
 
 import numpy as np
 from dygraph_to_static_utils import (
+    BackendMode,
     Dy2StTestBase,
     IrMode,
     ToStaticMode,
     disable_test_case,
-    test_legacy_and_pt_and_pir,
+    test_ast_only,
 )
 
 import paddle
@@ -49,7 +50,7 @@ def test_list_append_in_if(x):
         a.append(x)
     else:
         a.append(paddle.full(shape=[1, 2], fill_value=9, dtype="float32"))
-    # TODO(Aurelius84): Currently, run_program_op doesn't support output LoDTensorArray.
+    # TODO(Aurelius84): Currently, run_program_op doesn't support output DenseTensorArray.
     return a[0]
 
 
@@ -208,11 +209,11 @@ def test_list_pop_in_while_loop(x, iter_num):
 
 class TestListWithoutControlFlowConfig(Dy2StTestBase):
     def setUp(self):
-        self.place = (
-            base.CUDAPlace(0)
-            if base.is_compiled_with_cuda()
-            else base.CPUPlace()
-        )
+        self.place = base.CPUPlace()
+        if base.is_compiled_with_cuda():
+            self.place = base.CUDAPlace(0)
+        if base.is_compiled_with_xpu():
+            self.place = base.XPUPlace(0)
 
         self.init_data()
         self.init_dygraph_func()
@@ -265,7 +266,6 @@ class TestListWithoutControlFlowConfig(Dy2StTestBase):
 
 
 class TestListWithoutControlFlow(TestListWithoutControlFlowConfig):
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.compare_transformed_static_result()
 
@@ -297,8 +297,9 @@ class TestListInWhileLoop(TestListWithoutControlFlowConfig):
                 res = self.dygraph_func(self.input, self.iter_num)
             return self.result_to_numpy(res)
 
-    @disable_test_case((ToStaticMode.AST, IrMode.PT))
-    @test_legacy_and_pt_and_pir
+    @disable_test_case(
+        (ToStaticMode.AST, IrMode.PT, BackendMode.PHI | BackendMode.CINN)
+    )
     def test_transformed_static_result(self):
         self.compare_transformed_static_result()
 
@@ -364,13 +365,28 @@ class ListWithCondNet(paddle.nn.Layer):
 
 
 class TestListWithCondGradInferVarType(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_to_static(self):
         net = ListWithCondNet()
         x = paddle.to_tensor([2, 3, 4], dtype='float32')
         index = paddle.to_tensor([1])
         res = paddle.jit.to_static(net)(x, index)
         self.assertEqual(res, 48.0)
+
+
+def tensor_array_dtype():
+    l = []
+    for i in range(paddle.to_tensor(3)):
+        l.append(i)
+    return l[0]
+
+
+class TestTensorArrayDtype(Dy2StTestBase):
+    @test_ast_only
+    def test_tensor_array_dtype(self):
+        fn = tensor_array_dtype
+        static_fn = paddle.jit.to_static(fn)
+        st_out = static_fn()
+        self.assertEqual(st_out.dtype, paddle.int64)
 
 
 if __name__ == '__main__':

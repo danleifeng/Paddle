@@ -1,7 +1,17 @@
+string(FIND "${COMPILED_CUDA_ARCHS}" "90" ARCH_BIN_CONTAINS_90)
+
+if(WITH_DISTRIBUTE
+   AND WITH_GPU
+   AND (ARCH_BIN_CONTAINS_90 GREATER -1))
+  message(STATUS "Enable DeepEP alltoall communication.")
+  add_subdirectory(deep_ep)
+  set(DEEPEP_LIB deep_ep)
+endif()
+
 cc_library(
   process_group
   SRCS process_group.cc
-  DEPS phi common xxhash)
+  DEPS phi common xxhash ${DEEPEP_LIB})
 
 cc_library(
   eager_reducer
@@ -19,40 +29,47 @@ if(WITH_NCCL OR WITH_RCCL)
   cc_library(
     process_group_nccl
     SRCS process_group_nccl.cc common.cc
-    DEPS process_group
-         phi
-         common
-         enforce
-         collective_helper
-         device_context
-         ${DEVICE_EVENT_LIBS})
+    DEPS process_group phi ${DEVICE_EVENT_LIBS})
 
   cc_library(
     async_load
     SRCS async_load.cc
-    DEPS device_context phi common ${DEVICE_EVENT_LIBS})
+    DEPS phi ${DEVICE_EVENT_LIBS})
 
+endif()
+
+if(WITH_FLAGCX)
+  cc_library(
+    process_group_flagcx
+    SRCS process_group_flagcx.cc common.cc
+    DEPS process_group phi)
 endif()
 
 if(WITH_XPU_BKCL)
   cc_library(
     process_group_bkcl
     SRCS process_group_bkcl.cc bkcl_tools.cc common.cc
-    DEPS process_group phi common enforce collective_helper device_context)
+         process_group_kernel_utils.cc
+    DEPS process_group phi)
+
+  cc_library(
+    xpu_async_load
+    SRCS xpu_async_load.cc
+    DEPS process_group phi ${DEVICE_EVENT_LIBS})
 endif()
 
 if(WITH_MPI)
   cc_library(
     process_group_mpi
     SRCS process_group_mpi.cc mpi_tools.cc common.cc
-    DEPS collective_helper device_context)
+    DEPS phi)
 endif()
 
 if(WITH_CUSTOM_DEVICE)
   cc_library(
     process_group_custom
     SRCS process_group_custom.cc custom_ccl_tools.cc common.cc
-    DEPS process_group phi common enforce collective_helper device_context)
+    DEPS process_group phi)
 endif()
 
 set(COMM_UTILS_DEPS process_group)

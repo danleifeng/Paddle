@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -27,7 +29,7 @@ class TrtConvertLookupTableV2Test(TrtLayerAutoScanTest):
     def sample_program_configs(self):
         self.trt_param.workspace_size = 102400
 
-        def generate_input1(dims, attrs: List[Dict[str, Any]]):
+        def generate_input1(dims, attrs: list[dict[str, Any]]):
             if dims == 1:
                 return np.array([32, 2, 19]).astype(np.int64)
             elif dims == 2:
@@ -41,7 +43,7 @@ class TrtConvertLookupTableV2Test(TrtLayerAutoScanTest):
                     ]
                 ).astype(np.int64)
 
-        def generate_input2(dims, attrs: List[Dict[str, Any]]):
+        def generate_input2(dims, attrs: list[dict[str, Any]]):
             return np.random.uniform(-1, 1, [64, 4]).astype('float32')
 
         for dims in [1, 2, 3]:
@@ -75,49 +77,51 @@ class TrtConvertLookupTableV2Test(TrtLayerAutoScanTest):
 
             yield program_config
 
+    def generate_dynamic_shape(self):
+        if self.dims == 1:
+            self.dynamic_shape.min_input_shape = {
+                "indices": [1],
+                # "data": [64, 4],
+            }
+            self.dynamic_shape.max_input_shape = {
+                "indices": [16],
+                # "data": [64, 4],
+            }
+            self.dynamic_shape.opt_input_shape = {
+                "indices": [8],
+                # "data": [64, 4],
+            }
+        elif self.dims == 2:
+            self.dynamic_shape.min_input_shape = {
+                "indices": [1, 1],
+                # "data": [64, 4],
+            }
+            self.dynamic_shape.max_input_shape = {
+                "indices": [16, 32],
+                # "data": [64, 4],
+            }
+            self.dynamic_shape.opt_input_shape = {
+                "indices": [2, 16],
+                # "data": [64, 4],
+            }
+        else:
+            self.dynamic_shape.min_input_shape = {
+                "indices": [1, 1, 1],
+                # "data": [64, 4],
+            }
+            self.dynamic_shape.max_input_shape = {
+                "indices": [16, 16, 16],
+                # "data": [64, 4],
+            }
+            self.dynamic_shape.opt_input_shape = {
+                "indices": [2, 8, 8],
+                # "data": [64, 4],
+            }
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape(attrs):
-            if self.dims == 1:
-                self.dynamic_shape.min_input_shape = {
-                    "indices": [1],
-                    "data": [64, 4],
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "indices": [16],
-                    "data": [64, 4],
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "indices": [8],
-                    "data": [64, 4],
-                }
-            elif self.dims == 2:
-                self.dynamic_shape.min_input_shape = {
-                    "indices": [1, 1],
-                    "data": [64, 4],
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "indices": [16, 32],
-                    "data": [64, 4],
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "indices": [2, 16],
-                    "data": [64, 4],
-                }
-            else:
-                self.dynamic_shape.min_input_shape = {
-                    "indices": [1, 1, 1],
-                    "data": [64, 4],
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "indices": [16, 16, 16],
-                    "data": [64, 4],
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "indices": [2, 8, 8],
-                    "data": [64, 4],
-                }
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
 
         def generate_trt_nodes_num(attrs, dynamic_shape):
             return 1, 2
@@ -127,20 +131,18 @@ class TrtConvertLookupTableV2Test(TrtLayerAutoScanTest):
         ]
 
         # for dynamic_shape mode
-        generate_dynamic_shape(attrs)
+        self.generate_dynamic_shape()
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), 1e-5
         self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
         yield self.create_inference_config(), generate_trt_nodes_num(
             attrs, True
         ), (1e-3, 1e-3)
 
     def test(self):
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 if __name__ == "__main__":

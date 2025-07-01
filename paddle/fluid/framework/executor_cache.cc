@@ -26,11 +26,13 @@
 #include "paddle/pir/include/core/value.h"
 #include "paddle/pir/include/pass/pass.h"
 #include "paddle/pir/include/pass/pass_manager.h"
+#include "paddle/pir/include/pass/pass_registry.h"
 
 DECLARE_FILE_SYMBOLS(print_statistics);
 
 COMMON_DECLARE_bool(pir_apply_inplace_pass);
 COMMON_DECLARE_bool(print_ir);
+COMMON_DECLARE_string(enable_custom_engine);
 
 namespace paddle::framework {
 class ProgramDesc;
@@ -112,13 +114,11 @@ InterpreterCoreInfoCache &InterpreterCoreInfoCache::Instance() {
 std::shared_ptr<InterpreterCore> CreateProgramInterpreterCoreInfoToCache(
     const ProgramDesc &program_desc,
     const phi::Place &place,
-    bool is_grad,
-    int64_t program_id,
     framework::Scope *scope,
-    const int64_t &place_hash_key) {
+    const InterpreterCoreInfoCacheKey &key) {
   auto &cache = framework::InterpreterCoreInfoCache::Instance();
   if (cache.Size() > 256000u /* max_cached_size*/) {
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The cached info size has exceeded max_cached_size: 256000, "
         "which will cause error. "));
   }
@@ -131,8 +131,7 @@ std::shared_ptr<InterpreterCore> CreateProgramInterpreterCoreInfoToCache(
   core.reset(new InterpreterCore(
       place, program_desc.Block(0), scope, execution_config));
 
-  auto &cached_value = cache.GetMutable(
-      program_id, scope, place_hash_key, is_grad, /*in_pir_mode=*/false);
+  auto &cached_value = cache.GetMutable(key.with_pir_mode(false));
   cached_value.core_ = core;
   return core;
 }
@@ -140,27 +139,26 @@ std::shared_ptr<InterpreterCore> CreateProgramInterpreterCoreInfoToCache(
 std::shared_ptr<InterpreterCore> CreatePirInterpreterCoreInfoToCache(
     std::unique_ptr<::pir::Program> ir_program,
     const phi::Place &place,
-    bool is_grad,
-    int64_t program_id,
     framework::Scope *scope,
-    const int64_t &place_hash_key) {
+    const InterpreterCoreInfoCacheKey &key,
+    bool used_for_sot) {
   auto &cache = framework::InterpreterCoreInfoCache::Instance();
   if (cache.Size() > 256000u /* max_cached_size*/) {
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "The cached info size has exceeded max_cached_size: 256000, "
         "which will cause error. "));
   }
   interpreter::ExecutionConfig execution_config;
   execution_config.create_local_scope = false;
   execution_config.used_for_jit = true;
+  execution_config.used_for_sot = used_for_sot;
 
   std::shared_ptr<InterpreterCore> core = nullptr;
 
   core.reset(new InterpreterCore(
       place, {}, ir_program->block(), scope, execution_config));
 
-  auto &cached_value = cache.GetMutable(
-      program_id, scope, place_hash_key, is_grad, /*in_pir_mode=*/true);
+  auto &cached_value = cache.GetMutable(key.with_pir_mode(true));
   cached_value.core_ = core;
   cached_value.ir_prog_ = std::move(ir_program);
   return core;
@@ -170,13 +168,34 @@ bool TensorSortHelper(const paddle::Tensor &t1, const paddle::Tensor &t2) {
   return t1.name() < t2.name();
 }
 
-std::unique_ptr<::pir::Program> ApplyIrPass(::pir::Program *program,
-                                            phi::Place place) {
+std::unique_ptr<::pir::Program> ApplyIrPass(
+    ::pir::Program *program,
+    phi::Place place,
+    const std::set<std::string> &no_need_buffer_names) {
+#if defined(PADDLE_WITH_CUSTOM_DEVICE)
+  if (!FLAGS_enable_custom_engine.empty()) {
+    std::string custom_engine_translate_pass = FLAGS_enable_custom_engine;
+    std::istringstream ss(custom_engine_translate_pass);
+    std::string pass;
+    std::vector<std::string> passes;
+
+    while (std::getline(ss, pass, ',')) {
+      passes.push_back(pass);
+      VLOG(4) << "Add CustomEngine pass : " << pass;
+    }
+
+    ::pir::PassManager pass_pm(::pir::IrContext::Instance(), 3);
+    for (std::string custom_pass : passes) {
+      pass_pm.AddPass(pir::PassRegistry::Instance().Get(custom_pass));
+      pass_pm.Run(program);
+    }
+  }
+#endif
   auto ir_res = paddle::dialect::PdOpLowerToKernelPass(program, place);
 
   if (FLAGS_pir_apply_inplace_pass) {
     ::pir::PassManager pm(::pir::IrContext::Instance(), 3);
-    pm.AddPass(::pir::CreateInplacePass());
+    pm.AddPass(::pir::CreateInplacePass(no_need_buffer_names));
     pm.Run(ir_res.get());
 
     if (FLAGS_print_ir) {
@@ -247,6 +266,11 @@ std::unique_ptr<::pir::Program> ConstructForwardIrProgram(
     // TODO(phlrain) : using tensor dtype
     op_desc->SetAttr("dtype", 0);
     op_desc->SetAttr("place", static_cast<int>(p));
+    if (p == phi::AllocationType::CUSTOM) {
+      op_desc->SetAttr("place_device_id", in_t.place().GetDeviceId());
+      op_desc->SetAttr("place_device_type", in_t.place().GetDeviceType());
+    }
+
     op_desc->SetAttr("name", name);
     op_desc->SetOutput("out", {name});
   }
@@ -264,6 +288,10 @@ std::unique_ptr<::pir::Program> ConstructForwardIrProgram(
     // TODO(phlrain) : using tensor dtype
     op_desc->SetAttr("dtype", 0);
     op_desc->SetAttr("place", static_cast<int>(p));
+    if (p == phi::AllocationType::CUSTOM) {
+      op_desc->SetAttr("place_device_id", param.place().GetDeviceId());
+      op_desc->SetAttr("place_device_type", param.place().GetDeviceType());
+    }
     op_desc->SetAttr("name", name);
     op_desc->SetOutput("out", {name});
 
@@ -303,7 +331,7 @@ std::unique_ptr<::pir::Program> ConstructForwardIrProgram(
   }
   auto program = TranslateLegacyProgramToProgram(local_program);
 
-  return ApplyIrPass(program.get(), place);
+  return ApplyIrPass(program.get(), place, {});
 }
 
 std::unique_ptr<::pir::Program> ConstructBackwardIrProgram(
@@ -331,7 +359,7 @@ std::unique_ptr<::pir::Program> ConstructBackwardIrProgram(
     if (scope->FindVar(var_name)) {
       auto tensor = scope->FindVar(var_name)->Get<phi::DenseTensor>();
       phi::AllocationType p = place.GetType();
-      if (tensor.initialized()) {
+      if (tensor.has_allocation()) {
         p = tensor.place().GetType();
       }
 
@@ -344,6 +372,11 @@ std::unique_ptr<::pir::Program> ConstructBackwardIrProgram(
       // TODO(phlrain) : using tensor dtype
       op_desc->SetAttr("dtype", 0);
       op_desc->SetAttr("place", static_cast<int>(p));
+      if (p == phi::AllocationType::CUSTOM) {
+        op_desc->SetAttr("place_device_id", tensor.place().GetDeviceId());
+        op_desc->SetAttr("place_device_type", tensor.place().GetDeviceType());
+      }
+
       op_desc->SetAttr("name", var_name);
       op_desc->SetOutput("out", {var_name});
     }

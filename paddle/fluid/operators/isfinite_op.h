@@ -89,7 +89,7 @@ inline void TensorContainsNAN(const phi::DenseTensor& tensor,
     return;
   }
 #endif
-  PADDLE_THROW(phi::errors::Unimplemented("Not supported on %s.", place));
+  PADDLE_THROW(common::errors::Unimplemented("Not supported on %s.", place));
 }
 inline void TensorContainsInf(const phi::DenseTensor& tensor,
                               phi::DenseTensor* out) {
@@ -106,7 +106,7 @@ inline void TensorContainsInf(const phi::DenseTensor& tensor,
     return;
   }
 #endif
-  PADDLE_THROW(phi::errors::Unimplemented("Not supported on %s.", place));
+  PADDLE_THROW(common::errors::Unimplemented("Not supported on %s.", place));
 }
 inline void TensorIsfinite(const phi::DenseTensor& tensor,
                            phi::DenseTensor* out) {
@@ -123,7 +123,7 @@ inline void TensorIsfinite(const phi::DenseTensor& tensor,
     return;
   }
 #endif
-  PADDLE_THROW(phi::errors::Unimplemented("Not supported on %s.", place));
+  PADDLE_THROW(common::errors::Unimplemented("Not supported on %s.", place));
 }
 
 // copy the result bool to cpu
@@ -162,7 +162,7 @@ class OverflowKernel : public framework::OpKernel<T> {
   virtual void Compute(const framework::ExecutionContext& ctx) const {
     auto* x = ctx.InputVar("X");
     auto* out = ctx.Output<phi::DenseTensor>("Out");
-    out->mutable_data<T>(ctx.GetPlace());
+    out->template mutable_data<T>(ctx.GetPlace());
     Functor functor;
     if (x->IsType<phi::DenseTensor>()) {
       auto* in = ctx.Input<phi::DenseTensor>("X");
@@ -173,7 +173,7 @@ class OverflowKernel : public framework::OpKernel<T> {
     } else {
       PADDLE_ENFORCE_EQ(true,
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The input type mismatch, the type of Input(X) "
                             "must be phi::DenseTensor or "
                             "SelectedRows, please check your input."));

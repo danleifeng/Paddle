@@ -54,13 +54,13 @@ void RemainderKernel(const Context& dev_ctx,
                      const DenseTensor& y,
                      DenseTensor* out) {
   using XPUType = typename XPUTypeTrait<T>::Type;
-  auto f = [](xpu::Context* ctx,
+  auto f = [](xpu::Context* xpu_ctx,
               const XPUType* x,
               const XPUType* y,
               XPUType* z,
-              const std::vector<int>& xshape,
-              const std::vector<int>& yshape) {
-    return xpu::broadcast_mod<XPUType>(ctx, x, y, z, xshape, yshape);
+              const std::vector<int64_t>& xshape,
+              const std::vector<int64_t>& yshape) {
+    return xpu::broadcast_mod<XPUType>(xpu_ctx, x, y, z, xshape, yshape);
   };
 
   XPUElementwise<T, XPUType>(dev_ctx, x, y, -1, out, f);
@@ -82,6 +82,7 @@ PD_REGISTER_KERNEL(floor_divide,
                    ALL_LAYOUT,
                    phi::FloorDivideKernel,
                    float,
+                   phi::dtype::bfloat16,
                    phi::dtype::float16,
                    int32_t,
                    int64_t) {}
@@ -90,6 +91,7 @@ PD_REGISTER_KERNEL(maximum,
                    ALL_LAYOUT,
                    phi::MaximumKernel,
                    float,
+                   phi::dtype::bfloat16,
                    phi::dtype::float16,
                    int32_t,
                    int64_t) {}
@@ -98,6 +100,7 @@ PD_REGISTER_KERNEL(minimum,
                    ALL_LAYOUT,
                    phi::MinimumKernel,
                    float,
+                   phi::dtype::bfloat16,
                    phi::dtype::float16,
                    int32_t,
                    int64_t) {}

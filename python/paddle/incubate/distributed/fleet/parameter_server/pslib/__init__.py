@@ -423,7 +423,7 @@ class PSLib(Fleet):
 
     def save_persistables(self, executor, dirname, main_program=None, **kwargs):
         """
-        Save presistable parameters,
+        Save persistable parameters,
         when using fleet, it will save sparse and dense feature.
 
         Args:
@@ -1219,7 +1219,7 @@ class DownpourOptimizer(DistributedOptimizer):
         """
         Currently, backward function can not be called through DistributedOptimizer
         """
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def _remove_collective_ops(self, program, name):
         """
@@ -1235,7 +1235,7 @@ class DownpourOptimizer(DistributedOptimizer):
         """
         Currently, apply_gradients function can not be called through DistributedOptimizer
         """
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def get_dist_env(self):
         trainer_id = int(os.getenv('PADDLE_TRAINER_ID', '0'))
@@ -1263,7 +1263,7 @@ class DownpourOptimizer(DistributedOptimizer):
         table_name = [name + "@GRAD" for name in table_name]
         need_remove_op_index = []
         block = loss.block.program.global_block()
-        collective_ops = ["c_sync_calc_stream", "c_allreduce_sum"]
+        collective_ops = ["c_sync_calc_stream", "c_allreduce_sum", "all_reduce"]
         for ids, op in list(enumerate(block.ops)):
             if op.type in collective_ops:
                 if op.input("X")[0] in table_name:
@@ -1370,9 +1370,7 @@ class DownpourOptimizer(DistributedOptimizer):
                     wait_port=False,
                 )
                 if i > 0:
-                    self._remove_collective_ops(
-                        start_program, "c_comm_init_all"
-                    )
+                    self._remove_collective_ops(start_program, "comm_init_all")
             for i in range(0, len(losses)):
                 loss = losses[i]
                 embedding_table = self._distributed_optimizer._find_multi_distributed_lookup_table(

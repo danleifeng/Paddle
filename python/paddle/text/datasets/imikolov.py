@@ -43,7 +43,7 @@ class Imikolov(Dataset):
         data_type(str): 'NGRAM' or 'SEQ'. Default 'NGRAM'.
         window_size(int): sliding window size for 'NGRAM' data. Default -1.
         mode(str): 'train' 'test' mode. Default 'train'.
-        min_word_freq(int): minimal word frequence for building word dictionary. Default 50.
+        min_word_freq(int): minimal word frequencies for building word dictionary. Default 50.
         download(bool): whether to download dataset automatically if
             :attr:`data_file` is not set. Default True
 
@@ -54,6 +54,7 @@ class Imikolov(Dataset):
 
         .. code-block:: python
 
+            >>> # doctest: +TIMEOUT(60)
             >>> import paddle
             >>> from paddle.text.datasets import Imikolov
 
@@ -178,7 +179,7 @@ class Imikolov(Dataset):
             for l in f:
                 if self.data_type == 'NGRAM':
                     assert self.window_size > -1, 'Invalid gram length'
-                    l = ['<s>'] + l.strip().split() + ['<e>']
+                    l = ["<s>", *l.strip().split(), "<e>"]
                     if len(l) >= self.window_size:
                         l = [self.word_idx.get(w, UNK) for w in l]
                         for i in range(self.window_size, len(l) + 1):
@@ -186,13 +187,13 @@ class Imikolov(Dataset):
                 elif self.data_type == 'SEQ':
                     l = l.strip().split()
                     l = [self.word_idx.get(w, UNK) for w in l]
-                    src_seq = [self.word_idx['<s>']] + l
-                    trg_seq = l + [self.word_idx['<e>']]
+                    src_seq = [self.word_idx["<s>"], *l]
+                    trg_seq = [*l, self.word_idx["<e>"]]
                     if self.window_size > 0 and len(src_seq) > self.window_size:
                         continue
                     self.data.append((src_seq, trg_seq))
                 else:
-                    raise AssertionError('Unknow data type')
+                    raise AssertionError('Unknown data type')
 
     def __getitem__(
         self, idx: int

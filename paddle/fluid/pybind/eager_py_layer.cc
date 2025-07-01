@@ -10,10 +10,6 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 // disable numpy compile error
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
 
 #include <set>
 #include <string>
@@ -26,8 +22,6 @@ limitations under the License. */
 #include "paddle/fluid/eager/pylayer/py_layer_node.h"
 #include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/framework/convert_utils.h"
-#include "paddle/fluid/memory/allocation/allocator.h"
-#include "paddle/fluid/memory/memcpy.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/pybind/eager.h"
 #include "paddle/fluid/pybind/eager_utils.h"
@@ -35,13 +29,17 @@ limitations under the License. */
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/memory/allocation/allocator.h"
+#include "paddle/phi/core/memory/memcpy.h"
 #include "pybind11/detail/internals.h"
 #include "pybind11/pytypes.h"
 #pragma GCC diagnostic ignored "-Wwrite-strings"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+COMMON_DECLARE_bool(check_cuda_error);
 
-namespace paddle {
-namespace pybind {
+using egr::ConvertToDistTensor;
+
+namespace paddle::pybind {
 
 PyTypeObject* p_pylayer_type;
 extern PyTypeObject* p_tensor_type;
@@ -124,7 +122,7 @@ PyObject* new_tensor_with_impl(paddle::Tensor* tensor) {
             egr::EagerUtils::autograd_meta(tensor)->StopGradient());
   } else {
     PADDLE_THROW(
-        phi::errors::Fatal("tp_alloc return null, can not new a PyObject."));
+        common::errors::Fatal("tp_alloc return null, can not new a PyObject."));
   }
   return obj;
 }
@@ -133,21 +131,26 @@ PyObject* pylayer_method_apply(PyObject* cls,
                                PyObject* args,
                                PyObject* kwargs) {
   EAGER_TRY
+  SetPythonStack();
   VLOG(6) << "Begin run PyLayer apply...";
   PyObject* backward_function =
       PyObject_GetAttrString(cls, "_backward_function");
   if (!backward_function) {
     PADDLE_THROW(
-        phi::errors::InvalidArgument("Get _backward_function failed."));
+        common::errors::InvalidArgument("Get _backward_function failed."));
   }
   PyLayerObject* ctx = reinterpret_cast<PyLayerObject*>(
       PyObject_CallFunctionObjArgs(backward_function, nullptr));
   if (!ctx) {
     PADDLE_THROW(
-        phi::errors::External(pybind11::detail::error_string().c_str()));
+        common::errors::External(pybind11::detail::error_string().c_str()));
     return nullptr;
   }
   VLOG(6) << "PyLayer construct PyLayerContext finish...";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("pylayer_method_apply " +
+                        std::string(Py_TYPE(ctx)->tp_name) + " begin");
+  }
 
   bool require_any_grad = false;
 
@@ -315,7 +318,8 @@ PyObject* pylayer_method_apply(PyObject* cls,
   // call forward
   auto forward_fn = PyObject_GetAttrString(cls, "forward");
   if (!forward_fn) {
-    PADDLE_THROW(phi::errors::InvalidArgument("Get forward function failed."));
+    PADDLE_THROW(
+        common::errors::InvalidArgument("Get forward function failed."));
   }
   bool trace_backward = egr::Controller::Instance().HasGrad();
   egr::Controller::Instance().SetHasGrad(false);
@@ -435,7 +439,7 @@ PyObject* pylayer_method_apply(PyObject* cls,
   }
 
   if (outputs_tensor.empty()) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "At least one output of `PyLayer.forward` is a `Tensor`."));
   }
   VLOG(6) << "PyLayer forward function finish...";
@@ -459,7 +463,7 @@ PyObject* pylayer_method_apply(PyObject* cls,
       PADDLE_ENFORCE_EQ(!inplace_tensor_autograd_meta->StopGradient() &&
                             egr::EagerUtils::IsLeafTensor(*inplace_tensor),
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Leaf Var (%s) that doesn't stop gradient "
                             "can't use inplace strategy.",
                             inplace_tensor->name()));
@@ -522,6 +526,11 @@ PyObject* pylayer_method_apply(PyObject* cls,
   Py_XDECREF(backward_function);
   Py_XDECREF(forward_fn);
   Py_XDECREF(ctx);
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("pylayer_method_apply " +
+                        std::string(Py_TYPE(ctx)->tp_name) + " finish");
+  }
 
   return outputs;
   EAGER_CATCH_AND_THROW_RETURN_NULL
@@ -624,7 +633,7 @@ void call_pack_hook(PyLayerObject* self, PyObject* value) {
                            reinterpret_cast<PyObject*>(
                                (*pack_hook)(reinterpret_cast<void*>(o))));
         } else {
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "save_for_backward only support Tensor, list of Tensor, tuple of "
               "Tensor."));
         }
@@ -646,7 +655,7 @@ void call_pack_hook(PyLayerObject* self, PyObject* value) {
                            reinterpret_cast<PyObject*>(
                                (*pack_hook)(reinterpret_cast<void*>(o))));
         } else {
-          PADDLE_THROW(phi::errors::InvalidArgument(
+          PADDLE_THROW(common::errors::InvalidArgument(
               "save_for_backward only support Tensor, list of Tensor, tuple of "
               "Tensor."));
         }
@@ -658,7 +667,7 @@ void call_pack_hook(PyLayerObject* self, PyObject* value) {
                        reinterpret_cast<PyObject*>(
                            (*pack_hook)(reinterpret_cast<void*>(obj))));
     } else {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "save_for_backward only support Tensor, list of Tensor, tuple of "
           "Tensor."));
     }
@@ -800,7 +809,7 @@ void BindEagerPyLayer(PyObject* module) {
 
   if (PyType_Ready(type) < 0) {
     PADDLE_THROW(
-        phi::errors::Fatal("Init Paddle error in BindEager(PyType_Ready)."));
+        common::errors::Fatal("Init Paddle error in BindEager(PyType_Ready)."));
     return;
   }
 
@@ -809,11 +818,10 @@ void BindEagerPyLayer(PyObject* module) {
       0) {
     Py_DECREF(type);
     Py_DECREF(module);
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "Init Paddle error in BindEager(PyModule_AddObject)."));
     return;
   }
 }
 
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

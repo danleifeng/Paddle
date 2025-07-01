@@ -20,14 +20,31 @@
 #include "paddle/common/enforce.h"
 #include "paddle/common/errors.h"
 
+#include "paddle/fluid/framework/ir/xpu/quant_utils.h"
+#include "paddle/fluid/framework/scope.h"
+#include "paddle/fluid/framework/variable.h"
+
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
+#include "paddle/fluid/pir/dialect/operator/utils/utils.h"
+#include "paddle/fluid/pir/drr/src/ir_operation_factory.h"
+
 #include "paddle/pir/include/core/builtin_op.h"
 #include "paddle/pir/include/core/op_operand.h"
 #include "paddle/pir/include/core/operation.h"
+#include "paddle/pir/include/core/operation_utils.h"
 #include "paddle/pir/include/core/program.h"
 #include "paddle/pir/include/core/value.h"
+#include "paddle/pir/include/pass/pass.h"
+#include "paddle/pir/include/pattern_rewrite/pattern_match.h"
+
+#include "paddle/phi/common/data_type.h"
+#include "paddle/phi/common/place.h"
+#include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/kernels/assign_kernel.h"
+#include "paddle/phi/kernels/cast_kernel.h"
+#include "paddle/phi/kernels/scale_kernel.h"
 
 namespace {
 
@@ -66,6 +83,108 @@ void GetUsedExternalValueImpl(
 
 namespace pir {
 
+void TensorCopySync(const phi::DenseTensor& src,
+                    phi::DenseTensor* dst,
+                    const phi::Place& dst_place) {
+  paddle::framework::TensorCopySync(src, dst_place, dst);
+}
+
+void DenseTensorCastToFp32(phi::DenseTensor* in,
+                           phi::DenseTensor* out,
+                           int world_size) {
+  auto* cpu_ctx = static_cast<phi::CPUContext*>(
+      phi::DeviceContextPool::Instance().Get(phi::CPUPlace()));
+
+  phi::DenseTensor fp32_tensor;
+  phi::DenseTensor* out_ptr = out == nullptr ? &fp32_tensor : out;
+  out_ptr->Resize(in->dims());
+  out_ptr->set_type(phi::DataType::FLOAT32);
+  out_ptr->set_layout(in->layout());
+
+  switch (in->dtype()) {
+    case phi::DataType::FLOAT16:
+      phi::CastKernel<phi::dtype::float16, phi::CPUContext>(
+          *cpu_ctx, *in, phi::DataType::FLOAT32, out_ptr);
+      break;
+    case phi::DataType::FLOAT32:
+      if (out == nullptr) {
+        if (world_size > 1) {
+          phi::ScaleKernel<float, phi::CPUContext>(
+              *cpu_ctx, *in, 1.0f / world_size, 0.f, false, in);
+        }
+        return;
+      } else {
+        phi::AssignKernel(*cpu_ctx, *in, out_ptr);
+      }
+      break;
+    default:
+      PADDLE_THROW(common::errors::InvalidType(
+          "Only support fp16 and fp32, but received dtype is %s.",
+          phi::DataTypeToString(in->dtype())));
+      break;
+  }
+  if (world_size > 1) {
+    phi::ScaleKernel<float, phi::CPUContext>(
+        *cpu_ctx, *out_ptr, 1.0f / world_size, 0.f, false, out_ptr);
+  }
+  if (out == nullptr) {
+    phi::AssignKernel(*cpu_ctx, *in, out_ptr);
+  }
+}
+
+pir::Type TranslateToIrDataType(phi::DataType dtype) {
+  // Get Meta
+  pir::IrContext* ctx = pir::IrContext::Instance();
+  pir::Type data_type = paddle::dialect::TransToIrDataType(dtype, ctx);
+  return data_type;
+}
+
+pir::Operation* CreateOperationByName(const std::string& op_name,
+                                      const std::vector<pir::Value>& inputs,
+                                      const pir::AttributeMap& attrs,
+                                      const pir::PatternRewriter& rewriter) {
+  return paddle::drr::OperationFactory::Instance().CreateOperation(
+      op_name, inputs, attrs, const_cast<pir::PatternRewriter&>(rewriter));
+}
+
+pir::Attribute CreateDataTypeAttr(pir::IrContext* ctx, phi::DataType dtype) {
+  return paddle::dialect::DataTypeAttribute::get(ctx, dtype);
+}
+
+template <typename T>
+T* VarGetMutable(Variable* var) {
+  return var->GetMutable<T>();
+}
+
+template <typename T>
+bool VarIsType(Variable* var) {
+  return var->IsType<T>();
+}
+
+template phi::DenseTensor* VarGetMutable<phi::DenseTensor>(Variable*);
+template bool VarIsType<phi::DenseTensor>(Variable*);
+
+Variable* ScopeFindVar(Scope* scope_, const std::string& name) {
+  return scope_->FindVar(name);
+}
+
+Variable* ScopeGetVar(Scope* scope_, const std::string& name) {
+  return scope_->GetVar(name);
+}
+
+Variable* ScopeVar(Scope* scope_, const std::string& name) {
+  return scope_->Var(name);
+}
+
+std::vector<std::string> ScopeGetVarNames(Scope* scope_) {
+  return scope_->LocalVarNames();
+}
+
+Scope* GetScopeImpl(pir::Pass* pass) {
+  // get scope from pass
+  return &pass->Get<Scope>(pir::Pass::kParamScopeAttr);
+}
+
 std::string GetParameterNameFromValue(const pir::Value& value) {
   pir::Operation* owner = value.defining_op();
   std::string name;
@@ -77,8 +196,8 @@ std::string GetParameterNameFromValue(const pir::Value& value) {
     name = op.tensor_name();
   } else {
     PADDLE_THROW(
-        phi::errors::Unimplemented("Value must be a weight from a Parameter "
-                                   "or a ConstantTensorOp op."));
+        common::errors::Unimplemented("Value must be a weight from a Parameter "
+                                      "or a ConstantTensorOp op."));
   }
   return name;
 }
@@ -91,17 +210,17 @@ std::vector<int64_t> GetShapeFromValue(const pir::Value& value) {
     return phi::vectorize(
         value.type().dyn_cast<paddle::dialect::SelectedRowsType>().dims());
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Currently, we can only get shape for dense_tensor or selected_rows."));
   }
 }
 
 pir::Type GetDataTypeFromValue(const pir::Value& value) {
   // TODO(dev): Support other types like DenseTensor.
-  PADDLE_ENFORCE_EQ(
-      value.type().isa<paddle::dialect::DenseTensorType>(),
-      true,
-      phi::errors::InvalidArgument("Value's type must be a DenseTensorType."));
+  PADDLE_ENFORCE_EQ(value.type().isa<paddle::dialect::DenseTensorType>(),
+                    true,
+                    common::errors::InvalidArgument(
+                        "Value's type must be a DenseTensorType."));
   return value.type().dyn_cast<paddle::dialect::DenseTensorType>().dtype();
 }
 
@@ -109,16 +228,16 @@ Operation* GetDefiningOpForInput(const Operation* op, uint32_t index) {
   PADDLE_ENFORCE_EQ(
       index < op->num_operands() && op->operand_source(index),
       true,
-      phi::errors::InvalidArgument("Intput operand's index must be valid."));
+      common::errors::InvalidArgument("Input operand's index must be valid."));
   return op->operand_source(index).defining_op();
 }
 
 std::vector<std::pair<Operation*, int32_t>> GetUseOpsForOutput(
     const Operation* op, uint32_t index) {
-  PADDLE_ENFORCE_EQ(
-      index < op->num_results(),
-      true,
-      phi::errors::InvalidArgument("Output op result's index must be valid."));
+  PADDLE_ENFORCE_EQ(index < op->num_results(),
+                    true,
+                    common::errors::InvalidArgument(
+                        "Output op result's index must be valid."));
   auto result = op->result(index);
   std::vector<std::pair<Operation*, int32_t>> use_ops;
   for (auto it = result.use_begin(); it != result.use_end(); ++it) {
@@ -162,6 +281,37 @@ bool ValueIsPersistable(const pir::Value& value) {
     }
   }
   return true;
+}
+
+phi::DataType GetTensorDtype(pir::Type type) {
+  if (!type) {
+    PADDLE_THROW(
+        common::errors::InvalidArgument("The type of value is nullptr."));
+  }
+  if (auto dense_tensor_type = type.dyn_cast<pir::DenseTensorType>()) {
+    return paddle::dialect::TransToPhiDataType(dense_tensor_type.dtype());
+  } else if (auto sparse_coo_tensor_type =
+                 type.dyn_cast<paddle::dialect::SparseCooTensorType>()) {
+    return paddle::dialect::TransToPhiDataType(sparse_coo_tensor_type.dtype());
+  } else if (auto sparse_csr_tensor_type =
+                 type.dyn_cast<paddle::dialect::SparseCsrTensorType>()) {
+    return paddle::dialect::TransToPhiDataType(sparse_csr_tensor_type.dtype());
+  } else if (auto select_rows =
+                 type.dyn_cast<paddle::dialect::SelectedRowsType>()) {
+    return paddle::dialect::TransToPhiDataType(select_rows.dtype());
+  } else if (auto dense_array =
+                 type.dyn_cast<paddle::dialect::DenseTensorArrayType>()) {
+    return paddle::dialect::TransToPhiDataType(dense_array.dtype());
+  } else {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Currently, we can only get phi::DataType from DenseTensorType and "
+        "SelectedRowsType, DenseTensorArrayType,SparseCooTensorType or "
+        "SparseCsrTensorType."));
+  }
+}
+
+phi::DataType GetValueDtype(const pir::Value& val) {
+  return GetTensorDtype(val.type());
 }
 
 }  // namespace pir

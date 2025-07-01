@@ -18,9 +18,7 @@
 #include "paddle/phi/core/enforce.h"
 #include "paddle/utils/string/pretty_log.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 using string::PrettyLogDetail;
 
@@ -35,7 +33,7 @@ void MatmulTransposeReshapeMKLDNNPass::ApplyImpl(Graph *graph) const {
 void MatmulTransposeReshapeMKLDNNPass::Fuse(
     Graph *graph, const std::string &matmul_type) const {
   PADDLE_ENFORCE_NOT_NULL(graph,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Pointer to graph argument should not be NULL."));
   FusePassBase::Init(matmul_type + "_transpose_reshape_onednn_fuse_pass",
                      graph);
@@ -202,9 +200,7 @@ MatmulTransposeReshapeMKLDNNPass::MatmulTransposeReshapeMKLDNNPass() {
       .End();
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(matmul_transpose_reshape_onednn_fuse_pass,
               paddle::framework::ir::MatmulTransposeReshapeMKLDNNPass);

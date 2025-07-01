@@ -389,6 +389,19 @@ def convert_uint16_to_float(in_list):
     return np.reshape(out, in_list.shape)
 
 
+def get_places():
+    places = []
+    if (
+        os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+        in ['1', 'true', 'on']
+        or not core.is_compiled_with_cuda()
+    ):
+        places.append(base.CPUPlace())
+    if core.is_compiled_with_cuda():
+        places.append(base.CUDAPlace(0))
+    return places
+
+
 @contextmanager
 def auto_parallel_test_guard(test_info_path, generated_test_file_path):
     test_info_file, generated_test_file = None, None
@@ -525,6 +538,7 @@ class OpTest(unittest.TestCase):
                 not cls.input_shape_is_large
                 and cls.op_type
                 not in check_shape_white_list.NEED_TO_FIX_OP_LIST
+                and not is_xpu_op_test()
             ):
                 raise AssertionError(
                     "Number of element(s) of input should be large than or equal to 100 for "
@@ -608,6 +622,27 @@ class OpTest(unittest.TestCase):
             self.is_fp16_compared_with_fp32()
             or self.is_bf16_compared_with_fp32()
         )
+
+    def is_0size_test(self):
+        def numel(shape):
+            numel = 1
+            for i in shape:
+                numel = numel * i
+            return numel
+
+        for name, item in self.inputs.items():
+            if isinstance(item, (list, tuple)):
+                for tup in item:
+                    if (
+                        len(tup) > 1
+                        and hasattr(tup[1], "shape")
+                        and numel(tup[1].shape) == 0
+                    ):
+                        return True
+            else:
+                if numel(item.shape) == 0:
+                    return True
+        return False
 
     def enable_cal_ref_output(self):
         self.is_calc_ref = True
@@ -709,7 +744,7 @@ class OpTest(unittest.TestCase):
         for var_name in input_vars:
             if isinstance(input_vars[var_name], list):
                 for name, np_value in self.inputs[var_name]:
-                    tensor = core.LoDTensor()
+                    tensor = core.DenseTensor()
                     if isinstance(np_value, tuple):
                         tensor.set(np_value[0], place)
                         dtype = np.array(np_value[1]).dtype
@@ -758,7 +793,7 @@ class OpTest(unittest.TestCase):
                             tensor.set(np_value, place)
                     feed_map[name] = tensor
             else:
-                tensor = core.LoDTensor()
+                tensor = core.DenseTensor()
                 if isinstance(self.inputs[var_name], tuple):
                     tensor.set(self.inputs[var_name][0], place)
                     if self.is_calc_ref:
@@ -902,13 +937,13 @@ class OpTest(unittest.TestCase):
             return paddle.to_tensor(value)
 
     def get_sequence_batch_size_1_input(self, lod=None, shape=None):
-        """Get LoD input data whose batch size is 1.
+        """Get LegacyLoD input data whose batch size is 1.
         All sequence related OP unittests should call this function to contain the case of batch size = 1.
         Args:
             lod (list[list of int], optional): Length-based LoD, length of lod[0] should be 1. Default: [[13]].
             shape (list, optional): Shape of input, shape[0] should be equals to lod[0][0]. Default: [13, 23].
         Returns:
-            tuple (ndarray, lod) : LoD input data whose batch size is 1.
+            tuple (ndarray, lod) : LegacyLoD input data whose batch size is 1.
         """
         if lod is None:
             lod = [[13]]
@@ -937,13 +972,13 @@ class OpTest(unittest.TestCase):
         return False
 
     def get_sequence_instance_size_0_input(self, lod=None, shape=None):
-        """Get LoD input data whose instance size is 0.
+        """Get LegacyLoD input data whose instance size is 0.
         All sequence related OP unittests should call this function to contain the case of instance size is 0.
         Args:
             lod (list[list of int], optional): Length-based LoD, lod[0]'s size must at least eight, lod[0] must at least two zeros at the beginning and at least two zeros at the end, the middle position of lod[0] contains a single zero and multiple zero. Default: [[0, 0, 4, 0, 3, 0, 0, 5, 0, 0]].
             shape (list, optional): Shape of input, shape[0] should be equals to lod[0][0]. Default: [13, 23].
         Returns:
-            tuple (ndarray, lod): LoD input data whose instance size is 0.
+            tuple (ndarray, lod): LegacyLoD input data whose instance size is 0.
         """
         if lod is None:
             lod = [[0, 0, 4, 0, 3, 0, 0, 5, 0, 0]]
@@ -1002,7 +1037,7 @@ class OpTest(unittest.TestCase):
                     v = block.create_var(
                         name=name,
                         dtype=np.float32,
-                        type=core.VarDesc.VarType.LOD_TENSOR,
+                        type=core.VarDesc.VarType.DENSE_TENSOR,
                         persistable=False,
                         stop_gradient=False,
                     )
@@ -1010,7 +1045,7 @@ class OpTest(unittest.TestCase):
                     v = block.create_var(
                         name=name,
                         dtype=np_value_temp.dtype,
-                        type=core.VarDesc.VarType.LOD_TENSOR,
+                        type=core.VarDesc.VarType.DENSE_TENSOR,
                         persistable=False,
                         stop_gradient=False,
                     )
@@ -1028,7 +1063,7 @@ class OpTest(unittest.TestCase):
             if name not in np_list:
                 assert var_proto.intermediate, f"{name} not found"
                 v = block.create_var(
-                    dtype='float32', type=core.VarDesc.VarType.LOD_TENSOR
+                    dtype='float32', type=core.VarDesc.VarType.DENSE_TENSOR
                 )
                 var_dict[name].append(v)
                 if if_return_inputs_grad_dict:
@@ -1360,87 +1395,87 @@ class OpTest(unittest.TestCase):
         # get kernel signature
         kernel_sig = self.get_kernel_signature(place)
         ir_program = paddle.static.Program()
-        with paddle.static.program_guard(ir_program):
-            with scope_guard(Scope()):
-                # prepare inps attributes feed
-                (
-                    static_inputs,
-                    attrs,
-                    input_dict,
-                    feed,
-                ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=True)
-                # prepare args
-                args = OpTestUtils.prepare_python_api_arguments(
-                    self.python_api,
-                    static_inputs,
-                    attrs,
-                    kernel_sig,
-                    target_dtype=paddle.pir.core.DataType,
-                )
-                inputs_sig, attrs_sig, outputs_sig = kernel_sig
-                if hasattr(self, "python_out_sig"):
-                    outputs_sig = self.python_out_sig
-                args = OpTestUtils.assumption_assert_and_transform(
-                    args, len(inputs_sig)
-                )
-                ret_tuple = self.python_api(*args)
-                fetch_list = getattr(self, "fetch_list", [])
-                # if the fetch_list is customized by user, we use it directly.
-                # if not, fill the fetch_list by the user configured outputs in test.
-                # filter ret_tuple
-                ret_to_check = []
-                if len(fetch_list) == 0:
-                    if isinstance(ret_tuple, (tuple, list)):
-                        assert len(ret_tuple) == len(outputs_sig)
-                        for var, sig_name in zip(ret_tuple, outputs_sig):
-                            if no_check_set is not None and var in no_check_set:
-                                continue
-                            if not self._need_fetch(sig_name):
-                                continue
-                            if isinstance(var, list):
-                                ret_to_check.append(var)
-                                for v in var:
-                                    fetch_list.append(v)
-                            else:
-                                ret_to_check.append(var)
-                                fetch_list.append(var)
-                    elif isinstance(ret_tuple, paddle.base.libpaddle.pir.Value):
-                        fetch_list.append(ret_tuple)
-                        ret_to_check = ret_tuple
-                    elif ret_tuple is None:
-                        pass
-                    else:
-                        raise ValueError(
-                            "output of python api should be Value or list of Value or tuple of Value"
+        with (
+            paddle.static.program_guard(ir_program),
+            scope_guard(Scope()),
+        ):
+            # prepare inps attributes feed
+            (
+                static_inputs,
+                attrs,
+                input_dict,
+                feed,
+            ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=True)
+            # prepare args
+            args = OpTestUtils.prepare_python_api_arguments(
+                self.python_api,
+                static_inputs,
+                attrs,
+                kernel_sig,
+                target_dtype=paddle.pir.core.DataType,
+            )
+            inputs_sig, attrs_sig, outputs_sig = kernel_sig
+            if hasattr(self, "python_out_sig"):
+                outputs_sig = self.python_out_sig
+            args = OpTestUtils.assumption_assert_and_transform(
+                args, len(inputs_sig)
+            )
+            ret_tuple = self.python_api(*args)
+            fetch_list = getattr(self, "fetch_list", [])
+            # if the fetch_list is customized by user, we use it directly.
+            # if not, fill the fetch_list by the user configured outputs in test.
+            # filter ret_tuple
+            ret_to_check = []
+            if len(fetch_list) == 0:
+                if isinstance(ret_tuple, (tuple, list)):
+                    assert len(ret_tuple) == len(outputs_sig)
+                    for var, sig_name in zip(ret_tuple, outputs_sig):
+                        if no_check_set is not None and var in no_check_set:
+                            continue
+                        if not self._need_fetch(sig_name):
+                            continue
+                        if isinstance(var, list):
+                            ret_to_check.append(var)
+                            for v in var:
+                                fetch_list.append(v)
+                        else:
+                            ret_to_check.append(var)
+                            fetch_list.append(var)
+                elif isinstance(ret_tuple, paddle.base.libpaddle.pir.Value):
+                    fetch_list.append(ret_tuple)
+                    ret_to_check = ret_tuple
+                elif ret_tuple is None:
+                    pass
+                else:
+                    raise ValueError(
+                        "output of python api should be Value or list of Value or tuple of Value"
+                    )
+
+            # executor run
+            executor = Executor(place)
+            outs = executor.run(ir_program, feed=feed, fetch_list=[fetch_list])
+            outputs_sig = [
+                sig_name
+                for sig_name in outputs_sig
+                if self._need_fetch(sig_name)
+            ]
+
+            if paddle.utils.is_sequence(
+                ret_to_check
+            ) and paddle.utils.is_sequence(outs):
+                outs = paddle.utils.pack_sequence_as(ret_to_check, outs)
+
+            result = construct_output_dict_by_kernel_sig(outs, outputs_sig)
+            if hasattr(self, "python_out_sig_sub_name"):
+                for key in self.python_out_sig_sub_name.keys():
+                    result[key][0] = {
+                        a: [b]
+                        for a, b in zip(
+                            self.python_out_sig_sub_name[key],
+                            result[key][0],
                         )
-
-                # executor run
-                executor = Executor(place)
-                outs = executor.run(
-                    ir_program, feed=feed, fetch_list=[fetch_list]
-                )
-                outputs_sig = [
-                    sig_name
-                    for sig_name in outputs_sig
-                    if self._need_fetch(sig_name)
-                ]
-
-                if paddle.utils.is_sequence(
-                    ret_to_check
-                ) and paddle.utils.is_sequence(outs):
-                    outs = paddle.utils.pack_sequence_as(ret_to_check, outs)
-
-                result = construct_output_dict_by_kernel_sig(outs, outputs_sig)
-                if hasattr(self, "python_out_sig_sub_name"):
-                    for key in self.python_out_sig_sub_name.keys():
-                        result[key][0] = {
-                            a: [b]
-                            for a, b in zip(
-                                self.python_out_sig_sub_name[key],
-                                result[key][0],
-                            )
-                        }
-                return result
+                    }
+            return result
 
     def _check_ir_output(self, place, program, feed_map, fetch_list, outs):
         if os.getenv("FLAGS_PIR_OPTEST") is None:
@@ -1635,8 +1670,11 @@ class OpTest(unittest.TestCase):
                                     )
                                 )
                                 expect_shape = outs[i].shape
+                                if np.issubdtype(outs[i].dtype, np.integer):
+                                    expect_data = outs[i].flatten().tolist()
+                                else:
+                                    expect_data = []
                                 i += 1
-                                expect_data = []
                                 if not shape_or_data.is_equal(
                                     expect_shape, expect_data
                                 ):
@@ -1648,12 +1686,13 @@ class OpTest(unittest.TestCase):
             pass
 
     def _infer_and_compare_symbol(self, place):
-        """Don't caculate the program, only infer the shape of var"""
+        """Don't calculate the program, only infer the shape of var"""
 
         kernel_sig = self.get_kernel_signature(place)
         program = paddle.static.Program()
         with paddle.static.program_guard(program):
-            with scope_guard(Scope()):
+            scope = Scope()
+            with scope_guard(scope):
                 # prepare inps attributes feed
                 (
                     static_inputs,
@@ -1708,8 +1747,22 @@ class OpTest(unittest.TestCase):
                 # executor run
                 executor = Executor(place)
                 outs = executor.run(program, feed=feed, fetch_list=[fetch_list])
+                # get fetch program
+                fetch_list = executor._check_fetch_list([fetch_list])
+                fetch_program, _, _ = (
+                    executor._executor_cache.get_pir_program_and_executor(
+                        program=program,
+                        feed=feed,
+                        fetch_list=fetch_list,
+                        feed_var_name='feed',
+                        fetch_var_name='fetch',
+                        place=place,
+                        scope=scope,
+                        plan=None,
+                    )
+                )
 
-                self._compare_symbol(program, outs)
+                self._compare_symbol(fetch_program, outs)
 
     def _compare_expect_and_actual_outputs(
         self, place, fetch_list, expect_outs, actual_outs, inplace_atol=None
@@ -2064,8 +2117,13 @@ class OpTest(unittest.TestCase):
         if getattr(self, "no_need_check_inplace", False):
             return
 
-        if os.getenv("FLAGS_enable_pir_in_executor") or os.getenv(
-            "FLAGS_enable_pir_api"
+        if (
+            os.getenv("FLAGS_enable_pir_in_executor")
+            or os.getenv("FLAGS_enable_pir_api")
+            or get_flags("FLAGS_enable_pir_in_executor")[
+                "FLAGS_enable_pir_in_executor"
+            ]
+            or get_flags("FLAGS_enable_pir_api")["FLAGS_enable_pir_api"]
         ):
             return
 
@@ -2261,10 +2319,6 @@ class OpTest(unittest.TestCase):
                     ),
                 )
 
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                raise NotImplementedError("base class, not implement!")
-
             def compare_single_output_with_expect(self, name, expect):
                 actual, actual_np = self.find_actual_value(name)
                 # expect_np = expect[0] if isinstance(expect, tuple) else expect
@@ -2281,8 +2335,6 @@ class OpTest(unittest.TestCase):
                 )
                 # modify there for fp32 check
                 self._compare_numpy(name, actual_np, expect_np)
-                if isinstance(expect, (tuple, list)):
-                    self._compare_list(name, actual, expect)
 
             def compare_outputs_with_expects(self):
                 for out_name, out_dup in Operator.get_op_outputs(self.op_type):
@@ -2367,14 +2419,6 @@ class OpTest(unittest.TestCase):
                     actual_np = convert_uint16_to_float(actual_np)
                     atol = max(atol, 0.03)
                 return actual_np, expect_np
-
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                self.op_test.assertListEqual(
-                    actual.recursive_sequence_lengths(),
-                    expect[1],
-                    "Output (" + name + ") has different lod at " + str(place),
-                )
 
         class DygraphChecker(Checker):
             def init(self):
@@ -2461,23 +2505,6 @@ class OpTest(unittest.TestCase):
                         imperative_expect.value().get_tensor()
                     )
                     return imperative_expect, imperative_expect_t
-
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                with base.dygraph.base.guard(place=place):
-                    self.op_test.assertListEqual(
-                        actual.value()
-                        .get_tensor()
-                        .recursive_sequence_lengths(),
-                        expect[1],
-                        "Operator ("
-                        + self.op_type
-                        + ") Output ("
-                        + name
-                        + ") has different lod at "
-                        + str(place)
-                        + " in dygraph mode",
-                    )
 
             def _is_skip_name(self, name):
                 # if in final state and kernel signature don't have name, then skip it.
@@ -2603,23 +2630,6 @@ class OpTest(unittest.TestCase):
                     expect_t = np.array(expect)
                     return expect, expect_t
 
-            def _compare_list(self, name, actual, expect):
-                """if expect is a tuple, we need to compare list."""
-                with paddle.pir.core.program_guard(place=place):
-                    self.op_test.assertListEqual(
-                        actual.value()
-                        .get_tensor()
-                        .recursive_sequence_lengths(),
-                        expect[1],
-                        "Operator ("
-                        + self.op_type
-                        + ") Output ("
-                        + name
-                        + ") has different lod at "
-                        + str(place)
-                        + " in dygraph mode",
-                    )
-
             def _is_skip_name(self, name):
                 # if in final state and kernel signature don't have name, then skip it.
                 if (
@@ -2640,7 +2650,7 @@ class OpTest(unittest.TestCase):
                 self.checker_name = "symbol infer checker"
 
             def infer_and_compare_symbol(self):
-                """infer symbol and compare it with actualy shape and data"""
+                """infer symbol and compare it with actual shape and data"""
                 self.is_python_api_test = True
                 self.op_test._infer_and_compare_symbol(place)
 
@@ -2670,14 +2680,14 @@ class OpTest(unittest.TestCase):
                     hasattr(self, 'force_fp32_output')
                     and self.force_fp32_output
                 ):
-                    atol = 1e-2 if atol < 1e-2 else atol
+                    atol = max(atol, 0.01)
                 else:
-                    atol = 2 if atol < 2 else atol
+                    atol = max(atol, 2)
             else:
-                atol = 1e-2 if atol < 1e-2 else atol
+                atol = max(atol, 0.01)
 
         if self.is_float16_op():
-            atol = 1e-3 if atol < 1e-3 else atol
+            atol = max(atol, 0.001)
 
         if no_check_set is not None:
             if (
@@ -2724,15 +2734,15 @@ class OpTest(unittest.TestCase):
                     )
                     python_api_info = {
                         "api_name": self.python_api.__name__,
-                        "api_module": inspect.getmodule(
-                            self.python_api
-                        ).__name__
-                        if inspect.getmodule(
-                            self.python_api
-                        ).__name__.startswith("paddle")
-                        else pathlib.Path(
-                            inspect.getmodule(self.python_api).__file__
-                        ).stem,
+                        "api_module": (
+                            inspect.getmodule(self.python_api).__name__
+                            if inspect.getmodule(
+                                self.python_api
+                            ).__name__.startswith("paddle")
+                            else pathlib.Path(
+                                inspect.getmodule(self.python_api).__file__
+                            ).stem
+                        ),
                     }
                     # code gen for auto parallel forward test
                     gen_auto_parallel_test_file(
@@ -2745,9 +2755,9 @@ class OpTest(unittest.TestCase):
                     start_command = get_subprocess_command(
                         runtime_envs["CUDA_VISIBLE_DEVICES"],
                         generated_forward_test_path,
-                        log_dir=self.log_dir
-                        if hasattr(self, "log_dir")
-                        else None,
+                        log_dir=(
+                            self.log_dir if hasattr(self, "log_dir") else None
+                        ),
                     )
                     run_subprocess(start_command, runtime_envs, timeout=120)
 
@@ -2835,17 +2845,17 @@ class OpTest(unittest.TestCase):
                     # The output is dispensable or intermediate.
                     break
                 out = fetch_outs[i]
-                if isinstance(out, core.LoDTensor):
+                if isinstance(out, core.DenseTensor):
                     lod_level_runtime = len(out.lod())
                 else:
-                    if isinstance(out, core.LoDTensorArray):
+                    if isinstance(out, core.DenseTensorArray):
                         warnings.warn(
-                            "The check of LoDTensorArray's lod_level is not implemented now!"
+                            "The check of DenseTensorArray's lod_level is not implemented now!"
                         )
                     lod_level_runtime = 0
 
                 var = self.program.global_block().var(var_name)
-                if var.type == core.VarDesc.VarType.LOD_TENSOR:
+                if var.type == core.VarDesc.VarType.DENSE_TENSOR:
                     lod_level_compile = var.lod_level
                 else:
                     lod_level_compile = 0
@@ -2873,8 +2883,27 @@ class OpTest(unittest.TestCase):
                     return []
             else:
                 return []
-        places = [base.CPUPlace()]
+        places = []
         cpu_only = self._cpu_only if hasattr(self, '_cpu_only') else False
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in [
+                '1',
+                'true',
+                'on',
+            ]
+            or not (
+                core.is_compiled_with_cuda()
+                and core.op_support_gpu(self.op_type)
+                and not cpu_only
+            )
+            or self.op_type
+            in [
+                'gaussian_random',
+                'lrn',
+            ]
+        ):
+            places.append(base.CPUPlace())
         if (
             core.is_compiled_with_cuda()
             and core.op_support_gpu(self.op_type)
@@ -3004,6 +3033,9 @@ class OpTest(unittest.TestCase):
                     ),
                 )
             else:
+                if a.size == 0:
+                    self.assertTrue(b.size == 0)
+                    return
                 # It asserts np.abs(a - b) / np.abs(a) < max_relative_error, in which
                 # max_relative_error is 1e-7. According to the value of np.abs(a), we
                 # change np.abs(a) to achieve dynamic threshold. For example, if
@@ -3054,19 +3086,9 @@ class OpTest(unittest.TestCase):
                 def err_msg():
                     offset = np.argmax(diff_mat > max_relative_error)
                     return (
-                        "Operator %s error, %s variable %s (shape: %s, dtype: %s) max gradient diff %e over limit %e, "
-                        "the first error element is %d, expected %e, but got %e."
-                    ) % (
-                        self.op_type,
-                        msg_prefix,
-                        name,
-                        str(a.shape),
-                        self.dtype,
-                        max_diff,
-                        max_relative_error,
-                        offset,
-                        a.flatten()[offset],
-                        b.flatten()[offset],
+                        f"Operator {self.op_type} error, {msg_prefix} variable {name} (shape: {a.shape!s}, dtype: {self.dtype}) "
+                        f"max gradient diff {max_diff:e} over limit {max_relative_error:e}, "
+                        f"the first error element is {offset}, expected {a.flatten()[offset].item():e}, but got {b.flatten()[offset].item():e}."
                     )
 
                 self.assertLessEqual(max_diff, max_relative_error, err_msg())
@@ -3149,7 +3171,9 @@ class OpTest(unittest.TestCase):
         max_relative_error,
         atol,
     ):
-        if user_defined_grads is None and self.is_compared_with_fp32():
+        if (
+            user_defined_grads is None and self.is_compared_with_fp32()
+        ) or self.is_0size_test():
             self.enable_cal_ref_output()
             numeric_grads = self._get_gradient(
                 inputs_to_check,
@@ -3189,9 +3213,7 @@ class OpTest(unittest.TestCase):
         for grad in analytic_grads:
             if grad.dtype == np.uint16:
                 grad = convert_uint16_to_float(grad)
-                max_relative_error = (
-                    0.01 if max_relative_error < 0.01 else max_relative_error
-                )
+                max_relative_error = max(max_relative_error, 0.01)
             fp32_analytic_grads.append(grad)
         analytic_grads = fp32_analytic_grads
 
@@ -3199,16 +3221,12 @@ class OpTest(unittest.TestCase):
         for grad in numeric_grads:
             if grad.dtype == np.uint16:
                 grad = convert_uint16_to_float(grad)
-                max_relative_error = (
-                    0.01 if max_relative_error < 0.01 else max_relative_error
-                )
+                max_relative_error = max(max_relative_error, 0.01)
             fp32_numeric_grads.append(grad)
         numeric_grads = fp32_numeric_grads
 
         if self.is_float16_op():
-            max_relative_error = (
-                0.001 if max_relative_error < 0.001 else max_relative_error
-            )
+            max_relative_error = max(max_relative_error, 0.001)
         self._assert_is_close(
             numeric_grads,
             analytic_grads,
@@ -3297,14 +3315,14 @@ class OpTest(unittest.TestCase):
                     grad_test_info_path, generated_grad_test_path
                 ):
                     backward_extra_test_info = {}
-                    backward_extra_test_info[
-                        "inputs_to_check"
-                    ] = inputs_to_check
+                    backward_extra_test_info["inputs_to_check"] = (
+                        inputs_to_check
+                    )
                     backward_extra_test_info["output_names"] = output_names
                     backward_extra_test_info["no_grad_set"] = no_grad_set
-                    backward_extra_test_info[
-                        "user_defined_grad_outputs"
-                    ] = user_defined_grad_outputs
+                    backward_extra_test_info["user_defined_grad_outputs"] = (
+                        user_defined_grad_outputs
+                    )
                     dump_test_info(
                         self,
                         place,
@@ -3314,15 +3332,15 @@ class OpTest(unittest.TestCase):
                     )
                     python_api_info = {
                         "api_name": self.python_api.__name__,
-                        "api_module": inspect.getmodule(
-                            self.python_api
-                        ).__name__
-                        if inspect.getmodule(
-                            self.python_api
-                        ).__name__.startswith("paddle")
-                        else pathlib.Path(
-                            inspect.getmodule(self.python_api).__file__
-                        ).stem,
+                        "api_module": (
+                            inspect.getmodule(self.python_api).__name__
+                            if inspect.getmodule(
+                                self.python_api
+                            ).__name__.startswith("paddle")
+                            else pathlib.Path(
+                                inspect.getmodule(self.python_api).__file__
+                            ).stem
+                        ),
                     }
                     # code gen for auto parallel grad test
                     gen_auto_parallel_test_file(
@@ -3342,9 +3360,9 @@ class OpTest(unittest.TestCase):
                     start_command = get_subprocess_command(
                         runtime_envs["CUDA_VISIBLE_DEVICES"],
                         generated_grad_test_path,
-                        log_dir=self.log_dir
-                        if hasattr(self, "log_dir")
-                        else None,
+                        log_dir=(
+                            self.log_dir if hasattr(self, "log_dir") else None
+                        ),
                     )
                     run_subprocess(start_command, runtime_envs, timeout=120)
 
@@ -3356,10 +3374,10 @@ class OpTest(unittest.TestCase):
         if self.is_bfloat16_op():
             if self.is_mkldnn_op():
                 check_dygraph = False
-            atol = 1e-2 if atol < 1e-2 else atol
+            atol = max(atol, 0.01)
 
         if self.is_float16_op():
-            atol = 1e-3 if atol < 1e-3 else atol
+            atol = max(atol, 0.001)
 
         if (
             self.dtype == np.float64
@@ -3375,7 +3393,7 @@ class OpTest(unittest.TestCase):
 
         # oneDNN numeric gradient should use CPU kernel
         use_onednn = False
-        if "use_mkldnn" in op_attrs and op_attrs["use_mkldnn"]:
+        if op_attrs.get("use_mkldnn"):
             op_attrs["use_mkldnn"] = False
             use_onednn = True
         if hasattr(self, "attrs"):
@@ -3419,7 +3437,11 @@ class OpTest(unittest.TestCase):
             )
             tensor_ndim = len(tensor_to_check.shape())
             # for 0D Tensor, it's additional case for OP, so not raise error
-            if tensor_ndim > 0 and tensor_size < 100:
+            if (
+                tensor_ndim > 0
+                and tensor_size < 100
+                and not self.is_0size_test()
+            ):
                 self.__class__.input_shape_is_large = False
 
         if type(output_names) is not list:
@@ -3477,11 +3499,7 @@ class OpTest(unittest.TestCase):
                 for grad in dygraph_dygraph_grad:
                     if grad.dtype == np.uint16:
                         grad = convert_uint16_to_float(grad)
-                        max_relative_error = (
-                            0.03
-                            if max_relative_error < 0.03
-                            else max_relative_error
-                        )
+                        max_relative_error = max(max_relative_error, 0.03)
                     fp32_grads.append(grad)
                 dygraph_dygraph_grad = fp32_grads
                 self._assert_is_close(
@@ -3511,19 +3529,11 @@ class OpTest(unittest.TestCase):
                 for grad in pir_grad:
                     if grad.dtype == np.uint16:
                         grad = convert_uint16_to_float(grad)
-                        max_relative_error = (
-                            0.01
-                            if max_relative_error < 0.01
-                            else max_relative_error
-                        )
+                        max_relative_error = max(max_relative_error, 0.01)
                     fp32_analytic_grads.append(grad)
                 pir_grad = fp32_analytic_grads
                 if self.is_float16_op():
-                    max_relative_error = (
-                        0.01
-                        if max_relative_error < 0.01
-                        else max_relative_error
-                    )
+                    max_relative_error = max(max_relative_error, 0.01)
                 self._assert_is_close(
                     numeric_grads,
                     pir_grad,
@@ -3658,7 +3668,7 @@ class OpTest(unittest.TestCase):
 
     @staticmethod
     def _numpy_to_lod_tensor(np_value, lod, place):
-        tensor = core.LoDTensor()
+        tensor = core.DenseTensor()
         tensor.set(np_value, place)
         if lod is not None:
             tensor.set_recursive_sequence_lengths(lod)
@@ -3942,135 +3952,131 @@ class OpTest(unittest.TestCase):
         # get kernel signature
         kernel_sig = self.get_kernel_signature(place)
         ir_program = paddle.static.Program()
-        with paddle.static.program_guard(ir_program):
-            with scope_guard(Scope()):
-                # prepare inps attributes feed
-                (
-                    static_inputs,
-                    attrs,
-                    inputs_dict,
-                    feed,
-                ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=False)
-                # prepare args
-                args = OpTestUtils.prepare_python_api_arguments(
-                    self.python_api,
-                    static_inputs,
-                    attrs,
-                    kernel_sig,
-                    target_dtype=paddle.pir.core.DataType,
-                )
-                inputs_sig, attrs_sig, outputs_sig = kernel_sig
-                args = OpTestUtils.assumption_assert_and_transform(
-                    args, len(inputs_sig)
-                )
-                grad_outputs = []
-                if user_defined_grad_outputs is not None:
-                    # user_defined_grad_outputs here are numpy arrays
-                    if not isinstance(user_defined_grad_outputs, list):
-                        user_defined_grad_outputs = [user_defined_grad_outputs]
-                    for grad_out_value, idx in zip(
-                        user_defined_grad_outputs,
-                        range(len(user_defined_grad_outputs)),
-                    ):
-                        grad_val = paddle.static.data(
-                            name=f'val_grad_{idx}',
-                            shape=grad_out_value.shape,
-                            dtype=grad_out_value.dtype,
+        with (
+            paddle.static.program_guard(ir_program),
+            scope_guard(Scope()),
+        ):
+            # prepare inps attributes feed
+            (
+                static_inputs,
+                attrs,
+                inputs_dict,
+                feed,
+            ) = self.get_ir_input_attr_dict_and_feed(stop_gradient=False)
+            # prepare args
+            args = OpTestUtils.prepare_python_api_arguments(
+                self.python_api,
+                static_inputs,
+                attrs,
+                kernel_sig,
+                target_dtype=paddle.pir.core.DataType,
+            )
+            inputs_sig, attrs_sig, outputs_sig = kernel_sig
+            args = OpTestUtils.assumption_assert_and_transform(
+                args, len(inputs_sig)
+            )
+            grad_outputs = []
+            if user_defined_grad_outputs is not None:
+                # user_defined_grad_outputs here are numpy arrays
+                if not isinstance(user_defined_grad_outputs, list):
+                    user_defined_grad_outputs = [user_defined_grad_outputs]
+                for grad_out_value, idx in zip(
+                    user_defined_grad_outputs,
+                    range(len(user_defined_grad_outputs)),
+                ):
+                    grad_val = paddle.static.data(
+                        name=f'val_grad_{idx}',
+                        shape=grad_out_value.shape,
+                        dtype=grad_out_value.dtype,
+                    )
+                    grad_outputs.append(grad_val)
+                    feed.update({f'val_grad_{idx}': grad_out_value})
+                # delete the inputs which no need to calculate grad
+                for no_grad_val in no_grad_set:
+                    del static_inputs[no_grad_val]
+
+            ret_tuple = self.python_api(*args)
+            outputs = construct_output_dict_by_kernel_sig(
+                ret_tuple, outputs_sig
+            )
+            if hasattr(self, "python_out_sig_sub_name"):
+                for key in self.python_out_sig_sub_name.keys():
+                    outputs[key][0] = {
+                        a: [b]
+                        for a, b in zip(
+                            self.python_out_sig_sub_name[key],
+                            outputs[key][0],
                         )
-                        grad_outputs.append(grad_val)
-                        feed.update({f'val_grad_{idx}': grad_out_value})
-                    # delete the inputs which no need to calculate grad
-                    for no_grad_val in no_grad_set:
-                        del static_inputs[no_grad_val]
+                    }
+            fetch_list = getattr(self, "fetch_list", [])
 
-                ret_tuple = self.python_api(*args)
-                outputs = construct_output_dict_by_kernel_sig(
-                    ret_tuple, outputs_sig
-                )
-                if hasattr(self, "python_out_sig_sub_name"):
-                    for key in self.python_out_sig_sub_name.keys():
-                        outputs[key][0] = {
-                            a: [b]
-                            for a, b in zip(
-                                self.python_out_sig_sub_name[key],
-                                outputs[key][0],
-                            )
-                        }
-                fetch_list = getattr(self, "fetch_list", [])
-
-                # cast outputs
-                if self.dtype == np.uint16:
-                    cast_inputs = []
-                    for output_name in output_names:
-                        cast_input = self._find_var_in_pir(outputs, output_name)
-                        cast_inputs = cast_inputs + cast_input
-                    cast_outputs = []
-                    for cast_input in cast_inputs:
-                        if isinstance(
-                            cast_input, paddle.base.libpaddle.pir.Value
-                        ):
-                            cast_outputs.append(
-                                paddle.cast(
-                                    cast_input,
-                                    paddle.base.core.DataType.FLOAT32,
-                                )
-                            )
-                        else:
-                            raise TypeError(
-                                f"Unsupported test data type {type(cast_input)}."
-                            )
-
-                    outputs = {}
-                    for i in range(len(output_names)):
-                        outputs.update({output_names[i]: [cast_outputs[i]]})
-
-                outputs_valid = {}
+            # cast outputs
+            if self.dtype == np.uint16:
+                cast_inputs = []
                 for output_name in output_names:
-                    outputs_valid[output_name] = self._find_var_in_pir(
-                        outputs, output_name
-                    )
-                loss_inputs = []
-                for input_name in inputs_to_check:
-                    loss_inputs.append(inputs_dict[input_name])
-
-                if user_defined_grad_outputs is None:
-                    if len(outputs_valid) == 1:
-                        for outputs_valid_key in outputs_valid:
-                            loss = paddle.mean(
-                                outputs_valid[outputs_valid_key][0]
+                    cast_input = self._find_var_in_pir(outputs, output_name)
+                    cast_inputs = cast_inputs + cast_input
+                cast_outputs = []
+                for cast_input in cast_inputs:
+                    if isinstance(cast_input, paddle.base.libpaddle.pir.Value):
+                        cast_outputs.append(
+                            paddle.cast(
+                                cast_input,
+                                paddle.base.core.DataType.FLOAT32,
                             )
+                        )
                     else:
-                        avg_sum = []
-                        for cur_loss in outputs_valid:
-                            cur_avg_loss = paddle.mean(
-                                outputs_valid[cur_loss][0]
-                            )
-                            avg_sum.append(cur_avg_loss)
-                        loss_sum = paddle.add_n(avg_sum)
-                        loss = paddle.scale(
-                            loss_sum, scale=1.0 / float(len(avg_sum))
+                        raise TypeError(
+                            f"Unsupported test data type {type(cast_input)}."
                         )
 
-                    grad_inputs = ir_grad(
-                        outputs=paddle.utils.flatten(loss),
-                        inputs=paddle.utils.flatten(loss_inputs),
-                        grad_outputs=None,
-                    )
-                else:
-                    grad_inputs = ir_grad(
-                        outputs=paddle.utils.flatten(outputs),
-                        inputs=paddle.utils.flatten(static_inputs),
-                        grad_outputs=grad_outputs,
-                    )
-                fetch_list = list(grad_inputs)
-                # executor run
-                executor = paddle.static.Executor(place)
-                outs = executor.run(
-                    ir_program,
-                    feed=feed,
-                    fetch_list=fetch_list,
+                outputs = {}
+                for i in range(len(output_names)):
+                    outputs.update({output_names[i]: [cast_outputs[i]]})
+
+            outputs_valid = {}
+            for output_name in output_names:
+                outputs_valid[output_name] = self._find_var_in_pir(
+                    outputs, output_name
                 )
-                return outs
+            loss_inputs = []
+            for input_name in inputs_to_check:
+                loss_inputs.append(inputs_dict[input_name])
+
+            if user_defined_grad_outputs is None:
+                if len(outputs_valid) == 1:
+                    for outputs_valid_key in outputs_valid:
+                        loss = paddle.mean(outputs_valid[outputs_valid_key][0])
+                else:
+                    avg_sum = []
+                    for cur_loss in outputs_valid:
+                        cur_avg_loss = paddle.mean(outputs_valid[cur_loss][0])
+                        avg_sum.append(cur_avg_loss)
+                    loss_sum = paddle.add_n(avg_sum)
+                    loss = paddle.scale(
+                        loss_sum, scale=1.0 / float(len(avg_sum))
+                    )
+
+                grad_inputs = ir_grad(
+                    outputs=paddle.utils.flatten(loss),
+                    inputs=paddle.utils.flatten(loss_inputs),
+                    grad_outputs=None,
+                )
+            else:
+                grad_inputs = ir_grad(
+                    outputs=paddle.utils.flatten(outputs),
+                    inputs=paddle.utils.flatten(static_inputs),
+                    grad_outputs=grad_outputs,
+                )
+            fetch_list = list(grad_inputs)
+            # executor run
+            executor = paddle.static.Executor(place)
+            outs = executor.run(
+                ir_program,
+                feed=feed,
+                fetch_list=fetch_list,
+            )
+            return outs
 
 
 class OpTestTool:

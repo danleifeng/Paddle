@@ -38,13 +38,16 @@ using cinn::common::float16;
 const char *kCKeywordRestrict = "__restrict__";
 
 void CodeGenC::Compile(const ir::Module &module, const Outputs &outputs) {
-  ir::ir_utils::IrVerify(Expr(module));
+  ir::ir_utils::IrVerify(module.As<ir::_Module_>());
 
   if (!outputs.c_header_name.empty()) {
     auto source = Compile(module, OutputKind::CHeader);
     str_ = "";
     std::ofstream file(outputs.c_header_name);
-    CHECK(file.is_open()) << "failed to open file " << outputs.c_header_name;
+    PADDLE_ENFORCE_EQ(file.is_open(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "failed to open file %s", outputs.c_header_name));
     file << source;
     file.close();
     LOG(WARNING) << "Output C header to file " << outputs.c_header_name;
@@ -54,7 +57,10 @@ void CodeGenC::Compile(const ir::Module &module, const Outputs &outputs) {
     auto source = Compile(module, OutputKind::CImpl);
     str_ = "";
     std::ofstream file(outputs.c_source_name);
-    CHECK(file.is_open()) << "failed to open file " << outputs.c_source_name;
+    PADDLE_ENFORCE_EQ(file.is_open(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "failed to open file %s", outputs.c_source_name));
     file << source;
     file.close();
     LOG(WARNING) << "Output C source to file " << outputs.c_source_name;
@@ -76,14 +82,17 @@ std::string CodeGenC::Compile(const ir::Module &module,
       Compile(func);
     }
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented("Not supported OutputKind"));
+    PADDLE_THROW(::common::errors::Unimplemented("Not supported OutputKind"));
   }
   return str_;
 }
 
 // TODO(LiuYang): Here the Ret type seems unuseful
 void CodeGenC::Compile(const ir::LoweredFunc &function) {
-  CHECK(function.defined());
+  PADDLE_ENFORCE_EQ(
+      function.defined(),
+      true,
+      ::common::errors::InvalidArgument("The function is not defined."));
   IrPrinter::Visit(function);
   str_ += "\n\n";
 }
@@ -116,7 +125,10 @@ std::string CodeGenC::GetTypeName(Type type) {
 
   // customized_type
   if (type.is_customized_type()) {
-    CHECK(!type.customized_type().empty()) << "customized_type can't be empty.";
+    PADDLE_ENFORCE_EQ(type.customized_type().empty(),
+                      false,
+                      ::common::errors::InvalidArgument(
+                          "customized_type is empty. It can't be empty."));
     auto customized_name = type.customized_type();
     // get name of a cuda built-in vector type, it is started with a
     // 'CudaVectorType::' prefix
@@ -158,7 +170,7 @@ void CodeGenC::Visit(const ir::Mul *op) { IrPrinter::Visit(op); }
 void CodeGenC::Visit(const ir::Div *op) { IrPrinter::Visit(op); }
 void CodeGenC::Visit(const ir::Mod *op) {
   auto copied = op->b();
-  optim::Simplify(&copied);
+  copied = optim::ArithSimplify(copied);
   if (copied.is_constant()) {
     int temp = static_cast<int>(copied.get_constant());
     if ((temp & (temp - 1)) == 0) {
@@ -205,10 +217,10 @@ void CodeGenC::Visit(const ir::For *op) {
     Expr num_task_var = Var("num_task");
     IrPrinter::Visit((op->extent + num_task_var - 1) / num_task_var);
     str_ += ";\n";
-    PADDLE_ENFORCE_EQ(
-        min.as_int32(),
-        0,
-        phi::errors::InvalidArgument("The min of the for loop should be 0"));
+    PADDLE_ENFORCE_EQ(min.as_int32(),
+                      0,
+                      ::common::errors::InvalidArgument(
+                          "The min of the for loop should be 0"));
     auto task_id = Var("task_id");
     auto n_per_task = Var("n_per_task");
     min = task_id * n_per_task;
@@ -258,6 +270,77 @@ void CodeGenC::Visit(const ir::For *op) {
     str_ += "}";
   }
 }
+
+void CodeGenC::VisitStmt(const ir::stmt::For &stmt) {
+  Expr extent = stmt->extent();
+  Expr min = stmt->min();
+  int num_task = 1;
+  if (stmt->is_parallel()) {
+    str_ += "int num_task = max_concurrency();\n";
+    DoIndent();
+    str_ += "omp_set_num_threads(num_task);\n";
+    DoIndent();
+    str_ += "auto flambda = [=](int task_id, int num_task) -> int {\n";
+    IncIndent();
+    DoIndent();
+    str_ += "int n_per_task = ";
+    Expr num_task_var = Var("num_task");
+    IrPrinter::Visit((stmt->extent() + num_task_var - 1) / num_task_var);
+    str_ += ";\n";
+    PADDLE_ENFORCE_EQ(min.as_int32(),
+                      0,
+                      ::common::errors::InvalidArgument(
+                          "The min of the for loop should be 0"));
+    auto task_id = Var("task_id");
+    auto n_per_task = Var("n_per_task");
+    min = task_id * n_per_task;
+    extent = (task_id + 1) * n_per_task;
+    DoIndent();
+  }
+  str_ += "for (";
+  str_ += GetTypeRepr(Int(32));
+  str_ += " ";
+  str_ += stmt->loop_var()->name;
+  str_ += " = ";
+  IrPrinter::Visit(min);
+  str_ += "; ";
+  str_ += stmt->loop_var()->name;
+  str_ += " < ";
+  IrPrinter::Visit(stmt->extent());
+  if (stmt->is_parallel()) {
+    str_ += " && ";
+    str_ += stmt->loop_var()->name;
+    str_ += " < ";
+    IrPrinter::Visit(extent);
+  }
+  str_ += "; ";
+
+  str_ += stmt->loop_var()->name;
+  str_ += " += 1";
+  str_ += ") ";
+
+  VisitBlock(stmt->body());
+  if (stmt->is_parallel()) {
+    str_ += "\n";
+    DoIndent();
+    str_ += "return 0;\n";
+    DecIndent();
+    DoIndent();
+    str_ += "};\n";
+    str_ += "#pragma omp parallel num_threads(num_task)\n";
+    DoIndent();
+    str_ += "{\n";
+    IncIndent();
+    DoIndent();
+    str_ += "int task_id = omp_get_thread_num();\n";
+    DoIndent();
+    str_ += "flambda(task_id, num_task);\n";
+    DecIndent();
+    DoIndent();
+    str_ += "}";
+  }
+}
+
 void CodeGenC::Visit(const ir::PolyFor *op) {
   str_ += "for (";
   str_ += GetTypeRepr(Int(32));
@@ -298,6 +381,20 @@ void CodeGenC::Visit(const ir::IfThenElse *op) {
     IrPrinter::Visit(op->false_case);
   }
 }
+
+void CodeGenC::VisitStmt(const ir::stmt::IfThenElse &stmt) {
+  str_ += "if (";
+  IrPrinter::Visit(stmt->condition());
+  str_ += ") ";
+
+  VisitBlock(stmt->true_case());
+
+  if (!stmt->false_case()->stmts().empty()) {
+    str_ += " else ";
+    VisitBlock(stmt->false_case());
+  }
+}
+
 void CodeGenC::Visit(const ir::Block *op) {
   str_ += "{\n";
 
@@ -320,6 +417,29 @@ void CodeGenC::Visit(const ir::Block *op) {
   DoIndent();
   str_ += "}";
 }
+void CodeGenC::VisitBlock(const ir::stmt::BlockRef &stmt) {
+  str_ += "{\n";
+
+  IncIndent();
+
+  // Note: size_t (0 - 1) = 18446744073709551615
+  if (stmt->stmts().size() >= 1) {
+    for (int i = 0; i < stmt->stmts().size() - 1; i++) {
+      DoIndent();
+      IrPrinter::VisitStmt(stmt->stmts()[i]);
+      str_ += ";\n";
+    }
+    DoIndent();
+    IrPrinter::VisitStmt(stmt->stmts().back());
+    str_ += ";";
+  }
+
+  DecIndent();
+  str_ += "\n";
+  DoIndent();
+  str_ += "}";
+}
+
 void CodeGenC::Visit(const ir::Call *op) {
   if (op->name == runtime::intrinsic::buffer_malloc) {
     PrintCall_buffer_malloc(op);
@@ -343,7 +463,12 @@ void CodeGenC::Visit(const ir::Call *op) {
       emitter.BindCodeGen(this);
       emitter.Emit(op);
     } else {
-      CHECK(!op->read_args.empty() || !op->write_args.empty());
+      if (op->read_args.empty())
+        PADDLE_ENFORCE_EQ(
+            op->read_args.empty(),
+            false,
+            ::common::errors::InvalidArgument(
+                "Either read_args or write_args must not be empty."));
       str_ += op->name;
       str_ += "(";
       PrintCallArgs(op);
@@ -376,7 +501,7 @@ void CodeGenC::PrintCall_buffer_malloc(const ir::Call *op) {
   PADDLE_ENFORCE_EQ(
       op->read_args.size(),
       2UL,
-      phi::errors::InvalidArgument("The number of read_args should be 2"));
+      ::common::errors::InvalidArgument("The number of read_args should be 2"));
   str_ += op->name;
   str_ += "(";
   PrintCastExpr("void*", op->read_args[0]);
@@ -389,7 +514,7 @@ void CodeGenC::PrintCall_cinn_pod_value_to_(const ir::Call *op) {
   PADDLE_ENFORCE_EQ(
       op->read_args.size(),
       1UL,
-      phi::errors::InvalidArgument("The number of read_args should be 1"));
+      ::common::errors::InvalidArgument("The number of read_args should be 1"));
   str_ += op->name;
   str_ += "(";
   str_ += "&(";
@@ -402,11 +527,17 @@ void CodeGenC::PrintCall_get_address(const ir::Call *op) {
   PADDLE_ENFORCE_EQ(
       op->read_args.size(),
       1UL,
-      phi::errors::InvalidArgument("The number of read_args should be 1"));
-  CHECK(op->write_args.empty());
+      ::common::errors::InvalidArgument("The number of read_args should be 1"));
+  PADDLE_ENFORCE_EQ(op->write_args.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "write_args is not empty. It must be empty."));
   auto *read_var = op->read_args.front().as_var();
   auto *read_buf = op->read_args.front().as_buffer();
-  CHECK(read_var || read_buf) << "Only Var or Buffer can get address";
+  if (!read_var)
+    PADDLE_ENFORCE_NOT_NULL(read_buf,
+                            ::common::errors::InvalidArgument(
+                                "Only Var or Buffer can get address"));
 
   if (read_var) {
     if (read_var->type().lanes() <= 1) str_ += "&";
@@ -420,18 +551,28 @@ void CodeGenC::PrintCall_get_address(const ir::Call *op) {
 }
 
 void CodeGenC::PrintCall_pod_values_to_array(const ir::Call *op) {
-  CHECK(!op->read_args.empty());
-  PADDLE_ENFORCE_EQ(
-      op->write_args.size(),
-      1UL,
-      phi::errors::InvalidArgument("The number of write_args should be 1"));
+  PADDLE_ENFORCE_EQ(op->read_args.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "The read_args is empty. It should not be empty."));
+  PADDLE_ENFORCE_EQ(op->write_args.size(),
+                    1UL,
+                    ::common::errors::InvalidArgument(
+                        "The number of write_args should be 1"));
   auto output_var = op->write_args.front().as_var_ref();
-  CHECK(output_var.defined());
+  PADDLE_ENFORCE_EQ(
+      output_var.defined(),
+      true,
+      ::common::errors::InvalidArgument(
+          "The variable 'output_var' is not be defined. It must be defined."));
 
   std::vector<std::string> arg_names;
   for (auto &arg : op->read_args) {
     auto arg_var = arg.as_var();
-    CHECK(arg_var);
+    PADDLE_ENFORCE_NOT_NULL(
+        arg_var,
+        ::common::errors::InvalidArgument(
+            "The 'arg_var' is an invalid argument. It must be true."));
     arg_names.push_back(arg_var->name);
   }
 
@@ -458,7 +599,11 @@ void CodeGenC::Visit(const ir::Load *op) {
 
   Expr dense_strided_ramp = detail::StridedRampBase(offset, 1);
   if (dense_strided_ramp.defined()) {  // Loading a continuous Ramp address.
-    CHECK(op->type().is_vector());
+    PADDLE_ENFORCE_EQ(
+        op->type().is_vector(),
+        true,
+        ::common::errors::InvalidArgument(
+            "The operation type is not a vector. It must be a vector."));
     PrintStackVecType(op->type().ElementOf(), offset.type().lanes());
     str_ += "::";
     str_ += "Load(";
@@ -468,7 +613,11 @@ void CodeGenC::Visit(const ir::Load *op) {
     str_ += ")";
   } else if (offset.type().is_vector()) {
     // gather
-    CHECK(op->type().is_vector());
+    PADDLE_ENFORCE_EQ(
+        op->type().is_vector(),
+        true,
+        ::common::errors::InvalidArgument(
+            "The operation type is not a vector. It must be a vector."));
     PrintStackVecType(op->type().ElementOf(), offset.type().lanes());
     str_ += "::Load(";
     str_ += op->tensor.As<ir::_Tensor_>()->name;
@@ -486,8 +635,36 @@ void CodeGenC::Visit(const ir::Load *op) {
   }
 }
 
+void CodeGenC::VisitStmt(const ir::stmt::Store &stmt) {
+  PADDLE_ENFORCE_EQ(
+      stmt->is_addr_tensor(),
+      true,
+      ::common::errors::InvalidArgument(
+          "The operation type is invalid. It must be an address tensor."));
+  ir::Expr offset = [&] {
+    if (store_stmt_to_offset_.count(stmt) == 0) {
+      store_stmt_to_offset_[stmt] = stmt->index();
+    }
+    return store_stmt_to_offset_.at(stmt);
+  }();
+  auto *tensor = stmt->tensor().As<ir::_Tensor_>();
+  PADDLE_ENFORCE_NOT_NULL(tensor,
+                          ::common::errors::InvalidArgument(
+                              "The tensor is null. It must not be null."));
+  str_ += tensor->name;
+  str_ += "[";
+  IrPrinter::Visit(offset);
+  str_ += "]";
+  str_ += " = ";
+  IrPrinter::Visit(stmt->value());
+}
+
 void CodeGenC::Visit(const ir::Store *op) {
-  CHECK(op->is_addr_tensor());
+  PADDLE_ENFORCE_EQ(
+      op->is_addr_tensor(),
+      true,
+      ::common::errors::InvalidArgument(
+          "The operation type is invalid. It must be an address tensor."));
   ir::Expr offset = [&] {
     if (store_to_offset_.count(op) == 0) {
       store_to_offset_[op] = op->index();
@@ -495,7 +672,9 @@ void CodeGenC::Visit(const ir::Store *op) {
     return store_to_offset_.at(op);
   }();
   auto *tensor = op->tensor.As<ir::_Tensor_>();
-  CHECK(tensor);
+  PADDLE_ENFORCE_NOT_NULL(tensor,
+                          ::common::errors::InvalidArgument(
+                              "The tensor is null. It must not be null."));
   str_ += tensor->name;
   str_ += "[";
   IrPrinter::Visit(offset);
@@ -513,6 +692,16 @@ void CodeGenC::Visit(const ir::Alloc *op) {
   str_ += ")";
 }
 
+void CodeGenC::VisitStmt(const ir::stmt::Alloc &stmt) {
+  str_ += runtime::intrinsic::buffer_malloc;
+  str_ += "(";
+  str_ += "(void*)(0), ";
+
+  auto *buffer = stmt->destination().As<ir::_Buffer_>();
+  str_ += buffer->name;
+  str_ += ")";
+}
+
 void CodeGenC::Visit(const ir::Free *op) {
   str_ += runtime::intrinsic::buffer_free;
   str_ += "(";
@@ -523,11 +712,24 @@ void CodeGenC::Visit(const ir::Free *op) {
   str_ += ")";
 }
 
+void CodeGenC::VisitStmt(const ir::stmt::Free &stmt) {
+  str_ += runtime::intrinsic::buffer_free;
+  str_ += "(";
+  str_ += "(void*)(0), ";
+
+  auto *buffer = stmt->destination().As<ir::_Buffer_>();
+  str_ += buffer->name;
+  str_ += ")";
+}
+
 void CodeGenC::Visit(const ir::_Buffer_ *op) { str_ += op->name; }
 void CodeGenC::Visit(const ir::_Tensor_ *op) { str_ += op->buffer->name; }
 void CodeGenC::Visit(const ir::Let *op) {
   bool is_vec = false;
-  CHECK(op->type().valid());
+  PADDLE_ENFORCE_EQ(op->type().valid(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The operation type is invalid. It must be valid."));
   if (op->body.defined() && op->body.As<ir::Broadcast>()) {
     // broadcast's type is hard to print, so use c++11 auto instead.
     str_ += "auto";
@@ -552,8 +754,38 @@ void CodeGenC::Visit(const ir::Let *op) {
   }
 }
 
+void CodeGenC::VisitStmt(const ir::stmt::Let &stmt) {
+  bool is_vec = false;
+  PADDLE_ENFORCE_EQ(stmt->type().valid(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The operation type is invalid. It must be valid."));
+  if (stmt->body().defined() && stmt->body().As<ir::Broadcast>()) {
+    // broadcast's type is hard to decide, so use c++11 auto instead.
+    str_ += "auto";
+    is_vec = true;
+  } else {
+    str_ += GetTypeRepr(stmt->type());
+  }
+
+  str_ += " ";
+  IrPrinter::Visit(stmt->symbol());
+
+  // native C array.
+  if (stmt->type().lanes() > 1 && !is_vec) {
+    str_ += "[";
+    str_ += std::to_string(stmt->type().lanes());
+    str_ += "]";
+  }
+
+  if (stmt->body().defined()) {
+    str_ += " = ";
+    IrPrinter::Visit(stmt->body());
+  }
+}
+
 void CodeGenC::Visit(const ir::Reduce *op) {
-  PADDLE_THROW(phi::errors::InvalidArgument(
+  PADDLE_THROW(::common::errors::InvalidArgument(
       "Reduce IR is just for internal representation, should not be "
       "used for CodeGen."));
 }
@@ -630,7 +862,7 @@ void CodeGenC::Visit(const ir::_LoweredFunc_ *op) {
   PADDLE_ENFORCE_EQ(
       op->alloc_output_buffer_exprs.size(),
       op->dealloc_output_buffer_exprs.size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "The count of allocation and deallocation expressions is not "
           "match"));
 
@@ -659,7 +891,7 @@ void CodeGenC::Visit(const ir::_LoweredFunc_ *op) {
 
   Expr func_body = ir::Block::Make(new_body);
 
-  optim::SimplifyBlocks(&func_body);
+  optim::SimplifyUnitBlock(&func_body);
 
   IrPrinter::Visit(func_body);
 }
@@ -762,8 +994,8 @@ void CodeGenC::PrintRuntimeType(const cinn_type_t &type) {
   } else if (type == cinn_float64_t()) {
     str_ += "cinn_float64_t()";
   } else {
-    PADDLE_THROW(
-        phi::errors::InvalidArgument("Unknown type is not supported to print"));
+    PADDLE_THROW(::common::errors::InvalidArgument(
+        "Unknown type is not supported to print"));
   }
 }
 
@@ -778,6 +1010,9 @@ void CodeGenC::PrintStackVecType(Type type, int lanes) {
 void CodeGenC::Visit(const ir::PrimitiveNode *op) { CINN_NOT_IMPLEMENTED }
 void CodeGenC::Visit(const ir::_BufferRange_ *op) { CINN_NOT_IMPLEMENTED }
 void CodeGenC::Visit(const ir::ScheduleBlock *op) { CINN_NOT_IMPLEMENTED }
+void CodeGenC::VisitStmt(const ir::stmt::Schedule &stmt) {
+  CINN_NOT_IMPLEMENTED
+}
 void CodeGenC::Visit(const ir::ScheduleBlockRealize *op) {
   CINN_NOT_IMPLEMENTED
 }
@@ -840,7 +1075,7 @@ void CodeGenC::Visit(const ir::intrinsics::PodValueToX *op) {
   } else {
     std::stringstream ss;
     ss << "Not supported type: " << to_type;
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
 
   str_ += "(";
@@ -850,7 +1085,10 @@ void CodeGenC::Visit(const ir::intrinsics::PodValueToX *op) {
 
 void CodeGenC::Visit(const ir::intrinsics::BufferCreate *op) {
   const ir::_Buffer_ *buffer_arg = op->buffer.as_buffer();
-  CHECK(buffer_arg);
+  PADDLE_ENFORCE_NOT_NULL(
+      buffer_arg,
+      ::common::errors::InvalidArgument(
+          "The buffer argument is invalid. It must be true."));
 
   str_ += runtime::intrinsic::buffer_create;
   str_ += "(";
@@ -912,17 +1150,26 @@ void CodeGenC::Visit(const ir::intrinsics::BuiltinIntrin *op) {
 }
 
 std::string ReadWholeFile(const std::string &path) {
-  CHECK(!path.empty());
+  PADDLE_ENFORCE_EQ(path.empty(),
+                    false,
+                    ::common::errors::InvalidArgument(
+                        "The path is empty. It must not be empty."));
   std::ifstream file(path);
-  CHECK(file.is_open()) << "Failed to open file: " << path;
+  PADDLE_ENFORCE_EQ(file.is_open(),
+                    true,
+                    ::common::errors::InvalidArgument("Failed to open file: %s",
+                                                      path.c_str()));
   std::stringstream ss;
   ss << file.rdbuf();
   return ss.str();
 }
 
 void CodeGenC::PrintBuiltinCodes() {
-  CHECK(!FLAGS_cinn_x86_builtin_code_root.empty())
-      << "The flag cinn_x86_builtin_code_root should be set first";
+  PADDLE_ENFORCE_EQ(
+      FLAGS_cinn_x86_builtin_code_root.empty(),
+      false,
+      ::common::errors::InvalidArgument(
+          "The flag cinn_x86_builtin_code_root should be set first"));
 
   const std::string x86_code_file = "_x86_builtin_source.cc";
 

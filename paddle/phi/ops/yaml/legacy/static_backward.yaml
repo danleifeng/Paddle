@@ -112,6 +112,17 @@
     data_type : out_grad
   no_need_buffer : weight
 
+- backward_op : expand_as_grad
+  forward : expand_as (Tensor x, Tensor y, int[] target_shape = {}) -> Tensor(out)
+  args : (Tensor x, Tensor out_grad, int[] target_shape)
+  output : Tensor(x_grad)
+  infer_meta :
+    func : UnchangedInferMeta
+    param : [x]
+  kernel :
+    func : expand_as_grad
+  no_need_buffer : x
+
 - backward_op : exponential__grad
   forward : exponential_ (Tensor x, float lam=1.0f) -> Tensor(out)
   args : (Tensor out_grad)
@@ -131,6 +142,19 @@
     data_type: out_grad
   inplace: (out_grad -> x_grad)
   no_need_buffer: x
+
+- backward_op : flatten_grad
+  forward : flatten(Tensor x, int start_axis, int stop_axis) -> Tensor(out), Tensor(xshape)
+  args : (Tensor xshape, Tensor out_grad)
+  output : Tensor(x_grad)
+  infer_meta :
+    func :  KernelWithXShapeInferMeta
+    param : [xshape]
+  kernel :
+    func : flatten_grad
+    data_type: out_grad
+    layout: out_grad
+  inplace : (out_grad -> x_grad)
 
 - backward_op : frobenius_norm_grad
   forward: frobenius_norm (Tensor x, IntArray axis={0}, bool keepdim=false, bool reduce_all=false, int in_dtype=-1, int out_dtype=-1) -> Tensor(out)
@@ -209,6 +233,17 @@
     data_type : output_grad
   data_transform :
     skip_transform : out_size, size_tensor, scale_tensor
+
+- backward_op : lp_pool2d_grad
+  forward : lp_pool2d(Tensor x, IntArray kernel_size, int[] strides = {1,1}, int[] paddings = {0,0}, bool ceil_mode = false, bool exclusive = true, str data_format = "NCHW", str pooling_type = "", bool global_pooling = false, bool adaptive = false, str padding_algorithm = "EXPLICIT", float norm_type = 0.0f) -> Tensor(out)
+  args : (Tensor x, Tensor out, Tensor out_grad, IntArray kernel_size, int[] strides, int[] paddings, bool ceil_mode, bool exclusive, str data_format, str pooling_type, bool global_pooling, bool adaptive, str padding_algorithm, float norm_type)
+  output : Tensor(x_grad)
+  infer_meta :
+    func : UnchangedInferMeta
+    param: [x]
+  kernel :
+    func : lp_pool2d_grad
+    param : [x, out, out_grad, kernel_size, strides, paddings, ceil_mode, exclusive, data_format, pooling_type, global_pooling, adaptive, padding_algorithm, norm_type]
 
 - backward_op : lrn_grad
   forward: lrn (Tensor x, int n = 5, float k = 2.0, float alpha = 0.0001, float beta = 0.75, str data_format = "AnyLayout") -> Tensor (out), Tensor (mid_out)
@@ -367,6 +402,16 @@
     func : prod_grad
   composite: prod_grad(x, out, out_grad, axis, keepdim, reduce_all, x_grad)
 
+- backward_op : remainder_grad
+  forward : remainder (Tensor x, Tensor y, int axis = -1) -> Tensor(out)
+  args : (Tensor x, Tensor y, Tensor out_grad)
+  output : Tensor(x_grad), Tensor(y_grad)
+  infer_meta :
+    func : GeneralBinaryGradInferMeta
+    param : [x, y]
+  kernel :
+    func : remainder_grad
+
 - backward_op : rnn_grad
   forward : rnn (Tensor x, Tensor[] pre_state, Tensor[] weight_list, Tensor sequence_length, float dropout_prob=0.0, bool is_bidirec=false, int input_size=10, int hidden_size=100, int num_layers=1, str mode="RNN_TANH", int seed=0, bool is_test=false) -> Tensor(out), Tensor(dropout_state_out), Tensor[](state), Tensor(reserve)
   args : (Tensor x, Tensor[] pre_state, Tensor[] weight_list, Tensor sequence_length, Tensor out, Tensor dropout_state_out, Tensor reserve, Tensor out_grad, Tensor[] state_grad, float dropout_prob, bool is_bidirec, int input_size, int hidden_size, int num_layers, str mode, int seed, bool is_test)
@@ -421,6 +466,27 @@
   kernel :
     func : softmax_grad
   composite : softmax_grad(out, out_grad, axis, x_grad)
+
+- backward_op : squeeze_double_grad
+  forward : squeeze_grad(Tensor xshape, Tensor grad_out, IntArray axis) -> Tensor(grad_x)
+  args : (Tensor grad_x_grad, IntArray axis)
+  output : Tensor(grad_out_grad), Tensor(xshape)
+  invoke: squeeze(grad_x_grad, axis)
+  intermediate : xshape
+
+- backward_op : squeeze_grad
+  forward : squeeze(Tensor x, IntArray axis) -> Tensor(out), Tensor(xshape)
+  args : (Tensor xshape, Tensor out_grad, IntArray axis)
+  output : Tensor(x_grad)
+  infer_meta :
+    func : KernelWithXShapeInferMeta
+    param: [xshape, out_grad]
+    spmd_rule : SqueezeGradInferSpmd
+  kernel :
+    func : squeeze_grad
+    data_type : out_grad
+  inplace : (out_grad -> x_grad)
+  backward: squeeze_double_grad
 
 - backward_op : strided_slice_grad
   forward : strided_slice (Tensor x, int[] axes, IntArray starts={}, IntArray ends={}, IntArray strides={}, int[] infer_flags={}, int[] decrease_axis={}) -> Tensor(out)
@@ -485,6 +551,28 @@
       param : [out_grad]
   kernel:
     func : tril_triu_grad
+
+- backward_op : unsqueeze_double_grad
+  forward : unsqueeze_grad(Tensor xshape, Tensor grad_out, IntArray axis) -> Tensor(grad_x)
+  args : (Tensor grad_x_grad, IntArray axis)
+  output : Tensor(grad_out_grad), Tensor(xshape)
+  invoke : unsqueeze(grad_x_grad, axis)
+  intermediate : xshape
+
+- backward_op : unsqueeze_grad
+  forward : unsqueeze(Tensor x, IntArray axis) -> Tensor(out), Tensor(xshape)
+  args : (Tensor xshape, Tensor out_grad, IntArray axis)
+  output : Tensor(x_grad)
+  infer_meta :
+    func : KernelWithXShapeInferMeta
+    param: [xshape, out_grad]
+    spmd_rule : UnsqueezeWithXShapeGradInferSpmd
+  kernel :
+    func : unsqueeze_grad
+    param : [xshape, out_grad]
+    data_type : out_grad
+  inplace : (out_grad -> x_grad)
+  backward : unsqueeze_double_grad
 
 - backward_op: cross_entropy_grad
   forward: cross_entropy (Tensor x, Tensor label, bool soft_label = false, int ignore_index = -100) -> Tensor (out)

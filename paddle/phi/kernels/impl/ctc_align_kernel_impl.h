@@ -69,7 +69,7 @@ void CTCAlignKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         input_dims[0],
         static_cast<int64_t>(input_lod[level].back()),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The first dimension %d of CTCAlign operator Input(Input) should "
             "be equal to "
             "the sum of all sequences' lengths %d.",
@@ -97,7 +97,7 @@ void CTCAlignKernel(const Context& dev_ctx,
     }
 
     // set output lod
-    phi::LoD output_lod;
+    phi::LegacyLoD output_lod;
     output_lod.push_back(output_lod0);
     output->set_lod(output_lod);
     // resize output dims

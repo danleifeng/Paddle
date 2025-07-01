@@ -54,7 +54,7 @@ class ReshapeTransposeMatmulFusePattern : public paddle::drr::DrrPatternBase {
 
     const auto &reshape = pat.Op(paddle::dialect::ReshapeOp::name());
     reshape({&pat.Tensor("reshape_in"), &pat.Tensor("shape")},
-            {&pat.Tensor("reshape_out"), &pat.Tensor("Xshape")});
+            {&pat.Tensor("reshape_out")});
 
     const auto &transpose = pat.Op(paddle::dialect::TransposeOp::name(),
                                    {{"perm", pat.Attr("perm")}});
@@ -170,7 +170,7 @@ class ReshapeTransposeFusedMatmulFusePattern
 
     const auto &reshape = pat.Op(paddle::dialect::ReshapeOp::name());
     reshape({&pat.Tensor("reshape_in"), &pat.Tensor("shape")},
-            {&pat.Tensor("reshape_out"), &pat.Tensor("Xshape")});
+            {&pat.Tensor("reshape_out")});
 
     const auto &transpose = pat.Op(paddle::dialect::TransposeOp::name(),
                                    {{"perm", pat.Attr("perm")}});
@@ -290,7 +290,7 @@ class ReshapeTransposeFusedMatmulFusePattern
 class ReshapeTransposeMatmulFusePass : public pir::PatternRewritePass {
  public:
   ReshapeTransposeMatmulFusePass()
-      : pir::PatternRewritePass("reshape_transpose_matmul_fuse_pass", 3) {}
+      : pir::PatternRewritePass("reshape_transpose_matmul_fuse_pass", 2) {}
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);

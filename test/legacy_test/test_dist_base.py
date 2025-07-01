@@ -15,6 +15,9 @@
 import argparse
 import ast
 import os
+
+os.environ['FLAGS_enable_pir_api'] = '0'
+
 import pickle
 import random
 import socket
@@ -222,7 +225,7 @@ class TestDistRunnerBase:
         )
 
         device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
-        eprint(type(self).__name__, "device_id: %d." % device_id)
+        eprint(type(self).__name__, f"device_id: {device_id}.")
         place = base.CUDAPlace(device_id)
 
         exe = base.Executor(place)
@@ -240,7 +243,7 @@ class TestDistRunnerBase:
             loss = exe.run(main_program, fetch_list=[avg_cost])
             loss = loss[0] if loss else None
             out_losses.append(loss)
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
             if lr_scheduler is not None:
                 lr_scheduler.step()
 
@@ -293,7 +296,7 @@ class TestDistRunnerBase:
         eprint("feed_var_list:", feed_var_list)
 
         if feed_var_list[0].name == 'label':
-            feed_var_list = feed_var_list[::-1]
+            feed_var_list.reverse()
 
         feeder = base.DataFeeder(feed_var_list, place)
         reader_generator = train_reader()
@@ -324,7 +327,7 @@ class TestDistRunnerBase:
                 feed=feeder.feed(get_data()),
             )
             out_losses.append(float(loss))
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
         print_to_err(type(self).__name__, "trainer run finished")
         print_to_err(type(self).__name__, f"dist losses: {out_losses}")
 
@@ -332,6 +335,8 @@ class TestDistRunnerBase:
 
     def run_use_fleet_api_trainer(self, args):
         assert args.update_method == "nccl2" or "bkcl"
+        backend = "bkcl" if args.update_method == "bkcl" else "nccl"
+        paddle.distributed.collective._init_parallel_env(backend)
 
         self.lr = args.lr
 
@@ -391,7 +396,7 @@ class TestDistRunnerBase:
         # tmp add this code to pass python35 gcc8 CI
         # Fixme(gongweibao, wangxi), need fix fleet api program order
         if feed_var_list[0].name == 'label':
-            feed_var_list = feed_var_list[::-1]
+            feed_var_list.reverse()
 
         feeder = base.DataFeeder(feed_var_list, place)
         reader_generator = train_reader()
@@ -416,7 +421,7 @@ class TestDistRunnerBase:
                 feed=feeder.feed(get_data()),
             )
             out_losses.append(float(loss))
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
         print_to_err(type(self).__name__, "trainer run finished")
 
         dump_output(out_losses)
@@ -649,7 +654,7 @@ class TestDistRunnerBase:
                 binary, fetch_list=[avg_cost.name], feed=feeder.feed(get_data())
             )
             out_losses.append(float(loss))
-            print_to_err(type(self).__name__, "run step %d finished" % i)
+            print_to_err(type(self).__name__, f"run step {i} finished")
             if lr_scheduler is not None:
                 lr_scheduler.step()
 
@@ -770,7 +775,7 @@ class TestParallelDyGraphRunnerBase:
                 if step_id % 10 == 0:
                     print_to_err(
                         type(self).__name__,
-                        "loss at step %d: %f" % (step_id, loss.numpy()),
+                        f"loss at step {step_id}: {loss.numpy().item():f}",
                     )
                 out_losses.append(loss.numpy())
 
@@ -1112,6 +1117,7 @@ class TestDistBase(unittest.TestCase):
         devices="1",
     ):
         cmd = self._python_interp
+        envs['PADDLE_TRAINER_ENDPOINTS'] = self._ps_endpoints
 
         if os.getenv('WITH_COVERAGE', 'OFF') == 'ON':
             envs['COVERAGE_FILE'] = os.getenv('COVERAGE_FILE', '')
@@ -1122,9 +1128,9 @@ class TestDistBase(unittest.TestCase):
         )
 
         if batch_size != DEFAULT_BATCH_SIZE:
-            cmd += " --batch_size %d" % batch_size
+            cmd += f" --batch_size {batch_size}"
         if batch_merge_repeat > 1:
-            cmd += " --batch_merge_repeat %d" % batch_merge_repeat
+            cmd += f" --batch_merge_repeat {batch_merge_repeat}"
         if self._nccl2_reduce_layer:
             cmd += " --nccl2_reduce_layer_local_run 1"
 
@@ -1669,7 +1675,6 @@ class TestDistBase(unittest.TestCase):
             "NCCL_P2P_DISABLE": "1",
             "NCCL_SHM_DISABLE": "1",
             "FLAGS_new_executor_static_build": "1",
-            "FLAGS_dynamic_static_unified_comm": "0",
         }
 
         if check_error_log:

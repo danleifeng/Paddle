@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
 
 import paddle
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 def call_bce_layer(
@@ -143,7 +143,13 @@ class TestBCEWithLogitsLoss(unittest.TestCase):
     def test_BCEWithLogitsLoss(self):
         logit_np = np.random.uniform(0.1, 0.8, size=(20, 30)).astype(np.float64)
         label_np = np.random.randint(0, 2, size=(20, 30)).astype(np.float64)
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if base.core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         reductions = ['sum', 'mean', 'none']
@@ -166,7 +172,6 @@ class TestBCEWithLogitsLoss(unittest.TestCase):
                 np.testing.assert_allclose(dy_result, expected, rtol=1e-05)
                 np.testing.assert_allclose(dy_functional, expected, rtol=1e-05)
 
-                @test_with_pir_api
                 def test_static_or_pir_mode():
                     static_result = test_static(
                         place, logit_np, label_np, reduction=reduction
@@ -229,7 +234,6 @@ class TestBCEWithLogitsLoss(unittest.TestCase):
             np.testing.assert_allclose(dy_result, expected, rtol=1e-05)
             np.testing.assert_allclose(dy_functional, expected, rtol=1e-05)
 
-            @test_with_pir_api
             def test_static_or_pir_mode():
                 static_result = test_static(
                     place,
@@ -293,7 +297,6 @@ class TestBCEWithLogitsLoss(unittest.TestCase):
         np.testing.assert_allclose(dy_result, expected, rtol=1e-05)
         np.testing.assert_allclose(dy_functional, expected, rtol=1e-05)
 
-        @test_with_pir_api
         def test_static_or_pir_mode():
             static_result = test_static(
                 place, logit_np, label_np, weight_np, reduction, pos_weight_np
@@ -322,7 +325,7 @@ class TestBCEWithLogitsLoss(unittest.TestCase):
         self.assertRaises(
             ValueError,
             paddle.nn.BCEWithLogitsLoss,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         logit = paddle.to_tensor([[0.1, 0.3]], dtype='float32')
         label = paddle.to_tensor([[0.0, 1.0]], dtype='float32')
@@ -331,7 +334,7 @@ class TestBCEWithLogitsLoss(unittest.TestCase):
             paddle.nn.functional.binary_cross_entropy_with_logits,
             logit=logit,
             label=label,
-            reduction="unsupport reduction",
+            reduction="unsupported reduction",
         )
         paddle.enable_static()
 

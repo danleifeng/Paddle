@@ -17,7 +17,6 @@ limitations under the License. */
 #include <string>
 #include <typeindex>
 
-#include "paddle/fluid/framework/framework.pb.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/complex.h"
@@ -25,6 +24,7 @@ limitations under the License. */
 #include "paddle/phi/common/float16.h"
 #include "paddle/phi/common/float8_e4m3fn.h"
 #include "paddle/phi/common/float8_e5m2.h"
+#include "paddle/phi/core/framework/framework.pb.h"
 #include "paddle/utils/test_macros.h"
 
 namespace paddle {
@@ -112,6 +112,19 @@ struct DataTypeTrait<void> {
   _ForEachDataTypeHelper_(callback, ::phi::dtype::complex<float>, COMPLEX64); \
   _ForEachDataTypeHelper_(callback, ::phi::dtype::complex<double>, COMPLEX128);
 
+// complex and float8 are not supported on XPU.
+#define _ForEachDataTypeForXPU_(callback)                          \
+  _ForEachDataTypeHelper_(callback, float, FP32);                  \
+  _ForEachDataTypeHelper_(callback, ::phi::dtype::float16, FP16);  \
+  _ForEachDataTypeHelper_(callback, ::phi::dtype::bfloat16, BF16); \
+  _ForEachDataTypeHelper_(callback, double, FP64);                 \
+  _ForEachDataTypeHelper_(callback, int, INT32);                   \
+  _ForEachDataTypeHelper_(callback, int64_t, INT64);               \
+  _ForEachDataTypeHelper_(callback, bool, BOOL);                   \
+  _ForEachDataTypeHelper_(callback, uint8_t, UINT8);               \
+  _ForEachDataTypeHelper_(callback, int16_t, INT16);               \
+  _ForEachDataTypeHelper_(callback, int8_t, INT8);
+
 #define DefineDataTypeTrait(cpp_type, proto_type)                           \
   template <>                                                               \
   struct DataTypeTrait<cpp_type> {                                          \
@@ -137,7 +150,7 @@ inline void VisitDataType(proto::VarType::Type type, Visitor visitor) {
 
   _ForEachDataType_(VisitDataTypeCallback);
 #undef VisitDataTypeCallback
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Not supported proto::VarType::Type(%d) as data type.",
       static_cast<int>(type)));
 }
@@ -183,7 +196,7 @@ inline void VisitIntDataType(proto::VarType::Type type, Visitor visitor) {
 
   _ForEachIntDataType_(VisitIntDataTypeCallback);
 
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Expected integral data type, but got %s", DataTypeToString(type)));
 
 #undef VisitIntDataTypeCallback
@@ -243,7 +256,7 @@ extern inline proto::VarType::Type ToComplexType(proto::VarType::Type t) {
     case proto::VarType::FP64:
       return proto::VarType::COMPLEX128;
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unknown real value data type (%s), now only support float32 and "
           "float64.",
           DataTypeToString(t)));
@@ -257,7 +270,7 @@ extern inline proto::VarType::Type ToRealType(proto::VarType::Type t) {
     case proto::VarType::COMPLEX128:
       return proto::VarType::FP64;
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unknown complex value data type (%s), now only support complex64 "
           "and "
           "complex128.",

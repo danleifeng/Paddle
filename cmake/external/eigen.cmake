@@ -39,19 +39,15 @@ elseif(LINUX)
   endif()
 endif()
 
+file(TO_NATIVE_PATH "${PADDLE_SOURCE_DIR}/patches/eigen/TensorRandom.h.patch"
+     tensor_random_header)
+# See: [Why calling some `git` commands before `patch`?]
+set(EIGEN_PATCH_COMMAND git checkout -- . && git checkout ${EIGEN_TAG} && git
+                        apply ${tensor_random_header})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/eigen/TensorRandom.h.patch
-       tensor_random_header)
-  # See: [Why calling some `git` commands before `patch`?]
-  set(EIGEN_PATCH_COMMAND
-      git checkout -- . && git checkout ${EIGEN_TAG} && patch -Nd
-      ${SOURCE_DIR}/unsupported/Eigen/CXX11/src/Tensor <
-      ${tensor_random_header})
   file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/eigen/Complex.h.patch
        complex_header)
-  set(EIGEN_PATCH_COMMAND
-      ${EIGEN_PATCH_COMMAND} && patch -Nd
-      ${SOURCE_DIR}/Eigen/src/Core/arch/SSE/ < ${complex_header})
+  set(EIGEN_PATCH_COMMAND ${EIGEN_PATCH_COMMAND} && git apply ${complex_header})
 endif()
 
 set(EIGEN_INCLUDE_DIR ${SOURCE_DIR})
@@ -64,6 +60,12 @@ if(NOT WIN32)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=uninitialized")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error=uninitialized")
   endif()
+endif()
+if(NOT WIN32
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+   AND ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER_EQUAL 13.0)
+  message(STATUS "GCC version is >= 13.0, adding -Wno-error=stringop-overflow.")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=stringop-overflow ")
 endif()
 ExternalProject_Add(
   extern_eigen3

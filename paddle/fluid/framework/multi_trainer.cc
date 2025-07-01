@@ -17,7 +17,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/framework/threadpool.h"
 #include "paddle/fluid/framework/trainer.h"
-#include "paddle/fluid/platform/lodtensor_printer.h"
+#include "paddle/fluid/platform/densetensor_printer.h"
 #if defined PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/service/communicator/communicator.h"
 #endif
@@ -28,8 +28,7 @@ PHI_DEFINE_EXPORTED_bool(enable_dump_main_program,
                          false,
                          "enable dump main program, default false");
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 extern Barrier g_barrier;
 
@@ -120,16 +119,15 @@ void MultiTrainer::InitDumpEnv() {
     dump_thread_.emplace_back([this, i] { DumpWork(i); });
   }
 }
-inline std::vector<std::shared_ptr<paddle::framework::ThreadPool>>&
-GetThreadPool(int thread_num) {
-  static std::vector<std::shared_ptr<paddle::framework::ThreadPool>>
-      thread_pools;
+inline std::vector<std::shared_ptr<phi::ThreadPool>>& GetThreadPool(
+    int thread_num) {
+  static std::vector<std::shared_ptr<phi::ThreadPool>> thread_pools;
   if (!thread_pools.empty()) {
     return thread_pools;
   }
   thread_pools.resize(thread_num);
   for (int i = 0; i < thread_num; ++i) {
-    thread_pools[i].reset(new paddle::framework::ThreadPool(1));
+    thread_pools[i].reset(new phi::ThreadPool(1));
   }
   return thread_pools;
 }
@@ -139,7 +137,13 @@ void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
   // multi thread load
   auto pool = GetThreadPool(thread_num_);
   std::vector<std::future<void>> wait_futures;
-  CHECK_EQ(static_cast<int>(pool.size()), thread_num_);
+  PADDLE_ENFORCE_EQ(static_cast<int>(pool.size()),
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "static_cast<int>(pool.size()) is invalid, "
+                        "expected %d but received %d",
+                        thread_num_,
+                        static_cast<int>(pool.size())));
   for (int i = 0; i < thread_num_; ++i) {
     wait_futures.emplace_back(pool[i]->Run([this, i, &main_program, &place]() {
 #ifdef PADDLE_WITH_HETERPS
@@ -181,7 +185,7 @@ void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
           phi::DenseTensor* root_tensor =
               root_var->GetMutable<phi::DenseTensor>();
           auto* ptr = scope->Var(name);
-          InitializeVariable(ptr, proto::VarType::LOD_TENSOR);
+          InitializeVariable(ptr, proto::VarType::DENSE_TENSOR);
           phi::DenseTensor* thread_tensor = ptr->GetMutable<phi::DenseTensor>();
           TensorCopy(*root_tensor, place, thread_tensor);
         }
@@ -232,7 +236,13 @@ void MultiTrainer::Run() {
   VLOG(3) << "Going to run";
   auto pool = GetThreadPool(thread_num_);
   std::vector<std::future<void>> wait_futures;
-  CHECK_EQ(static_cast<int>(pool.size()), thread_num_);
+  PADDLE_ENFORCE_EQ(static_cast<int>(pool.size()),
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "static_cast<int>(pool.size()) is invalid, "
+                        "expected %d but received %d",
+                        thread_num_,
+                        static_cast<int>(pool.size())));
   for (int i = 0; i < thread_num_; ++i) {
     if (!debug_) {
       wait_futures.emplace_back(
@@ -375,7 +385,7 @@ void MultiTrainer::ResetDataset(Dataset* dataset) {
   // change thread num is not supported
   PADDLE_ENFORCE_EQ(thread_num_,
                     readers.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "change Dataset thread_num is not supported"));
   for (int i = 0; i < thread_num_; ++i) {
     workers_[i]->SetDataFeed(readers[i]);
@@ -425,5 +435,4 @@ void MultiTrainer::ResetDataset(Dataset* dataset) {
 }
 #endif
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework

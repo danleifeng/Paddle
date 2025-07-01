@@ -30,14 +30,22 @@ namespace pir {
 
 class BasicIrPrinter {
  public:
-  explicit BasicIrPrinter(std::ostream& os) : os(os) {}
+  explicit BasicIrPrinter(std::ostream& os) : os(os), id_(GenerateId()) {}
 
   virtual void PrintType(Type type);
 
   virtual void PrintAttribute(Attribute attr);
+  uint64_t id() const { return id_; }
 
  public:
   std::ostream& os;
+
+ private:
+  static uint64_t GenerateId() {
+    static std::atomic<std::uint64_t> uid{0};
+    return ++uid;
+  }
+  const uint64_t id_ = -1;
 };
 
 class IR_API IrPrinter : public BasicIrPrinter {
@@ -49,26 +57,30 @@ class IR_API IrPrinter : public BasicIrPrinter {
   void PrintProgram(const Program* program);
 
   /// @brief dispatch to custom printer function or PrintGeneralOperation
-  virtual void PrintOperation(Operation* op);
+  virtual void PrintOperation(const Operation& op);
   /// @brief print operation itself without its regions
-  void PrintOperationWithNoRegion(Operation* op);
+  void PrintOperationWithNoRegion(const Operation& op);
   /// @brief print operation and its regions
-  void PrintGeneralOperation(Operation* op);
+  void PrintGeneralOperation(const Operation& op);
 
   void PrintRegion(const Region& Region);
   void PrintBlock(const Block& block);
 
   virtual void PrintValue(Value v);
 
-  void PrintOpResult(Operation* op);
+  void PrintOpResult(const Operation& op);
 
-  void PrintAttributeMap(Operation* op);
+  void PrintAttributeMap(const Operation& op);
 
-  void PrintOpOperands(Operation* op);
+  void PrintOpName(const Operation& op);
 
-  void PrintOperandsType(Operation* op);
+  void PrintOpId(const Operation& op);
 
-  void PrintOpReturnType(Operation* op);
+  void PrintOpOperands(const Operation& op);
+
+  void PrintOperandsType(const Operation& op);
+
+  void PrintOpReturnType(const Operation& op);
 
   void AddValueAlias(Value value, const std::string& alias);
 
@@ -90,7 +102,7 @@ using TypePrintHook =
 using AttributePrintHook =
     std::function<void(Attribute attr, IrPrinter& printer)>;  // NOLINT
 using OpPrintHook =
-    std::function<void(Operation* op, IrPrinter& printer)>;  // NOLINT
+    std::function<void(const Operation& op, IrPrinter& printer)>;  // NOLINT
 
 struct IR_API PrintHooks {
   ValuePrintHook value_print_hook{nullptr};

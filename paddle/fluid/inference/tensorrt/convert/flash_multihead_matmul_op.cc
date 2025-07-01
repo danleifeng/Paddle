@@ -36,7 +36,7 @@ class FlashMultiheadMatMulOpConverter : public OpConverter {
     PADDLE_ENFORCE_EQ(
         with_fp16,
         true,
-        phi::errors::Unimplemented(
+        common::errors::Unimplemented(
             "Trt flash attention oss plugin only support fp16 mode yet."));
 
     framework::OpDesc op_desc(op, nullptr);
@@ -218,7 +218,7 @@ class FlashMultiheadMatMulOpConverter : public OpConverter {
         ("shuffle_before_multihead_matmul(Output: " + output_name + ")")
             .c_str());
     auto creator = GetPluginRegistry()->getPluginCreator("fMHA_V2", "1");
-    assert("fmha_v2 plugin creater must not be null" && creator != nullptr);
+    assert("fmha_v2 plugin creator must not be null" && creator != nullptr);
     std::vector<nvinfer1::PluginField> fields{};
     std::unique_ptr<nvinfer1::PluginFieldCollection> plugin_collection(
         new nvinfer1::PluginFieldCollection);
@@ -418,7 +418,7 @@ class FlashMultiheadMatMulOpConverter : public OpConverter {
         input->getType() == nvinfer1::DataType::kHALF ||
             input->getType() == nvinfer1::DataType::kFLOAT,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "This op has no dynamic plugin infershape function!"));
 
     if (input->getType() == nvinfer1::DataType::kHALF) {

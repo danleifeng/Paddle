@@ -30,11 +30,12 @@ using Deleter = std::function<void(void*)>;
 /**
  * @brief Construct a Tensor from a buffer pointed to by `data`
  *
- * @note `from_blob` doesn’t copy or move data, Modifying the constructed tensor
+ * @note `from_blob` doesn't copy or move data, Modifying the constructed tensor
  *       is equivalent to modifying the original data.
  *
  * @param data The pointer to the memory buffer.
  * @param shape The dims of the tensor.
+ * @param strides The strides of the tensor.
  * @param dtype The data type of the tensor, should correspond to data type of
  *              `data`. See PD_FOR_EACH_DATA_TYPE in `phi/common/data_type.h`
  * @param layout The data layout of the tensor.
@@ -50,6 +51,13 @@ using Deleter = std::function<void(void*)>;
  */
 PADDLE_API Tensor from_blob(void* data,
                             const phi::IntArray& shape,
+                            phi::DataType dtype,
+                            phi::DataLayout layout = phi::DataLayout::NCHW,
+                            const phi::Place& place = phi::Place(),
+                            const Deleter& deleter = nullptr);
+PADDLE_API Tensor from_blob(void* data,
+                            const phi::IntArray& shape,
+                            const phi::IntArray& strides,
                             phi::DataType dtype,
                             phi::DataLayout layout = phi::DataLayout::NCHW,
                             const phi::Place& place = phi::Place(),

@@ -22,8 +22,7 @@
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 #include "paddle/phi/kernels/sparse/impl/unary_grad_kernel_impl.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename IntT, typename Context>
 void SumCooGradCPUKernel(const Context& dev_ctx,
@@ -141,7 +140,7 @@ void SumCsrGradKernel(const Context& dev_ctx,
   }
   PADDLE_ENFORCE_EQ(axis[0],
                     -1,
-                    phi::errors::Unimplemented(
+                    common::errors::Unimplemented(
                         "`axis` of SumCsrKernel only support None or -1 now."
                         "More number will be supported in the future."));
 
@@ -194,8 +193,7 @@ void SumCooGradKernel(const Context& dev_ctx,
       }));
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(sum_coo_grad,
                    CPU,

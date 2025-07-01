@@ -18,9 +18,7 @@
 #include "paddle/fluid/framework/naive_executor.h"
 #include "paddle/phi/common/place.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void SetOp(ProgramDesc* prog,
            const std::string& type,
@@ -85,7 +83,7 @@ void SetOp(ProgramDesc* prog,
     op->SetInput("Input", {inputs[0]});
     PADDLE_ENFORCE_EQ(inputs.size(),
                       2UL,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The fc inputs should contain input and weights, but "
                           "now the size of inputs is %d.",
                           inputs.size()));
@@ -717,8 +715,7 @@ void InitTensorHolder(Scope* scope,
                       const char* var_name) {
   auto x = scope->Var(var_name);
   auto tensor = x->GetMutable<phi::DenseTensor>();
-  tensor->mutable_data(
-      place, framework::TransToPhiDataType(proto::VarType::FP32), 1);
+  tensor->mutable_data(place, phi::TransToPhiDataType(proto::VarType::FP32), 1);
 }
 
 void PrepareGraph(std::unique_ptr<ir::Graph>* graph, const ProgramDesc& prog) {
@@ -1179,8 +1176,6 @@ TEST(CpuQuantizeSquashPass, squash_all_u8_input_to_concat2) {
       BuildU8U8ConcatProgramDesc(1.2f, 1.2f), expected_operators, remove_nodes);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(cpu_quantize_squash_pass);

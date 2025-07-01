@@ -12,18 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
 from paddle import _C_ops, _legacy_C_ops
 from paddle.base.layer_helper import LayerHelper
 from paddle.framework import (
     in_dynamic_mode,
+    in_dynamic_or_pir_mode,
     in_pir_mode,
 )
 from paddle.tensor.linalg import matmul
 
+if TYPE_CHECKING:
+    from paddle import Tensor
+
 
 def fused_matmul_bias(
-    x, y, bias=None, transpose_x=False, transpose_y=False, name=None
-):
+    x: Tensor,
+    y: Tensor,
+    bias: Tensor | None = None,
+    transpose_x: bool = False,
+    transpose_y: bool = False,
+    name: str | None = None,
+) -> Tensor:
     """
     Applies matrix multiplication of two tensors and then bias addition if provided.
     This method requires CUDA version >= 11.6.
@@ -59,11 +72,7 @@ def fused_matmul_bias(
     """
     if bias is None:
         return matmul(x, y, transpose_x, transpose_y, name)
-    if in_dynamic_mode():
-        return _legacy_C_ops.fused_gemm_epilogue(
-            x, y, bias, 'trans_x', transpose_x, 'trans_y', transpose_y
-        )
-    if in_pir_mode():
+    if in_dynamic_or_pir_mode():
         out, _ = _C_ops.fused_gemm_epilogue(
             x, y, bias, transpose_x, transpose_y, "none"
         )
@@ -80,7 +89,13 @@ def fused_matmul_bias(
     return out
 
 
-def fused_linear(x, weight, bias=None, transpose_weight=False, name=None):
+def fused_linear(
+    x: Tensor,
+    weight: Tensor,
+    bias: Tensor | None = None,
+    transpose_weight: bool = False,
+    name: str | None = None,
+) -> Tensor:
     """
     Fully-connected linear transformation operator. This method requires CUDA version >= 11.6.
 
@@ -116,8 +131,13 @@ def fused_linear(x, weight, bias=None, transpose_weight=False, name=None):
 
 
 def fused_linear_activation(
-    x, y, bias, trans_x=False, trans_y=False, activation=None
-):
+    x: Tensor,
+    y: Tensor,
+    bias: Tensor,
+    trans_x: bool = False,
+    trans_y: bool = False,
+    activation: Literal['gelu', 'relu'] | None = None,
+) -> Tensor:
     """
     Fully-connected linear and activation transformation operator. This method requires CUDA version >= 11.6.
 

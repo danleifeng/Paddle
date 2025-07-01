@@ -106,27 +106,31 @@ struct BinaryNotEqual {
   }
 };
 
-// The core logic of computing Unique for a flattend DenseTensor
+// The core logic of computing Unique for a flattened DenseTensor
 template <typename Context, typename InT, typename IndexT>
 static typename std::enable_if<
     !std::is_same<InT, phi::dtype::float16>::value &&
     !std::is_same<InT, phi::dtype::bfloat16>::value>::type
-UniqueFlattendCUDATensor(const Context& context,
-                         const DenseTensor& in,
-                         DenseTensor* out,
-                         DenseTensor* indices,
-                         DenseTensor* index,
-                         DenseTensor* counts,
-                         bool return_index,
-                         bool return_inverse,
-                         bool return_counts,
-                         int64_t num_input) {
-  // 0. Prepration
+UniqueFlattenedCUDATensor(const Context& context,
+                          const DenseTensor& in,
+                          DenseTensor* out,
+                          DenseTensor* indices,
+                          DenseTensor* index,
+                          DenseTensor* counts,
+                          bool return_index,
+                          bool return_inverse,
+                          bool return_counts,
+                          int64_t num_input) {
+  // 0. Preparation
   auto equal = thrust::equal_to<InT>();
   auto not_equal = thrust::not_equal_to<InT>();
   DenseTensor in_hat;
   phi::Copy(context, in, context.GetPlace(), false, &in_hat);
   auto* in_data_hat = context.template Alloc<InT>(&in_hat);
+  DenseTensor tmp;
+  if (!indices) {
+    indices = &tmp;
+  }
 
   indices->Resize(common::make_ddim({num_input}));
   auto* indices_data = context.template Alloc<IndexT>(indices);
@@ -238,21 +242,21 @@ UniqueFlattendCUDATensor(const Context& context,
   }
 }
 
-// The core logic of computing Unique for a flattend DenseTensor
+// The core logic of computing Unique for a flattened DenseTensor
 template <typename Context, typename InT, typename IndexT>
 static typename std::enable_if<
     std::is_same<InT, phi::dtype::float16>::value ||
     std::is_same<InT, phi::dtype::bfloat16>::value>::type
-UniqueFlattendCUDATensor(const Context& context,
-                         const DenseTensor& in,
-                         DenseTensor* out,
-                         DenseTensor* indices,
-                         DenseTensor* index,
-                         DenseTensor* counts,
-                         bool return_index,
-                         bool return_inverse,
-                         bool return_counts,
-                         int64_t num_input) {
+UniqueFlattenedCUDATensor(const Context& context,
+                          const DenseTensor& in,
+                          DenseTensor* out,
+                          DenseTensor* indices,
+                          DenseTensor* index,
+                          DenseTensor* counts,
+                          bool return_index,
+                          bool return_inverse,
+                          bool return_counts,
+                          int64_t num_input) {
   // 1. Sort indices
   DenseTensor in_resize;
   in_resize.ShareDataWith(in);
@@ -260,6 +264,11 @@ UniqueFlattendCUDATensor(const Context& context,
   const InT* in_data = in_resize.data<InT>();
   auto equal = BinaryEqual<InT>(1, in_data);
   auto not_equal = BinaryNotEqual<InT>(1, in_data);
+
+  DenseTensor tmp;
+  if (!indices) {
+    indices = &tmp;
+  }
 
   indices->Resize(common::make_ddim({num_input}));
   auto* indices_data = context.template Alloc<IndexT>(indices);
@@ -400,13 +409,15 @@ static void ComputeUniqueDims(const Context& context,
   sorted_indices->Resize(common::make_ddim({num_out}));
 
   // 3. counts: 'counts'
-  counts->Resize(common::make_ddim({num_out}));
-  auto* count_data = context.template Alloc<IndexT>(counts);
-  thrust::fill(exec_policy, count_data, count_data + num_out, 0);
-  thrust::adjacent_difference(exec_policy,
-                              range_data_ptr + 1,
-                              range_data_ptr + num_out + 1,
-                              count_data);
+  if (return_counts) {
+    counts->Resize(common::make_ddim({num_out}));
+    auto* count_data = context.template Alloc<IndexT>(counts);
+    thrust::fill(exec_policy, count_data, count_data + num_out, 0);
+    thrust::adjacent_difference(exec_policy,
+                                range_data_ptr + 1,
+                                range_data_ptr + num_out + 1,
+                                count_data);
+  }
 }
 
 // Calculate unique when 'axis' is set
@@ -454,6 +465,11 @@ static void UniqueDimsCUDATensor(const Context& context,
   int64_t col = in_trans.dims()[1];
   int64_t row = in_trans.dims()[0];
   const InT* in_trans_data = in_trans.data<InT>();
+
+  DenseTensor tmp;
+  if (!indices) {
+    indices = &tmp;
+  }
 
   indices->Resize(common::make_ddim({row}));
   auto* sorted_indices_data = context.template Alloc<IndexT>(indices);
@@ -510,10 +526,10 @@ static void UniqueDimsCUDATensor(const Context& context,
   }
 }
 
-// functor for processing a flattend DenseTensor
+// functor for processing a flattened DenseTensor
 template <typename Context, typename InT>
-struct UniqueFlattendCUDAFunctor {
-  const Context& ctx_;
+struct UniqueFlattenedCUDAFunctor {
+  const Context& dev_ctx_;
   const DenseTensor& in_;
   DenseTensor* out_;
   DenseTensor* indices_;
@@ -523,16 +539,16 @@ struct UniqueFlattendCUDAFunctor {
   const bool return_inverse_;
   const bool return_counts_;
 
-  UniqueFlattendCUDAFunctor(const Context& context,
-                            const DenseTensor& in,
-                            DenseTensor* out,
-                            DenseTensor* indices,
-                            DenseTensor* index,
-                            DenseTensor* counts,
-                            bool return_index,
-                            bool return_inverse,
-                            bool return_counts)
-      : ctx_(context),
+  UniqueFlattenedCUDAFunctor(const Context& context,
+                             const DenseTensor& in,
+                             DenseTensor* out,
+                             DenseTensor* indices,
+                             DenseTensor* index,
+                             DenseTensor* counts,
+                             bool return_index,
+                             bool return_inverse,
+                             bool return_counts)
+      : dev_ctx_(context),
         in_(in),
         out_(out),
         indices_(indices),
@@ -544,23 +560,23 @@ struct UniqueFlattendCUDAFunctor {
 
   template <typename IndexT>
   void apply() const {
-    UniqueFlattendCUDATensor<Context, InT, IndexT>(ctx_,
-                                                   in_,
-                                                   out_,
-                                                   indices_,
-                                                   index_,
-                                                   counts_,
-                                                   return_index_,
-                                                   return_inverse_,
-                                                   return_counts_,
-                                                   in_.numel());
+    UniqueFlattenedCUDATensor<Context, InT, IndexT>(dev_ctx_,
+                                                    in_,
+                                                    out_,
+                                                    indices_,
+                                                    index_,
+                                                    counts_,
+                                                    return_index_,
+                                                    return_inverse_,
+                                                    return_counts_,
+                                                    in_.numel());
   }
 };
 
 // functor for processing a multi-dimensional DenseTensor
 template <typename Context, typename InT>
 struct UniqueDimsCUDAFunctor {
-  const Context& ctx_;
+  const Context& dev_ctx_;
   const DenseTensor& in_;
   DenseTensor* out_;
   DenseTensor* indices_;
@@ -581,7 +597,7 @@ struct UniqueDimsCUDAFunctor {
                         bool return_index,
                         bool return_inverse,
                         bool return_counts)
-      : ctx_(context),
+      : dev_ctx_(context),
         in_(in),
         out_(out),
         indices_(indices),
@@ -594,7 +610,7 @@ struct UniqueDimsCUDAFunctor {
 
   template <typename IndexT>
   void apply() const {
-    UniqueDimsCUDATensor<Context, InT, IndexT>(ctx_,
+    UniqueDimsCUDATensor<Context, InT, IndexT>(dev_ctx_,
                                                in_,
                                                out_,
                                                indices_,
@@ -624,7 +640,7 @@ void UniqueRawKernel(const Context& context,
     PADDLE_ENFORCE_LE(
         x.numel() + 1,
         INT_MAX,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The number of elements in Input(X) should be less than or "
             "equal to INT_MAX, but received num is %d. Please set `dtype` to "
             "int64.",
@@ -634,15 +650,15 @@ void UniqueRawKernel(const Context& context,
   if (axis.empty()) {
     phi::VisitDataTypeTiny(
         dtype,
-        UniqueFlattendCUDAFunctor<Context, T>(context,
-                                              x,
-                                              out,
-                                              indices,
-                                              index,
-                                              counts,
-                                              return_index,
-                                              return_inverse,
-                                              return_counts));
+        UniqueFlattenedCUDAFunctor<Context, T>(context,
+                                               x,
+                                               out,
+                                               indices,
+                                               index,
+                                               counts,
+                                               return_index,
+                                               return_inverse,
+                                               return_counts));
   } else {
     // 'axis' is required.
     int axis_value = axis[0];

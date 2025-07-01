@@ -22,7 +22,7 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_default_and_pir,
+    test_default_mode_only,
 )
 from tsm_config_utils import merge_configs, parse_config, print_configs
 
@@ -175,7 +175,7 @@ class TSM_ResNet(paddle.nn.Layer):
             shortcut = False
             for i in range(depth[block]):
                 bottleneck_block = self.add_sublayer(
-                    'bb_%d_%d' % (block, i),
+                    f'bb_{block}_{i}',
                     BottleneckBlock(
                         num_channels=num_channels,
                         num_filters=num_filters[block],
@@ -204,7 +204,7 @@ class TSM_ResNet(paddle.nn.Layer):
         )
 
     def forward(self, inputs):
-        y = paddle.reshape(inputs, [-1] + self.reshape_list)
+        y = paddle.reshape(inputs, [-1, *self.reshape_list])
         y = self.conv(y)
         y = self.pool2d_max(y)
         for bottleneck_block in self.bottleneck_block_list:
@@ -363,7 +363,7 @@ def train(args, fake_data_reader):
 
 
 class TestTsm(Dy2StTestBase):
-    @test_default_and_pir
+    @test_default_mode_only
     def test_dygraph_static_same_loss(self):
         if paddle.is_compiled_with_cuda():
             paddle.set_flags({"FLAGS_cudnn_deterministic": True})

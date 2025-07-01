@@ -17,9 +17,9 @@
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/impl/box_coder.h"
-
 namespace phi {
 
 template <typename T>
@@ -179,10 +179,19 @@ void BoxCoderKernel(const Context &dev_ctx,
                     int axis,
                     const std::vector<float> &variance,
                     DenseTensor *output_box) {
+  // prior_box and prior_box_var have the same shape, so do not judge
+  // prior_box_var
+  if (prior_box.numel() == 0 || target_box.numel() == 0) {
+    phi::Full<T, Context>(dev_ctx,
+                          phi::IntArray(common::vectorize(output_box->dims())),
+                          0,
+                          output_box);
+    return;
+  }
   if (!target_box.lod().empty()) {
     PADDLE_ENFORCE_EQ(target_box.lod().size(),
                       1UL,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Input(TargetBox) of BoxCoder operator "
                           "supports LoD with only one level. But received "
                           "level = %d",
@@ -191,19 +200,19 @@ void BoxCoderKernel(const Context &dev_ctx,
   if (prior_box_var) {
     PADDLE_ENFORCE_EQ(variance.empty(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Input 'PriorBoxVar' and attribute 'variance' "
                           "of BoxCoder operator should not be used at the "
                           "same time."));
   }
   if (!(variance.empty())) {
-    PADDLE_ENFORCE_EQ(
-        static_cast<int>(variance.size()),
-        4,
-        phi::errors::InvalidArgument("Size of attribute 'variance' of BoxCoder "
-                                     "operator should be 4. But received "
-                                     "size = %d",
-                                     variance.size()));
+    PADDLE_ENFORCE_EQ(static_cast<int>(variance.size()),
+                      4,
+                      common::errors::InvalidArgument(
+                          "Size of attribute 'variance' of BoxCoder "
+                          "operator should be 4. But received "
+                          "size = %d",
+                          variance.size()));
   }
 
   auto code_type = phi::funcs::GetBoxCodeType(code_type_str);

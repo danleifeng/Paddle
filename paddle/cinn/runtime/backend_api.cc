@@ -31,8 +31,16 @@ BackendAPI* BackendAPI::get_backend(common::Arch arch) {
             GlobalSymbolRegistry::Global().Lookup("backend_api.hip");
         PADDLE_ENFORCE_NE(temp_backend_api,
                           nullptr,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "global symbol (backend_api.hip) not found!"));
+      },
+      [&](common::HygonDCUArchSYCL) {
+        temp_backend_api =
+            GlobalSymbolRegistry::Global().Lookup("backend_api.sycl");
+        PADDLE_ENFORCE_NE(temp_backend_api,
+                          nullptr,
+                          ::common::errors::InvalidArgument(
+                              "global symbol (backend_api.sycl) not found!"));
       },
       [&](std::variant<common::UnknownArch,
                        common::X86Arch,
@@ -40,7 +48,7 @@ BackendAPI* BackendAPI::get_backend(common::Arch arch) {
                        common::NVGPUArch>) {
         std::stringstream ss;
         ss << "Target(" << arch << ") is not support get_backend now.";
-        PADDLE_THROW(phi::errors::Fatal(ss.str()));
+        PADDLE_THROW(::common::errors::Fatal(ss.str()));
       });
   return reinterpret_cast<BackendAPI*>(temp_backend_api);
 }

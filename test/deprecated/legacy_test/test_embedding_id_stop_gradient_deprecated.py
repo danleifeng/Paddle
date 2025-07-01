@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -28,7 +29,13 @@ class TestEmbeddingIdStopGradientBase(unittest.TestCase):
         self.iteration = 10
 
     def get_places(self):
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if base.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
 
@@ -49,38 +56,38 @@ class TestEmbeddingIdStopGradientBase(unittest.TestCase):
         main_program = base.Program()
 
         scope = base.Scope()
-        with base.program_guard(main_program, startup_program):
-            with base.scope_guard(scope):
-                x_1 = paddle.static.data(name='x1', shape=[4, 1], dtype='int64')
-                x_2 = paddle.static.data(name='x2', shape=[4, 1], dtype='int64')
-                x = paddle.concat([x_1, x_2], axis=-1)
+        with (
+            base.program_guard(main_program, startup_program),
+            base.scope_guard(scope),
+        ):
+            x_1 = paddle.static.data(name='x1', shape=[4, 1], dtype='int64')
+            x_2 = paddle.static.data(name='x2', shape=[4, 1], dtype='int64')
+            x = paddle.concat([x_1, x_2], axis=-1)
 
-                for _ in range(self.reshape_times):
-                    x = paddle.reshape(x, [-1, 1])
+            for _ in range(self.reshape_times):
+                x = paddle.reshape(x, [-1, 1])
 
-                x.stop_gradient = stop_gradient
+            x.stop_gradient = stop_gradient
 
-                emb = paddle.static.nn.embedding(
-                    x, size=[10, 32], dtype='float32'
-                )
-                avg_cost = paddle.mean(emb, name='mean_loss')
-                optim = paddle.optimizer.SGD(learning_rate=0.001)
-                optim.minimize(avg_cost)
+            emb = paddle.static.nn.embedding(x, size=[10, 32], dtype='float32')
+            avg_cost = paddle.mean(emb, name='mean_loss')
+            optim = paddle.optimizer.SGD(learning_rate=0.001)
+            optim.minimize(avg_cost)
 
-                exe = base.Executor(place)
-                exe.run(startup_program)
+            exe = base.Executor(place)
+            exe.run(startup_program)
 
-                x1_data = np.random.randint(0, 9, x_1.shape).astype('int64')
-                x2_data = np.random.randint(0, 9, x_2.shape).astype('int64')
+            x1_data = np.random.randint(0, 9, x_1.shape).astype('int64')
+            x2_data = np.random.randint(0, 9, x_2.shape).astype('int64')
 
-                fetch_val = None
-                for _ in range(self.iteration):
-                    fetch_val = exe.run(
-                        feed={x_1.name: x1_data, x_2.name: x2_data},
-                        fetch_list=[emb],
-                    )[0]
+            fetch_val = None
+            for _ in range(self.iteration):
+                fetch_val = exe.run(
+                    feed={x_1.name: x1_data, x_2.name: x2_data},
+                    fetch_list=[emb],
+                )[0]
 
-                return fetch_val
+            return fetch_val
 
 
 class TestEmbeddingIdStopGradient2(TestEmbeddingIdStopGradientBase):

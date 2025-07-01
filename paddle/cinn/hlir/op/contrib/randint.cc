@@ -17,9 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include "absl/types/variant.h"
+#include <variant>
 #include "glog/logging.h"
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/cinn_value.h"
 #include "paddle/cinn/common/common.h"
 #include "paddle/cinn/common/context.h"
@@ -39,7 +38,8 @@
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/lang/compute.h"
 #include "paddle/cinn/lang/packed_func.h"
-#include "paddle/cinn/poly/stage.h"
+#include "paddle/cinn/optim/ir_simplify.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace hlir {
@@ -56,7 +56,11 @@ std::shared_ptr<framework::OpStrategy> StrategyForRandInt(
     const Target &target) {
   framework::CINNCompute randint_compute(
       [=](lang::Args args, lang::RetValue *ret) {
-        CHECK(attrs.attr_store.count("shape"));
+        PADDLE_ENFORCE_GE(
+            attrs.attr_store.count("shape"),
+            1,
+            ::common::errors::NotFound("The attribute 'shape' is not found in "
+                                       "attr_store. Please ensure it is set."));
         ir::Tensor shape_tensor;
         std::string tensor_name = "randint_out";
         auto out = pe::Identity(shape_tensor, tensor_name).front();
@@ -65,7 +69,7 @@ std::shared_ptr<framework::OpStrategy> StrategyForRandInt(
       });
   auto strategy = std::make_shared<framework::OpStrategy>();
   strategy->AddImpl(randint_compute,
-                    GetInjectiveScheduleFunc(output_shapes, target),
+
                     "strategy.randint.x86",
                     1);
   return strategy;

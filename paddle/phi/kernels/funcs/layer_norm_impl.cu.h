@@ -233,8 +233,9 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
 #pragma unroll
     for (int it = 0, col = c; it < LDGS; it++) {
       if (col < cols) {
-        phi::Load<T, VecSize>(x_ptr + row * ELTS_PER_ROW + col * VecSize,
-                              &x[it]);
+        phi::Load<T, VecSize>(
+            x_ptr + static_cast<int64_t>(row) * ELTS_PER_ROW + col * VecSize,
+            &x[it]);
       } else {
         x[it] = Vec{};
       }
@@ -344,8 +345,9 @@ __global__ __launch_bounds__(THREADS_PER_CTA) void fast_ln_fwd_kernel(
 #pragma unroll
     for (int it = 0, col = c; it < LDGS; it++) {
       if (col < cols) {
-        phi::Store<T, VecSize>(x[it],
-                               y_ptr + row * ELTS_PER_ROW + col * VecSize);
+        phi::Store<T, VecSize>(
+            x[it],
+            y_ptr + static_cast<int64_t>(row) * ELTS_PER_ROW + col * VecSize);
       }
       col += THREADS_PER_ROW;
     }
@@ -979,7 +981,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
   auto stream = dev_ctx.stream();
   if (cols == 1024 || cols == 384 || cols == 256) {
     // step-1: compute dx and reduced part results of dscale and dbias.
-    const int WARPS_M = 4;  // how many rows delt in a cta.
+    const int WARPS_M = 4;  // how many rows deal in a cta.
     const int WARPS_N = 1;  // how many warps to deal with a row.
     const int BYTES_PER_LDG = 16;
     const int VecSize = BYTES_PER_LDG / sizeof(T);
@@ -1008,7 +1010,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
 
     if (mask_ptr != nullptr) {
       if (d_dropout_src_ptr == nullptr) {
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "To compute fused_dropout_residual_ln grad, d_dropout_src_ptr "
             "can't be null"));
       }
@@ -1121,7 +1123,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
     // Note: it is not supported for double type.
     if (sizeof(U) > 4) {
       PADDLE_THROW(
-          phi::errors::InvalidArgument("Only support float and fp16 type"));
+          common::errors::InvalidArgument("Only support float and fp16 type"));
     } else {
       int gridx_2 = 0;
 
@@ -1154,7 +1156,7 @@ void ln_bwd_fast_kernel_driver(const phi::GPUContext &dev_ctx,
 #undef LAUNCH_LN_BWD_BETA_GAMMMA_KERNEL
     }
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Fast layer_norm kernel is only used when feature_size is 1024"));
   }
 }

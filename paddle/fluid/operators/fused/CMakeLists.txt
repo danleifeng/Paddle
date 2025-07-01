@@ -10,7 +10,6 @@ register_operators(
   fused_attention_op
   fused_transformer_op
   fused_feedforward_op
-  fused_multi_transformer_op
   fused_multi_transformer_int8_op
   fused_gemm_epilogue_op
   fused_gate_attention_op)
@@ -41,11 +40,13 @@ if(WITH_GPU OR WITH_ROCM)
     op_library(fused_feedforward_op)
     # fused_attention_op
     op_library(fused_attention_op)
-    op_library(fused_multi_transformer_op)
     op_library(fused_multi_transformer_int8_op)
   endif()
 
   if(CUDA_VERSION GREATER_EQUAL 11.6)
+    op_library(fused_gemm_epilogue_op)
+  endif()
+  if(WITH_ROCM)
     op_library(fused_gemm_epilogue_op)
   endif()
 endif()

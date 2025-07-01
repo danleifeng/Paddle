@@ -16,8 +16,7 @@
 #include "paddle/common/errors.h"
 #include "paddle/phi/core/kernel_registry.h"
 
-namespace phi {
-namespace fusion {
+namespace phi::fusion {
 
 template <typename T, typename Context>
 void DistributedFusedLambInitOpKernel(
@@ -48,11 +47,10 @@ void DistributedFusedLambInitOpKernel(
     std::vector<DenseTensor*> grad_out,
     DenseTensor* global_scale,
     DenseTensor* step) {
-  PADDLE_THROW(phi::errors::Unavailable(
+  PADDLE_THROW(common::errors::Unavailable(
       "Do not support expert count op for cpu kernel now."));
 }
-}  // namespace fusion
-}  // namespace phi
+}  // namespace phi::fusion
 
 PD_REGISTER_KERNEL(distributed_fused_lamb_init,
                    CPU,

@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestClipOp(OpTest):
@@ -47,7 +46,7 @@ class TestClipOp(OpTest):
         else:
             max_v = self.attrs['max']
 
-        input = np.random.random(self.shape).astype(self.dtype)
+        input = self.generate_input()
         input[np.abs(input - min_v) < self.max_relative_error] = 0.5
         input[np.abs(input - max_v) < self.max_relative_error] = 0.5
         self.inputs['X'] = input
@@ -59,13 +58,16 @@ class TestClipOp(OpTest):
     def test_check_output(self):
         paddle.enable_static()
         self.check_output(
-            check_cinn=self.check_cinn, check_pir=True, check_prim_pir=True
+            check_cinn=self.check_cinn,
+            check_pir=True,
+            check_prim_pir=True,
+            check_symbol_infer=False,
         )
         paddle.disable_static()
 
     def test_check_grad_normal(self):
         paddle.enable_static()
-        self.check_grad(['X'], 'Out', check_pir=True)
+        self.check_grad(['X'], 'Out', check_pir=True, check_prim_pir=True)
         paddle.disable_static()
 
     def initTestCase(self):
@@ -75,6 +77,9 @@ class TestClipOp(OpTest):
         self.min = 0.3
         self.inputs['Max'] = np.array([0.8]).astype(self.dtype)
         self.inputs['Min'] = np.array([0.1]).astype(self.dtype)
+
+    def generate_input(self):
+        return np.random.random(self.shape).astype(self.dtype)
 
 
 class TestCase1(TestClipOp):
@@ -119,6 +124,19 @@ class TestCase5(TestClipOp):
         self.min = 0.5
 
 
+class TestCase6(TestClipOp):
+    def initTestCase(self):
+        self.dtype = np.float32
+        self.shape = (4, 8, 16)
+        self.max = 1.0
+        self.min = 0.5
+
+    def generate_input(self):
+        return np.random.choice([self.min, self.max], self.shape).astype(
+            self.dtype
+        )
+
+
 class TestFP16Case1(TestClipOp):
     def initTestCase(self):
         self.dtype = np.float16
@@ -161,10 +179,31 @@ class TestFP16Case5(TestClipOp):
         self.min = 0.5
 
 
+class TestFP16Case6(TestClipOp):
+    def initTestCase(self):
+        self.dtype = np.float16
+        self.shape = (4, 8, 16)
+        self.max = 1.0
+        self.min = 0.5
+
+    def generate_input(self):
+        return np.random.choice([self.min, self.max], self.shape).astype(
+            self.dtype
+        )
+
+
+class TestCase_ZeroSize(TestClipOp):
+    def initTestCase(self):
+        self.dtype = np.float32
+        self.shape = (4, 0, 16)
+        self.max = 0.5
+        self.min = 0.5
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
-    "core is not compiled with CUDA and not support the bfloat16",
+    "core is not compiled with CUDA or not support the bfloat16",
 )
 class TestClipBF16Op(OpTest):
     def setUp(self):
@@ -202,7 +241,10 @@ class TestClipBF16Op(OpTest):
             place = paddle.CUDAPlace(0)
             paddle.enable_static()
             self.check_output_with_place(
-                place, check_pir=True, check_prim_pir=True
+                place,
+                check_pir=True,
+                check_prim_pir=True,
+                check_symbol_infer=False,
             )
             paddle.disable_static()
 
@@ -259,7 +301,7 @@ class TestBF16Case5(TestClipBF16Op):
 
 
 class TestClipOpError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -278,7 +320,6 @@ class TestClipAPI(unittest.TestCase):
     def _executed_api(self, x, min=None, max=None):
         return paddle.clip(x, min, max)
 
-    @test_with_pir_api
     def test_clip(self):
         paddle.enable_static()
         data_shape = [1, 9, 9, 4]
@@ -435,7 +476,6 @@ class TestClipAPI(unittest.TestCase):
         np.testing.assert_allclose(out2.numpy(), egr_out2.numpy(), rtol=1e-05)
         np.testing.assert_allclose(out3.numpy(), egr_out3.numpy(), rtol=1e-05)
 
-    @test_with_pir_api
     def test_errors(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -449,7 +489,7 @@ class TestClipAPI(unittest.TestCase):
 
 
 class TestClipOpFp16(unittest.TestCase):
-    @test_with_pir_api
+
     def test_fp16(self):
         if base.core.is_compiled_with_cuda():
             paddle.enable_static()
@@ -483,6 +523,34 @@ class TestClipOpFp16(unittest.TestCase):
 class TestInplaceClipAPI(TestClipAPI):
     def _executed_api(self, x, min=None, max=None):
         return x.clip_(min, max)
+
+
+class TestClipOp_FP64(OpTest):
+    def setUp(self):
+        self.python_api = paddle.clip
+        self.public_python_api = paddle.clip
+
+        self.inputs = {}
+        self.dtype = np.float64
+        self.shape = (8, 16, 8)
+        self.max = float(np.finfo(np.float64).max)
+        self.min = float(np.finfo(np.float64).min)
+
+        self.op_type = "clip"
+        self.attrs = {}
+        self.attrs['min'] = self.min
+        self.attrs['max'] = self.max
+
+        self.inputs['X'] = np.random.random(self.shape).astype(self.dtype)
+        self.outputs = {'Out': np.clip(self.inputs['X'], self.min, self.max)}
+
+    def test_check_output(self):
+        self.check_output(
+            check_pir=True,
+        )
+
+    def test_check_grad_normal(self):
+        self.check_grad(['X'], 'Out', check_pir=True)
 
 
 if __name__ == '__main__':

@@ -24,25 +24,30 @@ import paddle
 from paddle import base
 from paddle.base import core, in_pir_mode
 from paddle.base.executor import Executor
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 base.core._set_eager_deletion_mode(0.0, 1.0, True)
 
 
 class TestEagerDeletionWhileOpBase(unittest.TestCase):
-    @test_with_pir_api
+
     def test_main(self):
-        places = [
-            core.CPUPlace(),
-        ]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
 
         for p in places:
-            with base.program_guard(base.Program(), base.Program()):
-                with base.scope_guard(base.Scope()):
-                    self.run_main(p)
+            with (
+                base.program_guard(base.Program(), base.Program()),
+                base.scope_guard(base.Scope()),
+            ):
+                self.run_main(p)
 
     def run_main(self, place):
         self.place = place

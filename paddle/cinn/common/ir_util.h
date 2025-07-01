@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/container/flat_hash_map.h>
 
 #include <map>
 #include <memory>
@@ -22,7 +21,9 @@
 
 #include "paddle/cinn/common/bfloat16.h"
 #include "paddle/cinn/common/float16.h"
+#include "paddle/cinn/common/integer_set.h"
 #include "paddle/cinn/ir/ir.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace cinn {
 namespace common {
@@ -80,11 +81,6 @@ inline Expr make_bool(bool x, int lanes) {
  * \brief Check all the tensors are unique in an expression.
  */
 void CheckTensorUniqueInExpr(Expr expr);
-
-/**
- * \brief Check all the buffers are unique in an expression.
- */
-void CheckBufferUniqueInExpr(Expr expr);
 
 std::vector<std::string> GatherItersToTensorProducer(
     const std::string &target_tensor_name, Expr *expr);
@@ -160,5 +156,27 @@ Expr FoldExpr(FuncOp func_op, const std::vector<Expr> &values) {
   return init_value;
 }
 
+inline bool IsIterExpr(const Expr &a, const Expr &b) {
+  return a.As<ir::IterSplit>() || a.As<ir::IterSum>() ||
+         b.As<ir::IterSplit>() || b.As<ir::IterSum>();
+}
+
+inline bool IsOne(const Expr &expr) {
+  if (expr.is_constant() && expr.get_constant() == 1) {
+    return true;
+  }
+  return false;
+}
+inline bool IsZero(const Expr &expr) {
+  if (expr.is_constant() && expr.get_constant() == 0) {
+    return true;
+  }
+  return false;
+}
+
+// Promote int32 to int64 type if needed.
+void OpDataTypePromote(ir::Expr *expr);
+void OpDataTypePromote(ir::Module *module);
+void OpDataTypePromote(ir::LoweredFunc *func);
 }  // namespace common
 }  // namespace cinn

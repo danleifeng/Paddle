@@ -14,13 +14,12 @@
 from __future__ import annotations
 
 import copy
+import os
 import warnings
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    ContextManager,
-    List,
     Literal,
     Protocol,
     TypeVar,
@@ -43,7 +42,8 @@ from paddle.static.amp.decorator import OptimizerWithMixedPrecision
 from .amp_lists import black_list, white_list
 
 if TYPE_CHECKING:
-    from typing import Generator
+    from collections.abc import Generator
+    from contextlib import AbstractContextManager
 
     from typing_extensions import TypeAlias, TypeGuard
 
@@ -63,21 +63,17 @@ if TYPE_CHECKING:
             startup_program: Program,
             parameters: list[Tensor],
             no_grad_set: set[Tensor],
-        ) -> tuple[list[Operator], list[tuple[Tensor, Tensor]]]:
-            ...
+        ) -> tuple[list[Operator], list[tuple[Tensor, Tensor]]]: ...
 
-        def step(self) -> None:
-            ...
+        def step(self) -> None: ...
 
-        def set_state_dict(self, state_dict: dict[str, Tensor]) -> None:
-            ...
+        def set_state_dict(self, state_dict: dict[str, Tensor]) -> None: ...
 
-        def clear_grad(self, set_to_zero: bool) -> None:
-            ...
+        def clear_grad(self, set_to_zero: bool) -> None: ...
 
 
-_ModelsT = TypeVar("_ModelsT", "Layer", List["Layer"])
-_OptimizersT = TypeVar("_OptimizersT", "_OptimizerLike", List["_OptimizerLike"])
+_ModelsT = TypeVar("_ModelsT", "Layer", list["Layer"])
+_OptimizersT = TypeVar("_OptimizersT", "_OptimizerLike", list["_OptimizerLike"])
 
 
 AMP_RELATED_FLAGS = [
@@ -234,7 +230,12 @@ def _is_custom_device_bfloat16_supported() -> bool:
     Judge whether current custom device support bfloat16 amp.
     """
     place = _current_expected_place()
-    return place.get_device_type() == 'npu'
+    return (
+        place.get_device_type() == 'npu'
+        or place.get_device_type() == 'intel_hpu'
+        or place.get_device_type() == 'iluvatar_gpu'
+        or place.get_device_type() == 'metax_gpu'
+    )
 
 
 def need_keep_fp32(layer: Layer, dtype: str) -> bool:
@@ -631,25 +632,14 @@ def amp_guard(
                 if (dtype == 'float16') and not _is_gpu_float16_supported():
                     prop = paddle.device.cuda.get_device_capability()
                     warnings.warn(
-                        "For float16, amp only support NVIDIA GPU with Compute Capability 7.0 or higher, current GPU is: %s, with Compute Capability: %d.%d."
-                        % (
-                            paddle.device.cuda.get_device_name(),
-                            prop[0],
-                            prop[1],
-                        )
+                        f"For float16, amp only support NVIDIA GPU with Compute Capability 7.0 or higher, current GPU is: {paddle.device.cuda.get_device_name()}, with Compute Capability: {prop[0]}.{prop[1]}."
                     )
                     enable = False
                 elif (dtype == 'bfloat16') and not _is_gpu_bfloat16_supported():
                     prop = paddle.device.cuda.get_device_capability()
                     cuda_version = paddle.version.cuda()
                     warnings.warn(
-                        "For bfloat16, amp only support NVIDIA GPU with Compute Capability 8.0 or higher and CUDA Version 11.0 or higher, current GPU is: %s, with Compute Capability: %d.%d, current CUDA Version is: %s."
-                        % (
-                            paddle.device.cuda.get_device_name(),
-                            prop[0],
-                            prop[1],
-                            cuda_version,
-                        )
+                        f"For bfloat16, amp only support NVIDIA GPU with Compute Capability 8.0 or higher and CUDA Version 11.0 or higher, current GPU is: {paddle.device.cuda.get_device_name()}, with Compute Capability: {prop[0]}.{prop[1]}, current CUDA Version is: {cuda_version}."
                     )
                     enable = False
 
@@ -664,6 +654,24 @@ def amp_guard(
             amp_global_state().use_master_grad
             and not amp_global_state().already_register_final_backward_hook
         ):
+
+            def _dtensor_from_local(local_tensor, mesh, placements):
+                global_dims = list(local_tensor.shape)
+                for idx, placement in enumerate(placements):
+                    if placement.is_shard():
+                        global_dims[placement.get_dim()] = (
+                            global_dims[placement.get_dim()] * mesh.shape[idx]
+                        )
+                place = paddle.framework._current_expected_place()
+                place = paddle.framework._get_paddle_place(place)
+
+                return paddle.Tensor(
+                    local_tensor,
+                    dims=global_dims,
+                    process_mesh=mesh,
+                    placements=placements,
+                    place=place,
+                )
 
             def master_grad_hook():
                 # NOTE(lizhiyu): To support semi-auto of dygraph mode, we must
@@ -685,15 +693,63 @@ def amp_guard(
                                 ].append(param)
                     amp_global_state().already_classify_params_meshes = True
 
-                if len(amp_global_state().mesh2params):
-                    for _, params in amp_global_state().mesh2params.items():
-                        core.eager.set_master_grads(params)
-                else:
-                    core.eager.set_master_grads(
-                        amp_global_state().model_parameters
-                    )
+                if os.getenv("FLAGS_enable_tensor_fusion") not in [
+                    "True",
+                    "true",
+                    "1",
+                ] and os.getenv("FLAGS_enable_main_grad") not in [
+                    "True",
+                    "true",
+                    "1",
+                ]:
+                    if len(amp_global_state().mesh2params):
+                        for _, params in amp_global_state().mesh2params.items():
+                            core.eager.set_master_grads(params)
+                    else:
+                        core.eager.set_master_grads(
+                            amp_global_state().model_parameters
+                        )
 
                 amp_global_state().already_register_final_backward_hook = False
+
+            def _update_main_grad_hook(param):
+                @paddle.autograd.no_grad()
+                def param_hook(tmp_grad):
+                    if tmp_grad is not None and tmp_grad._is_initialized():
+                        if param.main_grad is None:
+                            tmp = core.eager.Tensor(
+                                value=tmp_grad._local_value()
+                                .cast(paddle.float32)
+                                .value(),
+                                place=tmp_grad.place,
+                                name="main_grad@" + param.name,
+                            )
+                            param.main_grad = _dtensor_from_local(
+                                tmp,
+                                tmp_grad.process_mesh,
+                                tmp_grad.placements,
+                            )
+                        else:
+                            param.main_grad._local_value().add_(
+                                tmp_grad._local_value()
+                            )
+                        tmp_grad._clear_data()
+
+                return param_hook
+
+            if os.getenv("FLAGS_enable_tensor_fusion") in [
+                "True",
+                "true",
+                "1",
+            ] or os.getenv("FLAGS_enable_main_grad") in [
+                "True",
+                "true",
+                "1",
+            ]:
+                for param in amp_global_state().model_parameters:
+                    if not hasattr(param, "main_grad"):
+                        param.main_grad = None
+                        param._register_grad_hook(_update_main_grad_hook(param))
 
             core.eager._add_backward_final_hook(master_grad_hook)
             amp_global_state().already_register_final_backward_hook = True
@@ -745,12 +801,13 @@ class StateDictHook:
         self._save_dtype = save_dtype
 
     def __call__(self, state_dict: _StateDict) -> None:
-        for key in state_dict:
-            param = state_dict[key]
-            if paddle.is_floating_point(param):
-                param_applied = paddle.cast(param, self._save_dtype)
-                param_applied.name = param.name
-                state_dict[key] = param_applied
+        with paddle.base.framework._dygraph_guard(paddle.base.dygraph.Tracer()):
+            for key in state_dict:
+                param = state_dict[key]
+                if paddle.is_floating_point(param):
+                    param_applied = paddle.cast(param, self._save_dtype)
+                    param_applied.name = param.name
+                    state_dict[key] = param_applied
 
 
 def _set_multi_precision(
@@ -784,8 +841,7 @@ def amp_decorate(
     excluded_layers: (
         Layer | list[Layer | type[Layer]] | type[Layer] | None
     ) = ...,
-) -> tuple[_ModelsT, _OptimizersT]:
-    ...
+) -> tuple[_ModelsT, _OptimizersT]: ...
 
 
 @overload
@@ -800,8 +856,7 @@ def amp_decorate(
     excluded_layers: (
         Layer | list[Layer | type[Layer]] | type[Layer] | None
     ) = ...,
-) -> _ModelsT:
-    ...
+) -> _ModelsT: ...
 
 
 @dygraph_only
@@ -1022,7 +1077,7 @@ def auto_cast(
     level: _AmpLevelLiteral = 'O1',
     dtype: _DTypeLiteral = 'float16',
     use_promote: bool = True,
-) -> ContextManager:
+) -> AbstractContextManager:
     """
     Create a context which enables auto-mixed-precision(AMP) of operators executed in dynamic graph mode.
     If enabled, the input data type (float32, float16 or bfloat16) of each operator is decided
@@ -1111,8 +1166,7 @@ def decorate(
     excluded_layers: (
         Layer | list[Layer | type[Layer]] | type[Layer] | None
     ) = ...,
-) -> tuple[_ModelsT, _OptimizersT]:
-    ...
+) -> tuple[_ModelsT, _OptimizersT]: ...
 
 
 @overload
@@ -1127,8 +1181,7 @@ def decorate(
     excluded_layers: (
         Layer | list[Layer | type[Layer]] | type[Layer] | None
     ) = ...,
-) -> _ModelsT:
-    ...
+) -> _ModelsT: ...
 
 
 def decorate(
@@ -1218,6 +1271,7 @@ def decorate(
     if paddle.framework.in_pir_mode():
         assert not isinstance(models, (list, tuple))
         assert not isinstance(optimizers, (list, tuple))
+        amp_global_state().use_master_grad = master_grad
         if level in ['O0', 'OD', 'O1']:
             if optimizers is None:
                 return models

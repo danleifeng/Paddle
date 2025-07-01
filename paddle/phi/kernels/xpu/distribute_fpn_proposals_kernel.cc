@@ -41,7 +41,7 @@ static void Sort(const XPUContext& dev_ctx,
   DenseTensor index_t;
   index_t.Resize({value.numel()});
   int* index = dev_ctx.template HostAlloc<int>(&index_t);
-  for (int i = 0; i < value.numel(); ++i) {
+  for (int64_t i = 0; i < value.numel(); ++i) {
     index[i] = i;
   }
 
@@ -106,7 +106,7 @@ void DistributeFpnProposalsKernel(
     rois_lod_vec[i] = static_cast<int>(fpn_rois_lod[i]);
   }
   xpu::VectorParam<int> rois_lod = {
-      rois_lod_vec.data(), static_cast<int>(rois_lod_vec.size()), nullptr};
+      rois_lod_vec.data(), static_cast<int64_t>(rois_lod_vec.size()), nullptr};
 
   int r = xpu::distribute_fpn_proposals_helper<XPUType, int>(
       dev_ctx.x_context(),
@@ -146,11 +146,11 @@ void DistributeFpnProposalsKernel(
       multi_fpn_rois[i]->Resize({sub_rois_num, funcs::kBoxDim});
       dev_ctx.template Alloc<T>(multi_fpn_rois[i]);
 
-      std::vector<int> fpn_rois_shape(fpn_rois.dims().size());
+      std::vector<int64_t> fpn_rois_shape(fpn_rois.dims().size());
       for (int i = 0; i < fpn_rois.dims().size(); ++i) {
         fpn_rois_shape[i] = fpn_rois.dims()[i];
       }
-      int r1 = xpu::gather<XPUType, int>(
+      int r1 = xpu::paddle_gather<XPUType, int>(
           dev_ctx.x_context(),
           reinterpret_cast<const XPUType*>(fpn_rois.data<T>()),
           sub_idx.data<int>(),
@@ -158,7 +158,7 @@ void DistributeFpnProposalsKernel(
           fpn_rois_shape,
           sub_idx.numel(),
           0);
-      PADDLE_ENFORCE_XDNN_SUCCESS(r1, "gather");
+      PADDLE_ENFORCE_XDNN_SUCCESS(r1, "paddle_gather");
     } else {
       multi_fpn_rois[i]->Resize({sub_rois_num, funcs::kBoxDim});
       dev_ctx.template Alloc<T>(multi_fpn_rois[i]);

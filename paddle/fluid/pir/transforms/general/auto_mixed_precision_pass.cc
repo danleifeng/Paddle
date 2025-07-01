@@ -25,6 +25,7 @@
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/pir/dialect/operator/ir/control_flow_op.h"
+#include "paddle/fluid/pir/dialect/operator/ir/manual_op.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_attribute.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
@@ -47,6 +48,7 @@
 #include "paddle/pir/include/core/parameter.h"
 #include "paddle/pir/include/core/program.h"
 #include "paddle/pir/include/pass/pass.h"
+#include "paddle/pir/include/pass/pass_registry.h"
 #include "paddle/pir/include/pattern_rewrite/frozen_rewrite_pattern_set.h"
 #include "paddle/pir/include/pattern_rewrite/pattern_match.h"
 #include "paddle/pir/include/pattern_rewrite/pattern_rewrite_driver.h"
@@ -61,8 +63,6 @@ class AutoMixedPrecisionPass : public pir::Pass {
         precision_mode_(phi::DataType::FLOAT16),
         enable_low_precision_io_(false),
         context_(nullptr),
-        black_list_(),
-        white_list_(),
         op_run_low_precision_(),
         op_should_not_handle_(),
         cached_cast_ops_() {}
@@ -71,41 +71,64 @@ class AutoMixedPrecisionPass : public pir::Pass {
     PADDLE_ENFORCE_EQ(
         Has(pir::Pass::kPlaceAttr),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Pass initialize failed."
             "When using AutoMixedPrecisionPass, place attribute is required!"
             "Use Set method to set the place attribute."));
     PADDLE_ENFORCE_EQ(
-        Has("__mixed_precision_mode__"),
+        Has("mixed_precision_mode"),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Pass initialize failed."
             "When using AutoMixedPrecisionPass, precision_mode attribute is "
             "required!"
             "Use Set method to set the scope attribute."));
 
+    PADDLE_ENFORCE_EQ(Has("enable_low_precision_io"),
+                      true,
+                      common::errors::InvalidArgument(
+                          "Pass initialize failed."
+                          "When using AutoMixedPrecisionPass, "
+                          "enable_low_precision_io attribute is "
+                          "required!"
+                          "Use Set method to set the scope attribute."));
+
+    PADDLE_ENFORCE_EQ(
+        Has("mixed_black_list"),
+        true,
+        common::errors::InvalidArgument(
+            "Pass initialize failed."
+            "When using AutoMixedPrecisionPass, mixed_black_list attribute is "
+            "required!"
+            "Use Set method to set the scope attribute."));
+
+    PADDLE_ENFORCE_EQ(
+        Has("mixed_white_list"),
+        true,
+        common::errors::InvalidArgument(
+            "Pass initialize failed."
+            "When using AutoMixedPrecisionPass, mixed_white_list attribute is "
+            "required!"
+            "Use Set method to set the scope attribute."));
+
     place_ = Get<phi::Place>(pir::Pass::kPlaceAttr);
-    precision_mode_ = Get<phi::DataType>("__mixed_precision_mode__");
+    precision_mode_ = Get<phi::DataType>("mixed_precision_mode");
     context_ = context;
-    enable_low_precision_io_ = false;
+    enable_low_precision_io_ = Get<bool>("enable_low_precision_io");
+    black_list_ = Get<std::unordered_set<std::string>>("mixed_black_list");
+    white_list_ = Get<std::unordered_set<std::string>>("mixed_white_list");
     SetDefaultBlacklist();
     return true;
   }
 
   void Run(pir::Operation* op) override {
-    for (size_t i = 0; i < op->num_regions(); ++i) {
-      auto& region = op->region(i);
-      for (auto& block : region) {
-        GetOpPrecision(&block);
-        UpdateOpPrecision(&block);
-        pir::Builder builder = pir::Builder(context_, &block);
-        ProcessBlock(&block, builder);
-      }
-    }
+    SubBlockRun(op->GetParentProgram()->block());
+    AddStatistics(op_run_low_precision_.size());
   }
 
   bool CanApplyOn(pir::Operation* op) const override {
-    return op->num_regions() > 0 && place_ == paddle::PlaceType::kGPU &&
+    return op->num_regions() > 0 && op->isa<pir::ModuleOp>() &&
+           place_ == paddle::PlaceType::kGPU &&
            (precision_mode_ == phi::DataType::FLOAT16 ||
             precision_mode_ == phi::DataType::BFLOAT16);
   }
@@ -134,6 +157,7 @@ class AutoMixedPrecisionPass : public pir::Pass {
         paddle::dialect::SumOp::name(),
         paddle::dialect::SigmoidCrossEntropyWithLogitsOp::name(),
         paddle::dialect::CrossEntropyWithSoftmax_Op::name(),
+        paddle::dialect::ArrayToTensorOp::name(),
     });
   }
 
@@ -164,6 +188,10 @@ class AutoMixedPrecisionPass : public pir::Pass {
         auto backend = ConvertPlaceToBackend(place_);
         support_low_precision =
             OpSupportPrecision(op_type, backend, precision_mode_);
+        if (op->isa<paddle::dialect::ScaleOp>() && !OpHasFloatResult(op)) {
+          support_low_precision = false;
+          op_should_not_handle_.insert(op);
+        }
       } else {  // pd op without float result
         support_low_precision = false;
         op_should_not_handle_.insert(op);
@@ -380,21 +408,7 @@ class AutoMixedPrecisionPass : public pir::Pass {
     auto type = result.type();
     if (type.isa<paddle::dialect::DenseTensorType>()) {
       auto dense_type = type.dyn_cast<paddle::dialect::DenseTensorType>();
-      auto new_type = paddle::dialect::DenseTensorType::get(
-          context,
-          paddle::dialect::TransToIrDataType(precision, context),
-          dense_type.dims(),
-          dense_type.data_layout(),
-          dense_type.lod(),
-          dense_type.offset());
-      result.set_type(new_type);
-    } else if (type.isa<pir::VectorType>()) {
-      auto vec_type = type.dyn_cast<pir::VectorType>();
-      auto output_num = vec_type.size();
-      std::vector<pir::Type> results_type(output_num);
-      for (size_t idx = 0; idx < output_num; ++idx) {
-        auto dense_type =
-            vec_type[idx].dyn_cast<paddle::dialect::DenseTensorType>();
+      if (IsDenseTensorTypeFloat(dense_type)) {
         auto new_type = paddle::dialect::DenseTensorType::get(
             context,
             paddle::dialect::TransToIrDataType(precision, context),
@@ -402,12 +416,32 @@ class AutoMixedPrecisionPass : public pir::Pass {
             dense_type.data_layout(),
             dense_type.lod(),
             dense_type.offset());
-        results_type[idx] = new_type;
+        result.set_type(new_type);
+      }
+    } else if (type.isa<pir::VectorType>()) {
+      auto vec_type = type.dyn_cast<pir::VectorType>();
+      auto output_num = vec_type.size();
+      std::vector<pir::Type> results_type(output_num);
+      for (size_t idx = 0; idx < output_num; ++idx) {
+        auto dense_type =
+            vec_type[idx].dyn_cast<paddle::dialect::DenseTensorType>();
+        if (IsDenseTensorTypeFloat(dense_type)) {
+          auto new_type = paddle::dialect::DenseTensorType::get(
+              context,
+              paddle::dialect::TransToIrDataType(precision, context),
+              dense_type.dims(),
+              dense_type.data_layout(),
+              dense_type.lod(),
+              dense_type.offset());
+          results_type[idx] = new_type;
+        } else {
+          results_type[idx] = dense_type;
+        }
       }
       auto new_vec_type = pir::VectorType::get(context, results_type);
       result.set_type(new_vec_type);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "result type is not DenseTensorType or VectorType"));
     }
   }
@@ -436,8 +470,10 @@ class AutoMixedPrecisionPass : public pir::Pass {
       if (result.type().isa<paddle::dialect::DenseTensorType>() &&
           IsDenseTensorTypeFloat(
               result.type().dyn_cast<paddle::dialect::DenseTensorType>())) {
+        return true;
       } else if (result.type().isa<pir::VectorType>() &&
                  IsVectorTypeFloat(result.type().dyn_cast<pir::VectorType>())) {
+        return true;
       }
     }
     return false;
@@ -479,6 +515,9 @@ class AutoMixedPrecisionPass : public pir::Pass {
   bool IsOperandHasDenseTensorType(pir::OpOperand operand) const {
     return operand.type() &&
            operand.type().isa<paddle::dialect::DenseTensorType>();
+  }
+  bool IsOperandHasDenseTensorVectorType(pir::OpOperand operand) const {
+    return operand.type() && operand.type().isa<pir::VectorType>();
   }
 
   void DoInsertCastOp(pir::Operation* op,
@@ -585,14 +624,13 @@ class AutoMixedPrecisionPass : public pir::Pass {
       SetResultDataType(op->result(0), precision_mode_, builder.ir_context());
       return;
     }
-
     // Other pd ops
     if (OpRunLowPrecision(op)) {
       auto phi_kernel =
           GetPhiKernelInPrecision(op_type, backend, precision_mode_);
       PADDLE_ENFORCE(
           phi_kernel.IsValid(),
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "op [%s] kernel doesn't support precision [%s] on backend [%s]",
               op->name(),
               phi::DataTypeToString(precision_mode_).c_str(),
@@ -608,7 +646,9 @@ class AutoMixedPrecisionPass : public pir::Pass {
         auto in_phi_dtype = input_defs[i].dtype;
         if (!IsOperandHasDenseTensorType(operand)) continue;
         auto operand_phi_dtype = GetPhiDataTypeFromOpOperand(operand);
-        if (IsPhiDataTypeFloat(operand_phi_dtype) &&
+
+        if (!InputVarsNotConvert(op, i) &&
+            IsPhiDataTypeFloat(operand_phi_dtype) &&
             operand_phi_dtype != in_phi_dtype) {
           DoInsertCastOp(op, operand, in_phi_dtype, builder);
         }
@@ -637,7 +677,7 @@ class AutoMixedPrecisionPass : public pir::Pass {
       PADDLE_ENFORCE_EQ(
           op->num_results(),
           output_defs.size(),
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "op [%s] kernel output args defs should equal op outputs",
               op->name()));
 
@@ -650,7 +690,10 @@ class AutoMixedPrecisionPass : public pir::Pass {
         if (!IsPhiDataTypeFloat(out_phi_dtype))
           continue;  // here handle op like "unequal", which has bool result
                      // type
-        SetResultDataType(result, out_phi_dtype, builder.ir_context());
+
+        if (!OutputVarsNotConvert(op, i)) {
+          SetResultDataType(result, out_phi_dtype, builder.ir_context());
+        }
       }
     } else {
       // current op doesn't support low precision
@@ -658,14 +701,174 @@ class AutoMixedPrecisionPass : public pir::Pass {
       auto phi_dtype = phi::DataType::FLOAT32;
       for (size_t i = 0; i < op->num_operands(); i++) {
         auto operand = op->operand(i);
-        if (!IsOperandHasDenseTensorType(operand)) continue;
-        auto operand_phi_dtype = GetPhiDataTypeFromOpOperand(operand);
-        if (IsPhiDataTypeFloat(operand_phi_dtype) &&
-            operand_phi_dtype == precision_mode_) {
-          DoInsertCastOp(op, operand, phi_dtype, builder);
+        if (IsOperandHasDenseTensorType(operand)) {
+          auto operand_phi_dtype = GetPhiDataTypeFromOpOperand(operand);
+          if (IsPhiDataTypeFloat(operand_phi_dtype) &&
+              operand_phi_dtype == precision_mode_) {
+            if (IsFakeFullOperandWhileOp(op, operand)) {
+              SetFakeFullDataType(operand, builder);
+              continue;
+            }
+            DoInsertCastOp(op, operand, phi_dtype, builder);
+          }
+        } else if (IsOperandHasDenseTensorVectorType(operand)) {
+          auto defining_op_ = operand.source().defining_op();
+          if (defining_op_->isa<pir::CombineOp>()) {
+            auto input_num = defining_op_->num_operands();
+            for (size_t i = 0; i < input_num; ++i) {
+              auto operand = defining_op_->operand(i);
+              auto operand_phi_dtype = GetPhiDataTypeFromOpOperand(operand);
+              if (IsPhiDataTypeFloat(operand_phi_dtype) &&
+                  operand_phi_dtype != phi::DataType::FLOAT32) {
+                DoInsertCastOp(
+                    defining_op_, operand, phi::DataType::FLOAT32, builder);
+              }
+            }
+            std::vector<pir::Type> inputs_type(input_num);
+            for (size_t idx = 0; idx < input_num; ++idx) {
+              inputs_type[idx] = defining_op_->operand(idx).type();
+            }
+            auto new_vec_type =
+                pir::VectorType::get(builder.ir_context(), inputs_type);
+            defining_op_->result(0).set_type(new_vec_type);
+          }
+        } else {
+          continue;
         }
       }
     }
+  }
+
+  std::vector<int64_t> ConvertDDimToVector(const common::DDim& ddim) {
+    std::vector<int64_t> dims;
+    for (int i = 0; i < ddim.size(); ++i) {
+      dims.push_back(ddim[i]);
+    }
+    return dims;
+  }
+
+  bool IsFakeFullOp(pir::OpOperand operand) {
+    auto defining_op_ = operand.source().defining_op();
+    if (defining_op_->isa<paddle::dialect::FullOp>()) {
+      auto full_op = defining_op_->dyn_cast<paddle::dialect::FullOp>();
+      auto shape_attr = full_op.attribute("shape")
+                            .dyn_cast<paddle::dialect::IntArrayAttribute>();
+      auto shape_dims = shape_attr.data().GetData();
+      auto result_dims = full_op.out()
+                             .type()
+                             .dyn_cast<paddle::dialect::DenseTensorType>()
+                             .dims();
+      std::vector<int64_t> result_dims_vec = ConvertDDimToVector(result_dims);
+
+      if (shape_dims.size() != result_dims_vec.size()) {
+        return true;
+      }
+      for (size_t i = 0; i < shape_dims.size(); ++i) {
+        if (shape_dims[i] != result_dims_vec[i]) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return false;
+  }
+
+  bool IsFakeFullOperandWhileOp(pir::Operation* op, pir::OpOperand operand) {
+    return op->isa<paddle::dialect::WhileOp>() && IsFakeFullOp(operand);
+  }
+
+  void SetFakeFullDataType(pir::OpOperand operand,
+                           pir::Builder& builder) {  // NOLINT
+    auto defining_op_ = operand.source().defining_op();
+    auto full_op = defining_op_->dyn_cast<paddle::dialect::FullOp>();
+    pir::Attribute attr_dtype = paddle::dialect::DataTypeAttribute::get(
+        builder.ir_context(), phi::DataType::FLOAT32);
+    full_op->set_attribute("dtype", attr_dtype);
+
+    SetResultDataType(
+        full_op.out(), phi::DataType::FLOAT32, builder.ir_context());
+  }
+
+  void SubOpRun(pir::Operation* op) {
+    for (auto& region : *op) {
+      for (auto& block : region) {
+        SubBlockRun(&block);  // subblock
+      }
+    }
+  }
+
+  void SubBlockRun(pir::Block* block) {
+    GetOpPrecision(block);
+    UpdateOpPrecision(block);
+    pir::Builder builder = pir::Builder(context_, block);
+    ProcessBlock(block, builder);
+    cached_cast_ops_.clear();
+    op_should_not_handle_.clear();
+    for (auto& op : *block) {
+      SubOpRun(&op);
+    }
+  }
+
+  bool InputVarsNotConvert(pir::Operation* op, size_t index) {
+    const std::unordered_map<std::string,
+                             std::vector<std::pair<size_t, std::string>>>
+        op_input_indices = {
+            {"pd_op.batch_norm",
+             {{1, "mean"}, {2, "variance"}, {3, "scale"}, {4, "bias"}}},
+            {"pd_op.instance_norm", {{1, "scale"}, {2, "bias"}}},
+            {"pd_op.layer_norm", {{1, "scale"}, {2, "bias"}}},
+            {"pd_op.fused_multi_transformer",
+             {{1, "ln_scales"},
+              {2, "ln_biases"},
+              {14, "ffn_ln_scales"},
+              {15, "ffn_ln_biases"}}},
+            {"pd_op.fused_bias_dropout_residual_layer_norm",
+             {{3, "ln_scale"}, {4, "ln_bias"}}},
+            {"pd_op.quantize_linear", {{1, "scale"}, {2, "zero_point"}}},
+            {"pd_op.dequantize_linear", {{1, "scale"}, {2, "zero_point"}}}};
+
+    auto it = op_input_indices.find(op->name());
+    if (it != op_input_indices.end()) {
+      const auto& index_pairs = it->second;
+      for (const auto& [idx, param_name] : index_pairs) {
+        if (idx == index) {
+          VLOG(5) << "Skipping input conversion for operation: " << op->name()
+                  << ", parameter index: " << index
+                  << ", parameter name: " << param_name;
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  bool OutputVarsNotConvert(pir::Operation* op, size_t index) {
+    const std::unordered_map<std::string,
+                             std::vector<std::pair<size_t, std::string>>>
+        op_output_indices = {
+            {"pd_op.batch_norm",
+             {{1, "mean_out"},
+              {2, "variance_out"},
+              {3, "saved_mean"},
+              {4, "saved_variance"}}},
+            {"pd_op.layer_norm", {{1, "mean"}, {2, "variance"}}},
+            {"pd_op.instance_norm", {{1, "mean"}, {2, "variance"}}}};
+
+    auto it = op_output_indices.find(op->name());
+    if (it != op_output_indices.end()) {
+      const auto& index_pairs = it->second;
+      for (const auto& [idx, param_name] : index_pairs) {
+        if (idx == index) {
+          VLOG(5) << "Skipping output conversion for operation: " << op->name()
+                  << ", parameter index: " << index
+                  << ", parameter name: " << param_name;
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 };
 }  // namespace
@@ -677,3 +880,5 @@ std::unique_ptr<Pass> CreateAutoMixedPrecisionPass() {
 }
 
 }  // namespace pir
+
+REGISTER_IR_PASS(auto_mixed_precision_pass, AutoMixedPrecisionPass);

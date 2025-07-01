@@ -16,10 +16,9 @@
 #include "paddle/fluid/framework/data_feed_factory.h"
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/framework/trainer.h"
-#include "paddle/fluid/framework/trainer_desc.pb.h"
+#include "paddle/phi/core/framework/trainer_desc.pb.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void PipelineTrainer::Initialize(const TrainerDesc& trainer_desc,
                                  Dataset* dataset) {
@@ -92,7 +91,7 @@ void PipelineTrainer::InitTrainerEnv(const ProgramDesc& main_program,
                                      const phi::Place& place) {
   PADDLE_ENFORCE_NOT_NULL(
       root_scope_,
-      phi::errors::InvalidArgument("root_scope_ can not be nullptr"));
+      common::errors::InvalidArgument("root_scope_ can not be nullptr"));
   microbatch_scopes_.resize(num_microbatches_);
 
   VLOG(3) << "Create minibatch and microbatch scopes...";
@@ -142,6 +141,5 @@ Scope* PipelineTrainer::GetWorkerScope(int thread_id) {
   return microbatch_scopes_[0];
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

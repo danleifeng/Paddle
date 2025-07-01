@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Tuple
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -51,7 +51,7 @@ SETID_MD5 = 'a5357ecc9cb78c4bef273ce3793fc85c'
 MODE_FLAG_MAP = {'train': 'tstid', 'test': 'trnid', 'valid': 'valid'}
 
 
-class Flowers(Dataset[Tuple["_ImageDataType", "npt.NDArray[np.int64]"]]):
+class Flowers(Dataset[tuple["_ImageDataType", "npt.NDArray[np.int64]"]]):
     """
     Implementation of `Flowers102 <https://www.robots.ox.ac.uk/~vgg/data/flowers/>`_
     dataset.
@@ -181,7 +181,9 @@ class Flowers(Dataset[Tuple["_ImageDataType", "npt.NDArray[np.int64]"]]):
         self.data_path = data_file.replace(".tgz", "/")
         if not os.path.exists(self.data_path):
             os.mkdir(self.data_path)
-        data_tar.extractall(self.data_path)
+        jpg_path = os.path.join(self.data_path, "jpg")
+        if not os.path.exists(jpg_path):
+            data_tar.extractall(self.data_path)
 
         scio = try_import('scipy.io')
         self.labels = scio.loadmat(label_file)['labels'][0]
@@ -192,7 +194,7 @@ class Flowers(Dataset[Tuple["_ImageDataType", "npt.NDArray[np.int64]"]]):
     ) -> tuple[_ImageDataType, npt.NDArray[np.int64]]:
         index = self.indexes[idx]
         label = np.array([self.labels[index - 1]])
-        img_name = "jpg/image_%05d.jpg" % index
+        img_name = f"jpg/image_{index:05}.jpg"
         image = os.path.join(self.data_path, img_name)
         if self.backend == 'pil':
             image = Image.open(image)

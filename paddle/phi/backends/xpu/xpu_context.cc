@@ -14,6 +14,12 @@
 
 #include "paddle/phi/backends/xpu/xpu_context.h"
 
+#ifdef PADDLE_WITH_XPU
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include "paddle/phi/core/xpu_cuda_stream.h"
+#endif
+
 #include <memory>
 
 #include "glog/logging.h"
@@ -28,6 +34,10 @@
 #include "xpu/runtime.h"
 #include "xpu/runtime_ex.h"
 #include "xpu/xdnn.h"
+
+#if !defined(PADDLE_WITH_XPU_KP) || defined(__xpu_on_host__)
+#include "unsupported/Eigen/CXX11/Tensor"
+#endif
 
 namespace xpu = baidu::xpu::api;
 
@@ -125,11 +135,11 @@ struct XPUContext::Impl {
   void Wait() {
     backends::xpu::XPUDeviceGuard guard(place_.GetDeviceId());
     PD_CHECK(context_ != nullptr, "the xpu context is nullptr.");
-    xpu_wait(context_->xpu_stream);
+    PADDLE_ENFORCE_XRE_SUCCESS(xpu_wait(context_->xpu_stream));
     xpu::Context* ctx_t = GetXdlCtx();
     if (ctx_t) {
       PD_CHECK(ctx_t != nullptr, "the xpu context is nullptr.");
-      xpu_wait(ctx_t->xpu_stream);
+      PADDLE_ENFORCE_XRE_SUCCESS(xpu_wait(ctx_t->xpu_stream));
     }
 
     ClearStashedMemory();
@@ -220,7 +230,7 @@ struct XPUContext::Impl {
   void SetXContext(xpu::Context* context) {
     if (context_ != nullptr) {
       backends::xpu::XPUDeviceGuard guard(place_.GetDeviceId());
-      xpu_wait(context_->xpu_stream);
+      PADDLE_ENFORCE_XRE_SUCCESS(xpu_wait(context_->xpu_stream));
       if (context_->xpu_stream != nullptr && stream_owned_) {
         xpu_stream_destroy(context_->xpu_stream);
         stream_owned_ = false;
@@ -381,7 +391,7 @@ void XPUContext::CheckValidStreamId(int i) const {
   PADDLE_ENFORCE_LT(
       i,
       GetStreamNum(),
-      errors::InvalidArgument("The stream index shoule be less than the number "
+      errors::InvalidArgument("The stream index should be less than the number "
                               "of stream used (%d), but got %d",
                               GetStreamNum(),
                               i));
@@ -471,4 +481,21 @@ void XPUContext::AddStashedMemory(int stream, const DenseTensor& tensor) {
 }
 
 void XPUContext::Init() { impls_[0]->Init(); }
+
+#if defined(PADDLE_WITH_XPU)
+XPUPinnedContext::XPUPinnedContext() {
+  eigen_device_ = std::make_unique<Eigen::DefaultDevice>();
+}
+
+XPUPinnedContext::XPUPinnedContext(XPUPinnedPlace place) : place_(place) {
+  eigen_device_ = std::make_unique<Eigen::DefaultDevice>();
+}
+
+Eigen::DefaultDevice* XPUPinnedContext::eigen_device() const {
+  return eigen_device_.get();
+}
+
+const Place& XPUPinnedContext::GetPlace() const { return place_; }
+#endif
+
 }  // namespace phi

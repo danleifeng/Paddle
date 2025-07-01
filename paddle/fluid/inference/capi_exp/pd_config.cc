@@ -19,16 +19,16 @@
 #include "paddle/fluid/inference/capi_exp/utils_internal.h"
 #include "paddle/fluid/platform/enforce.h"
 
-#define CHECK_NULL_POINTER_PARM(param)                      \
-  PADDLE_ENFORCE_NOT_NULL(                                  \
-      param,                                                \
-      phi::errors::InvalidArgument("The pointer of " #param \
-                                   " shouldn't be nullptr"))
+#define CHECK_NULL_POINTER_PARAM(param)                        \
+  PADDLE_ENFORCE_NOT_NULL(                                     \
+      param,                                                   \
+      common::errors::InvalidArgument("The pointer of " #param \
+                                      " shouldn't be nullptr"))
 
 #define CHECK_AND_CONVERT_PD_CONFIG                              \
   PADDLE_ENFORCE_NOT_NULL(                                       \
       pd_config,                                                 \
-      phi::errors::InvalidArgument(                              \
+      common::errors::InvalidArgument(                           \
           "The pointer of paddle config shouldn't be nullptr")); \
   Config* config = reinterpret_cast<Config*>(pd_config)
 
@@ -43,8 +43,8 @@ static Config::Precision ConvertToCxxPrecisionType(PD_PrecisionType precision) {
     case PD_PRECISION_HALF:
       return Config::Precision::kHalf;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
-          "Unsupport paddle precision type %d.", precision));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "Unsupported paddle precision type %d.", precision));
       return Config::Precision::kFloat32;
   }
 }
@@ -64,33 +64,33 @@ void PD_ConfigSetModel(__pd_keep PD_Config* pd_config,
                        const char* prog_file_path,
                        const char* params_file_path) {
   CHECK_AND_CONVERT_PD_CONFIG;
-  CHECK_NULL_POINTER_PARM(prog_file_path);
-  CHECK_NULL_POINTER_PARM(params_file_path);
+  CHECK_NULL_POINTER_PARAM(prog_file_path);
+  CHECK_NULL_POINTER_PARAM(params_file_path);
   config->SetModel(prog_file_path, params_file_path);
 }
 void PD_ConfigSetProgFile(__pd_keep PD_Config* pd_config,
                           const char* prog_file_path) {
   CHECK_AND_CONVERT_PD_CONFIG;
-  CHECK_NULL_POINTER_PARM(prog_file_path);
+  CHECK_NULL_POINTER_PARAM(prog_file_path);
   config->SetProgFile(prog_file_path);
 }
 void PD_ConfigSetParamsFile(__pd_keep PD_Config* pd_config,
                             const char* params_file_path) {
   CHECK_AND_CONVERT_PD_CONFIG;
-  CHECK_NULL_POINTER_PARM(params_file_path);
+  CHECK_NULL_POINTER_PARAM(params_file_path);
   config->SetParamsFile(params_file_path);
 }
 void PD_ConfigSetOptimCacheDir(__pd_keep PD_Config* pd_config,
                                const char* opt_cache_dir) {
   CHECK_AND_CONVERT_PD_CONFIG;
-  CHECK_NULL_POINTER_PARM(opt_cache_dir);
+  CHECK_NULL_POINTER_PARAM(opt_cache_dir);
   config->SetOptimCacheDir(opt_cache_dir);
 }
 
 void PD_ConfigSetModelDir(__pd_keep PD_Config* pd_config,
                           const char* model_dir) {
   CHECK_AND_CONVERT_PD_CONFIG;
-  CHECK_NULL_POINTER_PARM(model_dir);
+  CHECK_NULL_POINTER_PARAM(model_dir);
   config->SetModel(model_dir);
 }
 const char* PD_ConfigGetModelDir(__pd_keep PD_Config* pd_config) {
@@ -396,10 +396,7 @@ void PD_ConfigSetMkldnnOp(__pd_keep PD_Config* pd_config,
   }
   config->SetMKLDNNOp(std::move(op_names));
 }
-void PD_ConfigEnableMkldnnQuantizer(__pd_keep PD_Config* pd_config) {
-  CHECK_AND_CONVERT_PD_CONFIG;
-  config->EnableMkldnnQuantizer();
-}
+
 void PD_ConfigEnableMkldnnBfloat16(__pd_keep PD_Config* pd_config) {
   CHECK_AND_CONVERT_PD_CONFIG;
   config->EnableMkldnnBfloat16();
@@ -430,10 +427,7 @@ PD_Bool PD_ConfigThreadLocalStreamEnabled(__pd_keep PD_Config* pd_config) {
   CHECK_AND_CONVERT_PD_CONFIG;
   return config->thread_local_stream_enabled();  // NOLINT
 }
-PD_Bool PD_ConfigMkldnnQuantizerEnabled(__pd_keep PD_Config* pd_config) {
-  CHECK_AND_CONVERT_PD_CONFIG;
-  return config->mkldnn_quantizer_enabled();  // NOLINT
-}
+
 void PD_ConfigSetModelBuffer(__pd_keep PD_Config* pd_config,
                              const char* prog_buffer,
                              size_t prog_buffer_size,

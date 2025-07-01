@@ -17,8 +17,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/node.h"
 #include "paddle/phi/common/port.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void save_string(std::string content,
                  std::string type,
@@ -30,7 +29,7 @@ void save_string(std::string content,
   PADDLE_ENFORCE_EQ(
       static_cast<bool>(fout),
       true,
-      phi::errors::Unavailable("Cannot open %s to save ", saved_path));
+      common::errors::Unavailable("Cannot open %s to save ", saved_path));
   fout << content;
   fout.close();
 }
@@ -45,7 +44,7 @@ void save_graph_compilation_key(int64_t graph_compilation_key,
   PADDLE_ENFORCE_EQ(
       static_cast<bool>(fout),
       true,
-      phi::errors::Unavailable("Cannot open %s to save ", saved_path));
+      common::errors::Unavailable("Cannot open %s to save ", saved_path));
   fout << std::to_string(graph_compilation_key);
   fout.close();
 }
@@ -67,7 +66,7 @@ void save_graph(const ir::Graph& graph,
   PADDLE_ENFORCE_EQ(
       static_cast<bool>(fout),
       true,
-      phi::errors::Unavailable("Cannot open %s to save ", saved_path));
+      common::errors::Unavailable("Cannot open %s to save ", saved_path));
   // record all nodes[var, op]
   // format
   int index = 0;
@@ -113,5 +112,4 @@ void save_runtime_cinn_graph(const ir::Graph& graph,
   save_graph(graph, "graph", saved_path + "/subgraph.txt");
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

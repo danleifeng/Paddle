@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import os
 import unittest
 
 import numpy as np
@@ -36,7 +37,7 @@ class ModelHyperParams:
     # paddle.dataset.wmt16 in which <bos>, <eos> and <unk> token has
     # already been added, but the <pad> token is not added. Transformer requires
     # sequences in a mini-batch are padded to have the same length. A <pad> token is
-    # added into the original dictionary in paddle.dateset.wmt16.
+    # added into the original dictionary in paddle.dataset.wmt16.
 
     # size of source word dictionary.
     src_vocab_size = 10000
@@ -392,7 +393,13 @@ class TestProgramPruneBackward(unittest.TestCase):
 
         self.program_compare(test_prog_orig, test_prog_prune)
 
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
 
@@ -572,10 +579,12 @@ class TestProgramPruneBackward(unittest.TestCase):
         prog = base.Program()
         startup_prog = base.Program()
         scope = base.core.Scope()
-        with base.scope_guard(scope):
-            with base.program_guard(prog, startup_prog):
-                with base.unique_name.guard():
-                    yield
+        with (
+            base.scope_guard(scope),
+            base.program_guard(prog, startup_prog),
+            base.unique_name.guard(),
+        ):
+            yield
 
 
 if __name__ == '__main__':

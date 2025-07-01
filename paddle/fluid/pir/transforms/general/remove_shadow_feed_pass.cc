@@ -50,7 +50,7 @@ phi::Place GetVarPlace(const paddle::framework::Variable *var,
                        const phi::Place &exe_place) {
   phi::Place place;
   auto &tensor = var->Get<T>();
-  if (tensor.initialized()) {
+  if (tensor.has_allocation()) {
     place = tensor.place();
   } else {
     place = exe_place;
@@ -78,15 +78,28 @@ class RemoveShadowFeedPattern
   bool IsSamePlaceShadowFeed(paddle::dialect::PhiKernelOp op) const {
     if (op.op_name() == "pd_op.shadow_feed") {
       auto in = op.operand_source(0);
-      if (!kwargs_map_.count(in)) {
-        return false;
-      }
-      auto in_name = kwargs_map_.at(in);
-      auto *var = scope_->FindVar(in_name);
+      auto *var = [&]() -> paddle::framework::Variable * {
+        auto *defined_op = in.defining_op();
+        if (defined_op && defined_op->isa<paddle::dialect::PhiKernelOp>()) {
+          if (defined_op->dyn_cast<paddle::dialect::PhiKernelOp>()
+                  .kernel_name() != "data")
+            return nullptr;
+          const auto &name = defined_op->attributes()
+                                 .at("name")
+                                 .dyn_cast<pir::StrAttribute>()
+                                 .AsString();
+          return scope_->FindVar(name);
+        }
+        if (kwargs_map_.count(in)) {
+          const auto &name = kwargs_map_.at(in);
+          return scope_->FindVar(name);
+        }
+        return nullptr;
+      }();
       if (!var) {
         return false;
       }
-      phi::Place var_place;
+      phi::Place var_place, dst_place;
       if (var->IsType<phi::DenseTensor>()) {
         var_place = GetVarPlace<phi::DenseTensor>(var, place_);
       } else if (var->IsType<phi::SelectedRows>()) {
@@ -95,11 +108,20 @@ class RemoveShadowFeedPattern
         var_place =
             GetVarPlace<paddle::framework::VariableRefArray>(var, place_);
       } else {
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(common::errors::InvalidArgument(
             "RemoveShadowFeedPattern only support output "
             "variable of type DenseTensor, SelectedRows or VariableRefArray"));
       }
-      return var_place == place_;
+
+      int dst_place_type =
+          op.attribute("dst_place_type").dyn_cast<pir::Int32Attribute>().data();
+      if (dst_place_type == 0) {
+        dst_place = phi::CPUPlace();
+      } else {
+        dst_place = place_;
+      }
+
+      return var_place == dst_place;
     }
     return false;
   }
@@ -181,21 +203,21 @@ class RemoveShadowFeedPass : public pir::PatternRewritePass {
       PADDLE_ENFORCE_EQ(
           Has("top_block"),
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Pass initialize failed."
               "When using RemoveShadowFeedPass, block attribute is required!"
               "Use Set method to set the place attribute."));
       PADDLE_ENFORCE_EQ(
           Has(pir::Pass::kPlaceAttr),
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Pass initialize failed."
               "When using RemoveShadowFeedPass, place attribute is required!"
               "Use Set method to set the place attribute."));
       PADDLE_ENFORCE_EQ(
           Has(pir::Pass::kParamScopeAttr),
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Pass initialize failed."
               "When using RemoveShadowFeedPass, scope attribute is required!"
               "Use Set method to set the scope attribute."));
@@ -204,9 +226,9 @@ class RemoveShadowFeedPass : public pir::PatternRewritePass {
       auto scope =
           &Get<const paddle::framework::Scope>(pir::Pass::kParamScopeAttr);
       PADDLE_ENFORCE_NOT_NULL(
-          block, phi::errors::InvalidArgument("block can not be nullptr"));
+          block, common::errors::InvalidArgument("block can not be nullptr"));
       PADDLE_ENFORCE_NOT_NULL(
-          scope, phi::errors::InvalidArgument("scope can not be nullptr"));
+          scope, common::errors::InvalidArgument("scope can not be nullptr"));
 
       ps.Add<RemoveShadowFeedPattern>(context, block, place, scope);
     }

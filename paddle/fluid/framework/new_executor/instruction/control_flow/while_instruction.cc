@@ -23,10 +23,10 @@
 #include "paddle/fluid/pir/dialect/operator/interface/op_yaml_info.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
-#include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/core/meta_tensor.h"
+#include "paddle/phi/core/platform/collective_helper.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/core/type_defs.h"
 
 #include "paddle/pir/include/core/builtin_attribute.h"
@@ -42,8 +42,9 @@
 #include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
-namespace paddle {
-namespace framework {
+COMMON_DECLARE_bool(check_cuda_error);
+
+namespace paddle::framework {
 
 WhileInstruction::WhileInstruction(
     size_t id,
@@ -57,7 +58,7 @@ WhileInstruction::WhileInstruction(
       body_inter_(nullptr),
       external_input_names_() {
   PADDLE_ENFORCE(op->isa<paddle::dialect::WhileOp>(),
-                 phi::errors::PreconditionNotMet(
+                 common::errors::PreconditionNotMet(
                      "While instruction only support While op"));
   op_ = op;
   auto while_op = op->dyn_cast<paddle::dialect::WhileOp>();
@@ -103,7 +104,7 @@ WhileInstruction::WhileInstruction(
       PADDLE_ENFORCE_NE(
           parent_exe_info->GetValue2VarName().find(value),
           parent_exe_info->GetValue2VarName().end(),
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "output should in name map, [%d] 'th output of [%s] op",
               i,
               "while op"));
@@ -111,7 +112,7 @@ WhileInstruction::WhileInstruction(
       outputs.emplace(value, outputs_id);
     }
   }
-  InsertTuplePushContinerToOuts(body_block_, *parent_exe_info, &outputs);
+  InsertTuplePushContainerToOuts(body_block_, *parent_exe_info, &outputs);
   InsertInplacedExternalInputsToOuts(
       body_block_, body_outside_inputs, *parent_exe_info, &outputs);
   SetOutputs(outputs);
@@ -164,8 +165,8 @@ void WhileInstruction::ShareInputsToOutputs() {
       auto* output_array = outputs_[i]->GetMutable<phi::TensorArray>();
       *output_array = input_array;
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented("unsupported type %d",
-                                              inputs_[i]->Type()));
+      PADDLE_THROW(common::errors::Unimplemented("unsupported type %d",
+                                                 inputs_[i]->Type()));
     }
   }
 }
@@ -186,8 +187,8 @@ void WhileInstruction::ShareOutputsToBlockArgs() {
       VLOG(10) << inner_var
                << " should be created: " << inner_var->IsInitialized();
     } else {
-      PADDLE_THROW(
-          phi::errors::Unimplemented("unsupported type %d", inner_var->Type()));
+      PADDLE_THROW(common::errors::Unimplemented("unsupported type %d",
+                                                 inner_var->Type()));
     }
   }
 }
@@ -213,6 +214,10 @@ void WhileInstruction::CheckGCEarly(const CheckGCEarlyHook& check_gc_early) {
 }
 
 void WhileInstruction::Run() {
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("WhileInstruction begin");
+  }
+
 #ifdef PADDLE_WITH_DNNL
   // Executor on being destroyed clears oneDNN cache and resets
   // registered model data layout. This is unwanted for nested
@@ -235,7 +240,10 @@ void WhileInstruction::Run() {
     ShareConditionData();
   }
   VLOG(6) << "while instruction run done";
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("WhileInstruction finish");
+  }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

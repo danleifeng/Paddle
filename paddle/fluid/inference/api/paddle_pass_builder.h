@@ -24,7 +24,7 @@
 ///
 /// \file paddle_pass_builder.h
 ///
-/// \brief Class Paddle Passs Builder and its subclasses(pass strategies).
+/// \brief Class Paddle Pass Builder and its subclasses(pass strategies).
 /// \section sec_intro Introduction
 /// This class aims to build passes for paddle and define passes' strategies.
 ///
@@ -102,7 +102,7 @@ class PD_INFER_DECL PaddlePassBuilder {
   std::vector<std::string> AnalysisPasses() const {
     auto passes = analysis_passes_;
     // To make sure the ir_graph_to_program should be the last pass so any
-    // modication of IR will persist to the program.
+    // modification of IR will persist to the program.
     passes.push_back("ir_graph_to_program_pass");
     return passes;
   }
@@ -146,9 +146,6 @@ class PD_INFER_DECL PassStrategy : public PaddlePassBuilder {
 
   /// \brief Disable the use of OneDNN.
   virtual void DisableMKLDNN() {}
-
-  /// \brief Enable OneDNN quantize optimization.
-  virtual void EnableMkldnnQuantizer() {}
 
   /// \brief Enable OneDNN bfloat16.
   virtual void EnableMkldnnBfloat16() {}
@@ -202,7 +199,6 @@ class PD_INFER_DECL CpuPassStrategy : public PassStrategy {
       : PassStrategy(other.AllPasses()) {
     use_gpu_ = other.use_gpu_;
     use_mkldnn_ = other.use_mkldnn_;
-    use_mkldnn_quantizer_ = other.use_mkldnn_quantizer_;
     use_mkldnn_bfloat16_ = other.use_mkldnn_bfloat16_;
     use_mkldnn_int8_ = other.use_mkldnn_int8_;
     disable_mkldnn_fc_passes_ = other.disable_mkldnn_fc_passes_;
@@ -220,9 +216,6 @@ class PD_INFER_DECL CpuPassStrategy : public PassStrategy {
   /// \brief Disable the use of OneDNN.
   void DisableMKLDNN() override;
 
-  /// \brief Enable OneDNN quantize optimization.
-  void EnableMkldnnQuantizer() override;
-
   /// \brief Enable OneDNN bfloat16.
   void EnableMkldnnBfloat16() override;
 
@@ -237,7 +230,6 @@ class PD_INFER_DECL CpuPassStrategy : public PassStrategy {
   void EraseFcMkldnnPasses();
 
   /// \cond Protected
-  bool use_mkldnn_quantizer_{false};
   bool use_mkldnn_bfloat16_{false};
   bool use_mkldnn_int8_{false};
   bool disable_mkldnn_fc_passes_{false};
@@ -266,9 +258,6 @@ class PD_INFER_DECL GpuPassStrategy : public PassStrategy {
 
   /// \brief Not supported in GPU mode yet.
   void EnableMKLDNN() override;
-
-  /// \brief Not supported in GPU mode yet.
-  void EnableMkldnnQuantizer() override;
 
   /// \brief Not supported in GPU mode yet.
   void EnableMkldnnBfloat16() override;
@@ -335,6 +324,11 @@ class PD_INFER_DECL IpuPassStrategy final : public PassStrategy {
   }
 };
 
+#ifdef PADDLE_WITH_OPENVINO
+/// \brief List of OpenVINO subgraph passes.
+PD_INFER_DECL extern const std::vector<std::string> kOVSubgraphPasses;
+#endif
+
 /// \brief List of tensorRT subgraph passes.
 PD_INFER_DECL extern const std::vector<std::string> kTRTSubgraphPasses;
 
@@ -347,9 +341,11 @@ PD_INFER_DECL extern const std::vector<std::string> kCINNCompilerPasses;
 PD_INFER_DECL extern const std::vector<std::string> kGpuLowerPrecisionPasses;
 PD_INFER_DECL extern const std::vector<std::string> kTrtLowerPrecisionPasses;
 
+PD_INFER_DECL extern const std::vector<std::string> kPirCustomDevicePasses;
 PD_INFER_DECL extern const std::vector<std::string> kPirGpuPasses;
 PD_INFER_DECL extern const std::vector<std::string> kPirCpuPasses;
 PD_INFER_DECL extern const std::vector<std::string> kPirXpuPasses;
 PD_INFER_DECL extern const std::vector<std::string> kPirMkldnnPasses;
+PD_INFER_DECL extern const std::vector<std::string> kPirMkldnnBf16Passes;
 
 }  // namespace paddle

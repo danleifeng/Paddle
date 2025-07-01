@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle import base, tensor
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestUnbind(unittest.TestCase):
@@ -34,7 +33,6 @@ class TestUnbind(unittest.TestCase):
     def init_dtype(self):
         self.dtype = 'float32'
 
-    @test_with_pir_api
     def test_unbind(self):
         paddle.enable_static()
         self.init_dtype()
@@ -56,7 +54,6 @@ class TestUnbind(unittest.TestCase):
             np.testing.assert_array_equal(res_1, self.input_1[0, 0:100])
             np.testing.assert_array_equal(res_2, self.input_1[1, 0:100])
 
-    @test_with_pir_api
     def test_unbind_static_fp16_gpu(self):
         if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
@@ -123,7 +120,6 @@ class TestLayersUnbind(unittest.TestCase):
     def init_dtype(self):
         self.dtype = 'float32'
 
-    @test_with_pir_api
     def test_layers_unbind(self):
         paddle.enable_static()
         prog = paddle.static.Program()
@@ -183,11 +179,11 @@ class TestUnbindOp(OpTest):
         self.attrs = {'axis': self.axis}
         self.setAxis()
         self.outputs = {
-            'Out': [('out%d' % i, self.out[i]) for i in range(len(self.out))]
+            'Out': [(f'out{i}', self.out[i]) for i in range(len(self.out))]
         }
         self.python_api = paddle.unbind
         self.public_python_api = paddle.unbind
-        self.python_out_sig = ['out%d' % i for i in range(len(self.out))]
+        self.python_out_sig = [f'out{i}' for i in range(len(self.out))]
 
     def get_dtype(self):
         return "float64"
@@ -342,9 +338,9 @@ class TestUnbindFP16Op(OpTest):
         self.inputs = {'X': x}
         self.attrs = {'axis': self.axis}
         self.outputs = {
-            'Out': [('out%d' % i, self.out[i]) for i in range(len(self.out))]
+            'Out': [(f'out{i}', self.out[i]) for i in range(len(self.out))]
         }
-        self.python_out_sig = ['out%d' % i for i in range(len(self.out))]
+        self.python_out_sig = [f'out{i}' for i in range(len(self.out))]
 
     def outReshape(self):
         self.out[0] = self.out[0].reshape((2, 2))
@@ -375,11 +371,11 @@ class TestUnbindBF16Op(OpTest):
         self.attrs = {'axis': self.axis}
         self.outputs = {
             'Out': [
-                ('out%d' % i, convert_float_to_uint16(self.out[i]))
+                (f'out{i}', convert_float_to_uint16(self.out[i]))
                 for i in range(len(self.out))
             ]
         }
-        self.python_out_sig = ['out%d' % i for i in range(len(self.out))]
+        self.python_out_sig = [f'out{i}' for i in range(len(self.out))]
 
     def outReshape(self):
         self.out[0] = self.out[0].reshape((2, 2))
@@ -403,7 +399,6 @@ class TestUnbindAxisError(unittest.TestCase):
     def setUp(self):
         self.dtype = 'float32'
 
-    @test_with_pir_api
     def test_errors(self):
         paddle.enable_static()
 

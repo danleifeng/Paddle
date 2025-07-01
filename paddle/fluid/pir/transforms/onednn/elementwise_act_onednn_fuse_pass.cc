@@ -32,7 +32,8 @@ std::string GetFusedElement(const std::string &elementwise_type) {
   if (it != fused_ops.end()) {
     return it->second;
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented("The op type is not supported."));
+    PADDLE_THROW(
+        common::errors::Unimplemented("The op type is not supported."));
   }
 }
 class ElementwiseActivationFusePattern : public paddle::drr::DrrPatternBase {
@@ -260,7 +261,7 @@ class ElementwiseClipFusePattern : public paddle::drr::DrrPatternBase {
 class ElementwiseActFusePass : public pir::PatternRewritePass {
  public:
   ElementwiseActFusePass()
-      : pir::PatternRewritePass("elementwise_act_onednn_fuse_pass", 3) {}
+      : pir::PatternRewritePass("elementwise_act_onednn_fuse_pass", 2) {}
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);

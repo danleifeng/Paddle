@@ -34,7 +34,7 @@ template <int ComputeCapability,
           typename Output,
           typename IntT>
 void GatherGemmScatterDriver(
-    const phi::GPUContext& ctx,
+    const phi::GPUContext& dev_ctx,
     const size_t key,
     const Input* const a,
     const Input* const b,
@@ -49,9 +49,9 @@ void GatherGemmScatterDriver(
     Output alpha,
     Output beta,
     cutlass::device_memory::allocation<uint8_t>* const workspace_ptr) {
-  PADDLE_THROW(
-      phi::errors::Unimplemented("gather_gemm_scatter fusion only supports "
-                                 "fp16_nn, fp32_nn, fp32_nt and fp32_tn now."));
+  PADDLE_THROW(common::errors::Unimplemented(
+      "gather_gemm_scatter fusion only supports "
+      "fp16_nn, fp32_nn, fp32_nt and fp32_tn now."));
 }
 
 #define EXPLICIT_SPECIALIZE_GATHER_GEMM_SCATTER_DRIVER(                       \
@@ -63,7 +63,7 @@ void GatherGemmScatterDriver(
                                       in_type,                                \
                                       out_type,                               \
                                       int32_t>(                               \
-      const phi::GPUContext& ctx,                                             \
+      const phi::GPUContext& dev_ctx,                                         \
       const size_t key,                                                       \
       const in_type* const a,                                                 \
       const in_type* const b,                                                 \
@@ -82,11 +82,11 @@ void GatherGemmScatterDriver(
         autotune::MakeGatherGemmScatterTuner<transpose_a, transpose_b>(       \
             kernels[0]);                                                      \
     for (auto i = 1; i < kernels.size(); i++) tuner->AddCallBack(kernels[i]); \
-    tuner->Run(ctx,                                                           \
+    tuner->Run(dev_ctx,                                                       \
                key,                                                           \
                alpha,                                                         \
                beta,                                                          \
-               ctx,                                                           \
+               dev_ctx,                                                       \
                a,                                                             \
                b,                                                             \
                c,                                                             \

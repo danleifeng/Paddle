@@ -50,7 +50,7 @@ static pybind11::bytes SerializeMessage(
   std::string retv;
   PADDLE_ENFORCE_EQ(self.Proto()->SerializePartialToString(&retv),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Failed to serialize input Desc to string."));
   return retv;
 }
@@ -77,7 +77,7 @@ pybind11::bytes SerializeProgramDesc(
 
   PADDLE_ENFORCE_EQ(copy.Proto()->SerializePartialToString(&retv),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Failed to serialize input Desc to string."));
   return retv;
 }
@@ -87,7 +87,7 @@ static void DeserializeMessage(T *self, const std::string &str) {
   PADDLE_ENFORCE_EQ(
       self->Proto()->ParsePartialFromString(str),
       true,
-      phi::errors::InvalidArgument("Failed to parse pb from string"));
+      common::errors::InvalidArgument("Failed to parse pb from string"));
   return;
 }
 
@@ -123,7 +123,7 @@ void BindProgramDesc(pybind11::module *m) {
              PADDLE_ENFORCE_EQ(
                  desc->ParseFromString(data),
                  true,
-                 phi::errors::InvalidArgument(
+                 common::errors::InvalidArgument(
                      "Failed to parse ProgramDesc from binary string."));
            })
       .def(
@@ -251,6 +251,12 @@ void BindVarDesc(pybind11::module *m) {
            pybind11::return_value_policy::reference)
       .def("set_lod_level", &pd::VarDesc::SetLoDLevel)
       .def("set_lod_levels", &pd::VarDesc::SetLoDLevels)
+      .def("legacy_lod_level", &pd::VarDesc::GetLegacyLoDLevel)
+      .def("legacy_lod_levels",
+           &pd::VarDesc::GetLegacyLoDLevels,
+           pybind11::return_value_policy::reference)
+      .def("set_legacy_lod_level", &pd::VarDesc::SetLegacyLoDLevel)
+      .def("set_legacy_lod_levels", &pd::VarDesc::SetLegacyLoDLevels)
       .def("type", &pd::VarDesc::GetType)
       .def("set_type", &pd::VarDesc::SetType)
       .def("serialize_to_string", SerializeMessage<pd::VarDesc>)
@@ -295,13 +301,12 @@ void BindVarDesc(pybind11::module *m) {
       .value("COMPLEX128", pd::proto::VarType::COMPLEX128)
       .value("FP8_E4M3FN", pd::proto::VarType::FP8_E4M3FN)
       .value("FP8_E5M2", pd::proto::VarType::FP8_E5M2)
-      .value("LOD_TENSOR", pd::proto::VarType::LOD_TENSOR)
+      .value("DENSE_TENSOR", pd::proto::VarType::DENSE_TENSOR)
       .value("SELECTED_ROWS", pd::proto::VarType::SELECTED_ROWS)
       .value("FEED_MINIBATCH", pd::proto::VarType::FEED_MINIBATCH)
       .value("FETCH_LIST", pd::proto::VarType::FETCH_LIST)
       .value("STEP_SCOPES", pd::proto::VarType::STEP_SCOPES)
-      .value("LOD_RANK_TABLE", pd::proto::VarType::LOD_RANK_TABLE)
-      .value("LOD_TENSOR_ARRAY", pd::proto::VarType::LOD_TENSOR_ARRAY)
+      .value("DENSE_TENSOR_ARRAY", pd::proto::VarType::DENSE_TENSOR_ARRAY)
       .value("PLACE_LIST", pd::proto::VarType::PLACE_LIST)
       .value("READER", pd::proto::VarType::READER)
       .value("RAW", pd::proto::VarType::RAW)

@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <utility>
 
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/context.h"
 #include "paddle/cinn/common/ir_util.h"
 #include "paddle/cinn/hlir/op/op_util.h"
@@ -25,6 +24,7 @@
 #include "paddle/cinn/hlir/pe/schedule.h"
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/lang/compute.h"
+#include "paddle/cinn/optim/ir_simplify.h"
 #include "paddle/cinn/utils/string.h"
 #include "paddle/common/enforce.h"
 #include "paddle/common/errors.h"
@@ -40,13 +40,19 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
     const std::vector<std::vector<int>>& inputs_shape,
     bool trans_x,
     bool trans_y) {
-  PADDLE_ENFORCE_EQ(
-      inputs_shape.size(),
-      2UL,
-      phi::errors::InvalidArgument("The matmul should only have two inputs."));
+  PADDLE_ENFORCE_EQ(inputs_shape.size(),
+                    2UL,
+                    ::common::errors::InvalidArgument(
+                        "The matmul should only have two inputs."));
   const auto &x_shape = inputs_shape[0], &y_shape = inputs_shape[1];
-  CHECK(!x_shape.empty()) << "The shape of matmul input 'x' should not empty.";
-  CHECK(!y_shape.empty()) << "The shape of matmul input 'y' should not empty.";
+  PADDLE_ENFORCE_EQ(!x_shape.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The shape of matmul input 'x' should not empty."));
+  PADDLE_ENFORCE_EQ(!y_shape.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The shape of matmul input 'y' should not empty."));
 
   auto matmul_info = [&]() {
     std::stringstream ss;
@@ -70,7 +76,7 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
   auto get_input_shape = [out_dim](const std::vector<int>& old_shape) {
     PADDLE_ENFORCE_GE(old_shape.size(),
                       2UL,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The shape of matmul input should greater equal 2"));
     std::vector<int> res;
     res.resize(out_dim, 1);
@@ -85,10 +91,12 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
 
   if (max_dim == 1) {
     // vector * vector
-    CHECK(x_shape[0] == y_shape[0])
-        << "The matmul input X's numbers must be equal to Y's numbers,when "
-           "X/Y's dims =1. But here "
-        << matmul_info();
+    PADDLE_ENFORCE_EQ(x_shape[0] == y_shape[0],
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The matmul input X's numbers must be equal to Y's "
+                          "numbers,when X/Y's dims =1. But here %s.",
+                          matmul_info()));
 
     new_x_shape = trans_x ? std::vector<int>{x_shape[0], 1}
                           : std::vector<int>{1, x_shape[0]};
@@ -101,7 +109,7 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
     int y_K = trans_y ? y_shape[max_dim - 1] : y_shape[max_dim - 2];
     PADDLE_ENFORCE_EQ(y_K,
                       x_shape[0],
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The K dimension of Y should equal to X.shape[0]"));
 
     // set x shape for broadcast
@@ -131,7 +139,7 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
     int x_K = trans_x ? x_shape[max_dim - 2] : x_shape[max_dim - 1];
     PADDLE_ENFORCE_EQ(x_K,
                       y_shape[0],
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The K dimension of X should equal to Y.shape[0]"));
 
     // set y shape for broadcast
@@ -159,10 +167,10 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
     // matrix * matrix
     int x_K = trans_x ? x_shape[x_dim - 2] : x_shape[x_dim - 1];
     int y_K = trans_y ? y_shape[y_dim - 1] : y_shape[y_dim - 2];
-    PADDLE_ENFORCE_EQ(
-        x_K,
-        y_K,
-        phi::errors::InvalidArgument("The K dimension of matmul not equal."));
+    PADDLE_ENFORCE_EQ(x_K,
+                      y_K,
+                      ::common::errors::InvalidArgument(
+                          "The K dimension of matmul not equal."));
 
     // [c, m] * [a, b, m, d] -> [1, c, m] * [a*b, m, d]
     new_x_shape = get_input_shape(x_shape);
@@ -181,10 +189,13 @@ std::vector<std::vector<int>> GetMatmulNewShapes(
     // get the batch dimension after broadcast
     int x_pos = x_dim - 3, y_pos = y_dim - 3, out_pos = max_dim - 3;
     while (x_pos >= 0 && y_pos >= 0) {
-      CHECK(x_shape[x_pos] == y_shape[y_pos] || x_shape[x_pos] == 1 ||
-            y_shape[y_pos] == 1)
-          << "Input X and Y's batch dimension should be same or 1. But here "
-          << matmul_info();
+      PADDLE_ENFORCE_EQ(
+          x_shape[x_pos] == y_shape[y_pos] || x_shape[x_pos] == 1 ||
+              y_shape[y_pos] == 1,
+          true,
+          ::common::errors::InvalidArgument("Input X and Y's batch dimension "
+                                            "should be same or 1. But here %s.",
+                                            matmul_info()));
 
       out_shape[out_pos] =
           (x_shape[x_pos] == 1) ? y_shape[y_pos] : x_shape[x_pos];
@@ -210,13 +221,19 @@ std::vector<std::vector<int>> GetMulNewShapes(
     int x_num_col_dims,
     int y_num_col_dims,
     bool is_infer) {
-  PADDLE_ENFORCE_EQ(
-      inputs_shape.size(),
-      2UL,
-      phi::errors::InvalidArgument("The mul should only have two inputs."));
+  PADDLE_ENFORCE_EQ(inputs_shape.size(),
+                    2UL,
+                    ::common::errors::InvalidArgument(
+                        "The mul should only have two inputs."));
   const auto &x_shape = inputs_shape[0], &y_shape = inputs_shape[1];
-  CHECK(!x_shape.empty()) << "The shape of mul input 'x' should not empty.";
-  CHECK(!y_shape.empty()) << "The shape of mul input 'y' should not empty.";
+  PADDLE_ENFORCE_EQ(!x_shape.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The shape of matmul input 'x' should not empty."));
+  PADDLE_ENFORCE_EQ(!y_shape.empty(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "The shape of matmul input 'y' should not empty."));
 
   auto mul_info = [&]() {
     std::stringstream ss;
@@ -243,16 +260,16 @@ std::vector<std::vector<int>> GetMulNewShapes(
       num_col_dims += shape.size();
     }
 
-    PADDLE_ENFORCE_GT(
-        num_col_dims,
-        0,
-        phi::errors::InvalidArgument("The [num_col_dims] should not be 0 in "
-                                     "mul op. Please check."));
+    PADDLE_ENFORCE_GT(num_col_dims,
+                      0,
+                      ::common::errors::InvalidArgument(
+                          "The [num_col_dims] should not be 0 in "
+                          "mul op. Please check."));
     PADDLE_ENFORCE_LT(
         num_col_dims,
         shape.size(),
-        phi::errors::InvalidArgument("The [num_col_dims] > rank(input) in "
-                                     "mul op. Please check."));
+        ::common::errors::InvalidArgument("The [num_col_dims] > rank(input) in "
+                                          "mul op. Please check."));
 
     std::vector<int> res(2, 1);
     for (int i = 0; i < num_col_dims; ++i) {
@@ -294,21 +311,30 @@ std::vector<Tensor> Matmul(const Tensor& A,
   std::vector<Expr> shape_B = B->shape;
   int a_dim = shape_A.size();
   int b_dim = shape_B.size();
-  CHECK(a_dim == 3U || a_dim == 2U)
-      << "tensor_A's dim should be 2 or 3 while current dim is " << a_dim;
-  CHECK(b_dim == 3U || b_dim == 2U)
-      << "tensor_B's dim should be 2 or 3 while current dim is " << b_dim;
+  PADDLE_ENFORCE_EQ(
+      a_dim == 3U || a_dim == 2U,
+      true,
+      ::common::errors::InvalidArgument(
+          "Tensor_A's dim should be 2 or 3 while current dim is %d.", a_dim));
+  PADDLE_ENFORCE_EQ(
+      b_dim == 3U || b_dim == 2U,
+      true,
+      ::common::errors::InvalidArgument(
+          "Tensor_B's dim should be 2 or 3 while current dim is %d.", b_dim));
   PADDLE_ENFORCE_EQ(a_dim,
                     b_dim,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "tensor_A's dim should be same with tensor_B"));
 
   Expr x_width = trans_a ? shape_A[a_dim - 2] : shape_A.back();
   Expr y_height = trans_b ? shape_B.back() : shape_B[b_dim - 2];
   Expr M = trans_a ? shape_A.back() : shape_A[a_dim - 2];
   Expr N = trans_b ? shape_B[b_dim - 2] : shape_B.back();
-  CHECK(is_zero(x_width - y_height))
-      << "matrix multiplication requires x_width to be same with y_height";
+  PADDLE_ENFORCE_EQ(
+      is_zero(x_width - y_height),
+      true,
+      ::common::errors::InvalidArgument(
+          "Matrix multiplication requires x_width to be same with y_height."));
   std::vector<Expr> output_shape;
   std::vector<ir::Tensor> out;
   if (a_dim == 3) {
@@ -324,8 +350,12 @@ std::vector<Tensor> Matmul(const Tensor& A,
         int out_dim = indice.size();
         std::vector<Expr> A_indice;
         std::vector<Expr> B_indice;
-        CHECK(out_dim == 3U || out_dim == 2U)
-            << "indice size should be 2 or 3 while current dim is " << out_dim;
+        PADDLE_ENFORCE_EQ(
+            out_dim == 3U || out_dim == 2U,
+            true,
+            ::common::errors::InvalidArgument(
+                "Indice size should be 2 or 3 while current dim is %d.",
+                out_dim));
         if (out_dim == 3U) {
           // batch
           A_indice.push_back(indice[0]);
@@ -383,14 +413,14 @@ std::vector<ir::Tensor> Split(
   std::vector<ir::Tensor> res(output_size);
   PADDLE_ENFORCE_EQ(output_size,
                     names.size(),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "The output size should be equal to the names size."));
   for (int i = 0; i < output_size; ++i) {
     res[i] = Compute(
         out_shape[i],
         [=](const std::vector<Expr>& indice) {
           auto temp = indice;
-          temp[axis] = cinn::common::AutoSimplify(temp[axis] + Expr(start[i]));
+          temp[axis] = optim::ArithSimplify(temp[axis] + Expr(start[i]));
           return A(temp);
         },
         names[i]);
@@ -406,13 +436,13 @@ ir::Tensor Concat(const ir::Tensor& A,
   PADDLE_ENFORCE_EQ(
       A->shape.size(),
       B->shape.size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "Dimensions of inputs A and B in Concat should be equal! Please "
           "check."));
   std::vector<Expr> output_shape = A->shape;
   Expr pivot = A->shape[axis];
   output_shape[axis] =
-      cinn::common::AutoSimplify(output_shape[axis] + B->shape[axis]);
+      optim::ArithSimplify(output_shape[axis] + B->shape[axis]);
   auto res = Compute(
       output_shape,
       [=](const std::vector<Expr>& indice) {
@@ -431,24 +461,28 @@ ir::Tensor Concat(const std::vector<ir::Tensor>& input_tensors,
   int input_size = input_tensors.size();
   PADDLE_ENFORCE_GE(input_size,
                     1U,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "Concat should have at least 1 input tensors"));
   std::vector<Expr> output_shape = input_tensors[0]->shape;
   int input_dim = output_shape.size();
-  CHECK(axis >= -input_dim && axis < input_dim)
-      << "Concat's axis should be in [-R, R)"
-      << ", but get axis: " << axis << ", R: " << input_dim;
+  PADDLE_ENFORCE_EQ(
+      axis >= -input_dim && axis < input_dim,
+      true,
+      ::common::errors::InvalidArgument(
+          "Concat's axis should be in [-R, R), but get axis: %d, R: %d.",
+          axis,
+          input_dim));
   if (axis < 0) axis += output_shape.size();
 
   for (int i = 1; i < input_size; i++) {
     PADDLE_ENFORCE_EQ(
         input_tensors[i]->shape.size(),
         input_dim,
-        phi::errors::InvalidArgument(
+        ::common::errors::InvalidArgument(
             "Dimensions of inputs tensors in Concat should be equal! Please "
             "check."));
-    output_shape[axis] = cinn::common::AutoSimplify(
-        output_shape[axis] + input_tensors[i]->shape[axis]);
+    output_shape[axis] = optim::ArithSimplify(output_shape[axis] +
+                                              input_tensors[i]->shape[axis]);
   }
 
   auto res = Compute(
@@ -457,13 +491,17 @@ ir::Tensor Concat(const std::vector<ir::Tensor>& input_tensors,
         auto ret = input_tensors[0](indice);
         Expr accumulate_shape = Expr(0);
         for (int i = 0; i < input_size - 1; i++) {
-          accumulate_shape = cinn::common::AutoSimplify(
+          accumulate_shape = optim::ArithSimplify(
               accumulate_shape + input_tensors[i]->shape[axis]);
           std::vector<Expr> new_indice = indice;
-          new_indice[axis] = indice[axis] - accumulate_shape;
-          ret = ir::Select::Make(indice[axis] < accumulate_shape,
-                                 ret,
-                                 input_tensors[i + 1](new_indice));
+          new_indice[axis] =
+              ir::Cast::Make(accumulate_shape.type(), indice[axis]) -
+              accumulate_shape;
+          ret =
+              ir::Select::Make(ir::Cast::Make(accumulate_shape.type(),
+                                              indice[axis]) < accumulate_shape,
+                               ret,
+                               input_tensors[i + 1](new_indice));
         }
         return ret;
       },
@@ -482,21 +520,30 @@ std::vector<Tensor> MatmulV2(const Tensor& A,
   std::vector<Expr> shape_B = B->shape;
   int a_dim = shape_A.size();
   int b_dim = shape_B.size();
-  CHECK(a_dim == 3U || a_dim == 2U)
-      << "tensor_A's dim should be 2 or 3 while current dim is " << a_dim;
-  CHECK(b_dim == 3U || b_dim == 2U)
-      << "tensor_B's dim should be 2 or 3 while current dim is " << b_dim;
+  PADDLE_ENFORCE_EQ(
+      a_dim == 3U || a_dim == 2U,
+      true,
+      ::common::errors::InvalidArgument(
+          "Tensor_A's dim should be 2 or 3 while current dim is %d.", a_dim));
+  PADDLE_ENFORCE_EQ(
+      b_dim == 3U || b_dim == 2U,
+      true,
+      ::common::errors::InvalidArgument(
+          "Tensor_B's dim should be 2 or 3 while current dim is %d.", b_dim));
   PADDLE_ENFORCE_EQ(a_dim,
                     b_dim,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "tensor_A's dim should be same with tensor_B"));
 
   Expr x_width = trans_a ? shape_A[a_dim - 2] : shape_A.back();
   Expr y_height = trans_b ? shape_B.back() : shape_B[b_dim - 2];
   Expr M = trans_a ? shape_A.back() : shape_A[a_dim - 2];
   Expr N = trans_b ? shape_B[b_dim - 2] : shape_B.back();
-  CHECK(is_zero(x_width - y_height))
-      << "matrix multiplication requires x_width to be same with y_height";
+  PADDLE_ENFORCE_EQ(
+      is_zero(x_width - y_height),
+      true,
+      ::common::errors::InvalidArgument(
+          "Matrix multiplication requires x_width to be same with y_height."));
   Var reduce_k(x_width, UniqName("reduce_k"));
   std::vector<Expr> output_shape;
   std::vector<ir::Tensor> out;
@@ -522,7 +569,7 @@ std::vector<Tensor> MatmulV2(const Tensor& A,
         int indice_dim = indice.size();
         PADDLE_ENFORCE_GE(indice_dim,
                           3,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "packedB's dim should be at least 3."));
         if (indice_dim == 4) {
           // batch
@@ -544,8 +591,12 @@ std::vector<Tensor> MatmulV2(const Tensor& A,
         std::vector<Expr> indice_a;
         std::vector<Expr> indice_b;
         int out_dim = indice.size();
-        CHECK(out_dim == 3U || out_dim == 2U)
-            << "indice size should be 2 or 3 while current dim is " << out_dim;
+        PADDLE_ENFORCE_EQ(
+            out_dim == 3U || out_dim == 2U,
+            true,
+            ::common::errors::InvalidArgument(
+                "Indice size should be 2 or 3 while current dim is %d.",
+                out_dim));
         if (out_dim == 3) {
           // batch
           indice_a.push_back(indice[0]);
@@ -578,24 +629,32 @@ std::vector<Tensor> MatmulMKL(const Tensor& A,
                               float alpha,
                               const std::string& name,
                               const cinn::common::Target& target) {
-  CHECK(std::holds_alternative<common::X86Arch>(target.arch))
-      << "mkl should be used in the cpu environment";
+  PADDLE_ENFORCE_EQ(std::holds_alternative<common::X86Arch>(target.arch),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "Mkl should be used in the cpu environment."));
   std::vector<Expr> shape_A = A->shape;
   std::vector<Expr> shape_B = B->shape;
   int a_dim = shape_A.size();
   int b_dim = shape_B.size();
-  CHECK(a_dim == 3U || a_dim == 2U)
-      << "tensor_A's dim should be 2 or 3 while current dim is " << a_dim;
-  CHECK(b_dim == 3U || b_dim == 2U)
-      << "tensor_B's dim should be 2 or 3 while current dim is " << b_dim;
+  PADDLE_ENFORCE_EQ(
+      a_dim == 3U || a_dim == 2U,
+      true,
+      ::common::errors::InvalidArgument(
+          "Tensor_A's dim should be 2 or 3 while current dim is %d.", a_dim));
+  PADDLE_ENFORCE_EQ(
+      b_dim == 3U || b_dim == 2U,
+      true,
+      ::common::errors::InvalidArgument(
+          "Tensor_B's dim should be 2 or 3 while current dim is %d.", b_dim));
   PADDLE_ENFORCE_EQ(a_dim,
                     b_dim,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "tensor_A's dim should be same with tensor_B"));
   if (a_dim == 3U) {
     PADDLE_ENFORCE_EQ(shape_A.front(),
                       shape_B.front(),
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "tensor A and B's batch size should be same."));
   }
 
@@ -603,8 +662,11 @@ std::vector<Tensor> MatmulMKL(const Tensor& A,
   Expr y_height = trans_b ? shape_B.back() : shape_B[b_dim - 2];
   Expr M = trans_a ? shape_A.back() : shape_A[a_dim - 2];
   Expr N = trans_b ? shape_B[b_dim - 2] : shape_B.back();
-  CHECK(is_zero(x_width - y_height))
-      << "matrix multiplication requires x_width to be same with y_height";
+  PADDLE_ENFORCE_EQ(
+      is_zero(x_width - y_height),
+      true,
+      ::common::errors::InvalidArgument(
+          "Matrix multiplication requires x_width to be same with y_height."));
 
   ir::Tensor call;
   if (a_dim == 2U) {
@@ -691,18 +753,18 @@ std::vector<Tensor> MulBaseCallImpl(common::X86Arch,
   PADDLE_ENFORCE_EQ(
       A->shape.size(),
       2U,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "tensor_A's shape size should be two while current shape size is %d",
           A->shape.size()));
   PADDLE_ENFORCE_EQ(
       B->shape.size(),
       2U,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "tensor_B's shape size should be two while current shape size is %d",
           B->shape.size()));
   PADDLE_ENFORCE_EQ(A->shape[1],
                     B->shape[1],
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "tensor_A's last shape should be same with tensor_B"));
   output_shape.push_back(A->shape[0]);
   output_shape.push_back(B->shape[0]);
@@ -718,7 +780,7 @@ std::vector<Tensor> MulBaseCallImpl(common::X86Arch,
         PADDLE_ENFORCE_EQ(
             indice.size(),
             3U,
-            phi::errors::InvalidArgument(
+            ::common::errors::InvalidArgument(
                 "indice size should be three while current size is %d",
                 indice.size()));
         return lang::ReduceSum(
@@ -757,18 +819,18 @@ std::vector<Tensor> MulBaseCallImplNvHygon(const Tensor& A,
   PADDLE_ENFORCE_EQ(
       A->shape.size(),
       2U,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "tensor_A's shape size should be two while current shape size is %d",
           A->shape.size()));
   PADDLE_ENFORCE_EQ(
       B->shape.size(),
       2U,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "tensor_B's shape size should be two while current shape size is %d",
           B->shape.size()));
   PADDLE_ENFORCE_EQ(A->shape[1],
                     B->shape[1],
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "tensor_A's last shape should be same with tensor_B"));
   output_shape.push_back(A->shape[0]);
   output_shape.push_back(B->shape[0]);
@@ -782,7 +844,7 @@ std::vector<Tensor> MulBaseCallImplNvHygon(const Tensor& A,
         PADDLE_ENFORCE_EQ(
             indice.size(),
             2U,
-            phi::errors::InvalidArgument(
+            ::common::errors::InvalidArgument(
                 "indice size should be two while current size is %d",
                 indice.size()));
         A_indice.push_back(indice[0]);
@@ -803,6 +865,14 @@ std::vector<Tensor> MulBaseCallImpl(common::NVGPUArch,
 }
 
 std::vector<Tensor> MulBaseCallImpl(common::HygonDCUArchHIP,
+                                    const Tensor& A,
+                                    const Tensor& B,
+                                    const std::string& name,
+                                    const cinn::common::Target& target) {
+  MulBaseCallImplNvHygon(A, B, name, target);
+}
+
+std::vector<Tensor> MulBaseCallImpl(common::HygonDCUArchSYCL,
                                     const Tensor& A,
                                     const Tensor& B,
                                     const std::string& name,
@@ -854,8 +924,10 @@ std::vector<Tensor> MulMKL(const Tensor& A,
                            const Tensor& B,
                            const std::string& name,
                            const cinn::common::Target& target) {
-  CHECK(std::holds_alternative<cinn::common::X86Arch>(target.arch))
-      << "mkl should be used in the cpu environment";
+  PADDLE_ENFORCE_EQ(std::holds_alternative<cinn::common::X86Arch>(target.arch),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "Mkl should be used in the cpu environment."));
   std::vector<Expr> shape_A = A->shape;
   std::vector<Expr> shape_B = B->shape;
   int a_dim = shape_A.size();
@@ -863,13 +935,13 @@ std::vector<Tensor> MulMKL(const Tensor& A,
   PADDLE_ENFORCE_EQ(
       a_dim,
       2U,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "tensor_A's shape size should be two while current shape size is %d",
           a_dim));
   PADDLE_ENFORCE_EQ(
       b_dim,
       2U,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "tensor_B's shape size should be two while current shape size is %d",
           b_dim));
   // A: [M, K], B: [N, K]
@@ -877,11 +949,14 @@ std::vector<Tensor> MulMKL(const Tensor& A,
   Expr y_height = shape_B[1];
   Expr M = shape_A[0];
   Expr N = shape_B[0];
-  CHECK(is_zero(x_width - y_height))
-      << "matrix multiplication requires x_width to be same with y_height";
+  PADDLE_ENFORCE_EQ(
+      is_zero(x_width - y_height),
+      true,
+      ::common::errors::InvalidArgument(
+          "Matrix multiplication requires x_width to be same with y_height."));
   PADDLE_ENFORCE_EQ(A->shape[1],
                     B->shape[1],
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "tensor_A's last shape should be same with tensor_B"));
 
   auto call = Compute(
@@ -912,17 +987,17 @@ std::vector<Tensor> MulMKL(const Tensor& A,
 void GetLayoutTransformInfo(
     const ir::Layout& src_layout,
     const ir::Layout& dst_layout,
-    absl::flat_hash_map<int, std::vector<int>>* split_index_map) {
+    paddle::flat_hash_map<int, std::vector<int>>* split_index_map) {
   PADDLE_ENFORCE_GT(
       dst_layout.ndims(),
       src_layout.ndims(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "dst_layout's ndims should be larger than src_layout's ndims"));
   int offset = 'A' - 'a';
   PADDLE_ENFORCE_EQ(
       dst_layout.axis_names().size(),
       dst_layout.ndims(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "dst_layout's axis_names size should be equal to ndims"));
   for (int i = dst_layout.ndims() - 1; i >= 0; i--) {
     char axis_name = dst_layout.axis_names(i);
@@ -933,18 +1008,30 @@ void GetLayoutTransformInfo(
 
       PADDLE_ENFORCE_GT(factor,
                         0,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "sub-axis factor should be larger than 0"));
       int src_primal_index = src_layout.axis_names().find(prim_axis_name);
       int dst_primal_index = dst_layout.axis_names().find(prim_axis_name);
-      CHECK(src_primal_index != src_layout.axis_names().npos);
-      CHECK(dst_primal_index != dst_layout.axis_names().npos);
+      PADDLE_ENFORCE_EQ(
+          src_primal_index != src_layout.axis_names().npos,
+          true,
+          ::common::errors::InvalidArgument(
+              "Src primal index should not be equal to src layout npos."));
+      PADDLE_ENFORCE_EQ(
+          dst_primal_index != dst_layout.axis_names().npos,
+          true,
+          ::common::errors::InvalidArgument(
+              "Dst primal index should not be equal to dst layout npos."));
       (*split_index_map)[src_primal_index] = {dst_primal_index, i, factor};
     } else {
       int src_primal_index = src_layout.axis_names().find(prim_axis_name);
       if (split_index_map->find(src_primal_index) != split_index_map->end())
         continue;
-      CHECK(src_primal_index != src_layout.axis_names().npos);
+      PADDLE_ENFORCE_EQ(
+          src_primal_index != src_layout.axis_names().npos,
+          true,
+          ::common::errors::InvalidArgument(
+              "Src primal index should not be equal to src layout npos."));
       (*split_index_map)[src_primal_index] = {i};
     }
   }
@@ -954,30 +1041,34 @@ std::vector<Expr> InferShapeLayoutTransform(
     const std::vector<Expr>& input_shapes,
     const ir::Layout& old_layout,
     const ir::Layout& new_layout,
-    absl::flat_hash_map<int, std::vector<int>>* split_index_map) {
+    paddle::flat_hash_map<int, std::vector<int>>* split_index_map) {
   int src_dim = old_layout.ndims();
   int dst_dim = new_layout.ndims();
   std::vector<Expr> output_shape(dst_dim);
   PADDLE_ENFORCE_EQ(input_shapes.size(),
                     src_dim,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "input_shapes size should be equal to src_dim"));
 
   if (src_dim == dst_dim) {
     PADDLE_ENFORCE_EQ(old_layout.name(),
                       new_layout.name(),
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "src_layout should be equal to dst_layout"));
     return input_shapes;
   } else if (src_dim < dst_dim) {
     GetLayoutTransformInfo(old_layout, new_layout, split_index_map);
     for (int i = 0; i < src_dim; i++) {
-      CHECK(split_index_map->find(i) != split_index_map->end());
+      PADDLE_ENFORCE_EQ(
+          split_index_map->find(i) != split_index_map->end(),
+          true,
+          ::common::errors::InvalidArgument(
+              "Spilt index map found should not be equal to end."));
       if ((*split_index_map)[i].size() == 3) {
         int dst_prim_index = (*split_index_map)[i][0];
         int dst_sub_index = (*split_index_map)[i][1];
         int factor = (*split_index_map)[i][2];
-        Expr chunk_shape = cinn::common::AutoSimplify(input_shapes[i] / factor);
+        Expr chunk_shape = optim::ArithSimplify(input_shapes[i] / factor);
         Expr block_shape = Expr(factor);
         output_shape[dst_prim_index] = chunk_shape;
         output_shape[dst_sub_index] = block_shape;
@@ -989,7 +1080,11 @@ std::vector<Expr> InferShapeLayoutTransform(
   } else {
     GetLayoutTransformInfo(new_layout, old_layout, split_index_map);
     for (int i = 0; i < dst_dim; i++) {
-      CHECK(split_index_map->find(i) != split_index_map->end());
+      PADDLE_ENFORCE_EQ(
+          split_index_map->find(i) != split_index_map->end(),
+          true,
+          ::common::errors::InvalidArgument(
+              "Spilt index map found should not be equal to end."));
       if ((*split_index_map)[i].size() == 3) {
         int src_prim_index = (*split_index_map)[i][0];
         int src_sub_index = (*split_index_map)[i][1];
@@ -997,15 +1092,15 @@ std::vector<Expr> InferShapeLayoutTransform(
         PADDLE_ENFORCE_GE(
             input_shapes.size(),
             src_sub_index,
-            phi::errors::InvalidArgument(
+            ::common::errors::InvalidArgument(
                 "input_shapes size should be larger than src_sub_index"));
         PADDLE_ENFORCE_EQ(
             input_shapes[src_sub_index].as_int32(),
             factor,
-            phi::errors::InvalidArgument(
+            ::common::errors::InvalidArgument(
                 "input_shapes[src_sub_index] should be equal to factor"));
         output_shape[i] =
-            cinn::common::AutoSimplify(input_shapes[src_prim_index] * factor);
+            optim::ArithSimplify(input_shapes[src_prim_index] * factor);
       } else if ((*split_index_map)[i].size() == 1) {
         int src_prim_index = (*split_index_map)[i][0];
         output_shape[i] = input_shapes[src_prim_index];
@@ -1020,21 +1115,24 @@ ir::Tensor LayoutTransform(const Tensor& input,
                            const std::string& src_layout,
                            const std::string& dst_layout,
                            const std::string& name) {
-  CHECK(src_layout != dst_layout)
-      << "dst_layout is same with src_layout, should not do layout transform";
+  PADDLE_ENFORCE_EQ(
+      src_layout != dst_layout,
+      true,
+      ::common::errors::InvalidArgument("Dst layout is same with src_layout, "
+                                        "should not do layout transform."));
   // NCHW -> NCHWxc
   // NCHWxc -> NCHW
   // OIHW -> OIHWxixo
   // OIHWxixo -> OIHW
-  PADDLE_ENFORCE_GE(
-      src_layout.size(),
-      4U,
-      phi::errors::InvalidArgument("src_layout size should be larger than 4"));
-  PADDLE_ENFORCE_GE(
-      dst_layout.size(),
-      4U,
-      phi::errors::InvalidArgument("dst_layout size should be larger than 4"));
-  absl::flat_hash_map<int, std::vector<int>> split_index_map;
+  PADDLE_ENFORCE_GE(src_layout.size(),
+                    4U,
+                    ::common::errors::InvalidArgument(
+                        "src_layout size should be larger than 4"));
+  PADDLE_ENFORCE_GE(dst_layout.size(),
+                    4U,
+                    ::common::errors::InvalidArgument(
+                        "dst_layout size should be larger than 4"));
+  paddle::flat_hash_map<int, std::vector<int>> split_index_map;
   // transform shape
   int offset = 'A' - 'a';
   ir::Layout old_layout(src_layout);
@@ -1045,7 +1143,7 @@ ir::Tensor LayoutTransform(const Tensor& input,
       input->shape, old_layout, new_layout, &split_index_map);
   PADDLE_ENFORCE_EQ(output_shape.size(),
                     dst_dim,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "output_shape size should be equal to dst_dim"));
 
   auto res = Compute(
@@ -1055,20 +1153,22 @@ ir::Tensor LayoutTransform(const Tensor& input,
         std::vector<Expr> new_indice(src_dim);
         int min_dim = std::min(src_dim, dst_dim);
         for (int i = 0; i < min_dim; i++) {
-          CHECK(split_index_map.find(i) != split_index_map.end());
+          PADDLE_ENFORCE_EQ(
+              split_index_map.find(i) != split_index_map.end(),
+              true,
+              ::common::errors::InvalidArgument(
+                  "Spilt index map found should not be equal to end."));
           std::vector<int> split_infos = split_index_map.at(i);
           if (split_infos.size() == 3) {
             int prim_index = split_infos[0];
             int sub_index = split_infos[1];
             int factor = split_infos[2];
             if (dst_dim > src_dim) {
-              new_indice[i] = cinn::common::AutoSimplify(
-                  indice[prim_index] * factor + indice[sub_index]);
+              new_indice[i] = optim::ArithSimplify(indice[prim_index] * factor +
+                                                   indice[sub_index]);
             } else {
-              new_indice[prim_index] =
-                  cinn::common::AutoSimplify(indice[i] / factor);
-              new_indice[sub_index] =
-                  cinn::common::AutoSimplify(indice[i] % factor);
+              new_indice[prim_index] = optim::ArithSimplify(indice[i] / factor);
+              new_indice[sub_index] = optim::ArithSimplify(indice[i] % factor);
             }
 
           } else if (split_infos.size() == 1) {
@@ -1092,18 +1192,20 @@ ir::Tensor Reverse(const ir::Tensor& input,
                    const std::vector<int>& axis,
                    const std::string& output_name) {
   for (auto& val : axis) {
-    CHECK(val >= 0 && val < static_cast<int>(input->shape.size()))
-        << "axis should be [0,n_dim)";
+    PADDLE_ENFORCE_EQ(
+        val >= 0 && val < static_cast<int>(input->shape.size()),
+        true,
+        ::common::errors::InvalidArgument("Axis should be [0,n_dim)."));
   }
   std::vector<Expr> shape = input->shape;
   return lang::Compute(
       input->shape,
-      [=](const std::vector<Expr>& indice) {
-        std::vector<Expr> indexs(indice.begin(), indice.end());
+      [=](const std::vector<Expr>& indices) {
+        std::vector<Expr> out_indices(indices.begin(), indices.end());
         for (auto idx : axis) {
-          indexs[idx] = shape[idx] - Expr(1) - indexs[idx];
+          out_indices[idx] = shape[idx] - Expr(1) - out_indices[idx];
         }
-        return input(indexs);
+        return input(out_indices);
       },
       output_name);
 }
@@ -1111,25 +1213,28 @@ ir::Tensor Reverse(const ir::Tensor& input,
 ir::Tensor Transpose(const ir::Tensor& input,
                      const std::vector<int>& axis,
                      const std::string& output_name) {
-  PADDLE_ENFORCE_EQ(input->shape.size(),
-                    axis.size(),
-                    phi::errors::InvalidArgument(
-                        "input shape size and axis size is not equal!"));
+  PADDLE_ENFORCE_GE(
+      input->shape.size(),
+      axis.size(),
+      ::common::errors::InvalidArgument("input shape size should be equal to "
+                                        "or greater than the axis's size."));
   for (int idx = 0; idx < axis.size(); ++idx) {
-    CHECK(axis[idx] >= 0 && axis[idx] < axis.size())
-        << "axis value should be among [0,axis.size())";
+    PADDLE_ENFORCE_EQ(axis[idx] >= 0 && axis[idx] < axis.size(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "Axis value should be among [0,axis.size())."));
     for (int idy = idx + 1; idy < axis.size(); ++idy) {
       PADDLE_ENFORCE_NE(
           axis[idx],
           axis[idy],
-          phi::errors::InvalidArgument("axis value can't repeat!"));
+          ::common::errors::InvalidArgument("axis value can't repeat!"));
     }
   }
   // compute output shape
-  std::vector<Expr> shape = input->shape;
-  std::vector<Expr> output_shape;
+  const std::vector<Expr>& shape = input->shape;
+  std::vector<Expr> output_shape = input->shape;
   for (auto idx = 0; idx < axis.size(); ++idx) {
-    output_shape.push_back(shape[axis[idx]]);
+    output_shape[idx] = shape[axis[idx]];
   }
 
   // transpose axis to map output to input
@@ -1142,15 +1247,21 @@ ir::Tensor Transpose(const ir::Tensor& input,
       }
     }
   }
+  // If new_axis size is less than output shape, add axis to the end.
+  // For example: input shape is [2,3,4], axis is [1,0],
+  //              output_shape is [3,2,4], the new_axis is [1,0,2]
+  while (new_axis.size() < output_shape.size()) {
+    new_axis.push_back(new_axis.size());
+  }
 
   return lang::Compute(
       output_shape,
-      [=](const std::vector<Expr>& indice) {
-        std::vector<Expr> indexs;
+      [=](const std::vector<Expr>& indices) {
+        std::vector<Expr> out_indices;
         for (auto idx : new_axis) {
-          indexs.push_back(indice[idx]);
+          out_indices.push_back(indices[idx]);
         }
-        return input(indexs);
+        return input(out_indices);
       },
       output_name);
 }
@@ -1239,7 +1350,7 @@ ir::Tensor SliceSymbolic(const ir::Tensor& A,
   }
 
   std::vector<Expr> new_starts = starts;
-  std::vector<int> axes;
+  std::vector<int64_t> axes;
   std::transform(const_axes.begin(),
                  const_axes.end(),
                  std::back_inserter(axes),
@@ -1248,7 +1359,7 @@ ir::Tensor SliceSymbolic(const ir::Tensor& A,
                  });
 
   for (int i = 0; i < axes.size(); i++) {
-    if (input_shape[axes[i]].is_constant()) {
+    if (input_shape[axes[i]].is_constant() && new_starts[i].is_constant()) {
       if (new_starts[i].as_int64() < -input_shape[axes[i]].as_int64()) {
         new_starts[i] = ir::Expr(0);
       } else if (new_starts[i].as_int64() < 0) {
@@ -1256,10 +1367,20 @@ ir::Tensor SliceSymbolic(const ir::Tensor& A,
       } else if (new_starts[i].as_int64() > input_shape[axes[i]].as_int64()) {
         new_starts[i] = input_shape[axes[i]].as_int64() - ir::Expr(1);
       }
-    } else {
-      if (new_starts[i].is_constant() && new_starts[i].as_int64() < 0) {
-        new_starts[i] = ir::Add::Make(input_shape[axes[i]], new_starts[i]);
+    } else if (new_starts[i]
+                   .is_constant()) {  // input_shape[axes[i]] is not constant
+      if (new_starts[i].as_int64() < 0) {
+        new_starts[i] = ir::Max::Make(
+            Expr(0), ir::Add::Make(input_shape[axes[i]], new_starts[i]));
+      } else {
+        new_starts[i] = ir::Min::Make(input_shape[axes[i]], new_starts[i]);
       }
+    } else if (input_shape[axes[i]]
+                   .is_constant()) {  // new_starts[i] is not constant, only
+                                      // support new_starts[i] >= 0
+      new_starts[i] = ir::Min::Make(input_shape[axes[i]], new_starts[i]);
+    } else {  // both are not constant, only support new_starts[i] >= 0
+      new_starts[i] = ir::Min::Make(input_shape[axes[i]], new_starts[i]);
     }
   }
 
@@ -1303,15 +1424,15 @@ ir::Tensor SliceAssign(const ir::Tensor& input,
                        const std::string& output_name) {
   PADDLE_ENFORCE_EQ(axes.size(),
                     starts.size(),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "axes's size should be equal to starts's size"));
   PADDLE_ENFORCE_EQ(axes.size(),
                     ends.size(),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "axes's size should be equal to ends's size"));
   PADDLE_ENFORCE_EQ(axes.size(),
                     strides.size(),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "axes's size should be equal to strides's size"));
 
   std::vector<int> input_shape;
@@ -1324,14 +1445,14 @@ ir::Tensor SliceAssign(const ir::Tensor& input,
   for (int i = 0; i < axes.size(); i++) {
     PADDLE_ENFORCE_LT(axes[i],
                       input->shape.size(),
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "axes should less than input's shape size"));
 
     if (new_starts[i] < 0) {
       new_starts[i] = input_shape[axes[i]] + new_starts[i];
       PADDLE_ENFORCE_GE(new_starts[i],
                         0,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "The value of [starts] should not less than 0"));
     }
     if (new_starts[i] > input_shape[axes[i]]) {
@@ -1341,7 +1462,7 @@ ir::Tensor SliceAssign(const ir::Tensor& input,
       new_ends[i] = input_shape[axes[i]] + new_ends[i];
       PADDLE_ENFORCE_GE(new_ends[i],
                         0,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "The value of [ends] should not less than 0"));
     }
     if (new_ends[i] > input_shape[axes[i]]) {
@@ -1351,13 +1472,13 @@ ir::Tensor SliceAssign(const ir::Tensor& input,
     // if strides < 0, starts > ends, we need swap them
     PADDLE_ENFORCE_NE(strides[i],
                       0,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "[strides] should not be 0 ! Please Check."));
     if (strides[i] < 0) {
       PADDLE_ENFORCE_GT(
           new_starts[i],
           new_ends[i],
-          phi::errors::InvalidArgument(
+          ::common::errors::InvalidArgument(
               "[starts] should greater than [ends] when [strides] < 0"));
       // if strides > 0, the range is [starts, ends)
       // but if strides < 0, the range is (ends, starts]
@@ -1371,7 +1492,7 @@ ir::Tensor SliceAssign(const ir::Tensor& input,
       PADDLE_ENFORCE_LT(
           new_starts[i],
           new_ends[i],
-          phi::errors::InvalidArgument(
+          ::common::errors::InvalidArgument(
               "[starts] should less than [ends] when [strides] > 0"));
     }
   }
@@ -1419,10 +1540,10 @@ ir::Tensor Gather(const ir::Tensor& x,
                   const std::vector<Expr>& output_shape,
                   int axis,
                   const std::string& name) {
-  PADDLE_ENFORCE_EQ(
-      x->shape.size(),
-      index->shape.size(),
-      phi::errors::InvalidArgument("The rank of x and index must be same."));
+  PADDLE_ENFORCE_EQ(x->shape.size(),
+                    index->shape.size(),
+                    ::common::errors::InvalidArgument(
+                        "The rank of x and index must be same."));
   // The implementation details are explained below.
   // If output_shape = [2, 4, 3] and axis = 0, `Compute` can be translated as
   // the following code:
@@ -1488,14 +1609,14 @@ ir::Tensor Gather(const ir::Tensor& x,
           PADDLE_ENFORCE_EQ(
               index.ndims(),
               2,
-              phi::errors::InvalidArgument(
+              ::common::errors::InvalidArgument(
                   "index.ndims() should be 2 when index.ndims() is not 0 or 1"
                   "in gather_op, but received value is [%d].",
                   index.ndims()));
           PADDLE_ENFORCE_EQ(
               index->shape[1],
               Expr(1),
-              phi::errors::InvalidArgument(
+              ::common::errors::InvalidArgument(
                   "index->shape[1] should be 1 when index.ndims() = 2"
                   "in gather_op."));
 
@@ -1519,21 +1640,24 @@ ir::Tensor ScatterAssign(const ir::Tensor& input,
   PADDLE_ENFORCE_EQ(
       index->type(),
       cinn::common::Int(32),
-      phi::errors::InvalidArgument("index's type should be int32"));
+      ::common::errors::InvalidArgument("index's type should be int32"));
   std::string extern_fun_name;
   target.arch.Match(
       [&](common::UnknownArch) {
-        PADDLE_THROW(phi::errors::Fatal(
+        PADDLE_THROW(::common::errors::Fatal(
             "ScatterAssign only support X86 and NVGPU ! Please Check.\n"));
       },
       [&](common::X86Arch) { extern_fun_name.assign("cinn_host_find_int"); },
       [&](common::ARMArch) {
-        PADDLE_THROW(phi::errors::Fatal(
+        PADDLE_THROW(::common::errors::Fatal(
             "ScatterAssign only support X86 and NVGPU ! Please Check.\n"));
       },
       [&](common::NVGPUArch) { extern_fun_name.assign("cinn_cuda_find_int"); },
       [&](common::HygonDCUArchHIP) {
         extern_fun_name.assign("cinn_hip_find_int");
+      },
+      [&](common::HygonDCUArchSYCL) {
+        extern_fun_name.assign("cinn_sycl_find_int");
       });
 
   auto pos_axis = axis;
@@ -1569,23 +1693,23 @@ ir::Tensor ScatterAdd(const ir::Tensor& input,
     PADDLE_ENFORCE_EQ(
         index->type(),
         cinn::common::Int(32),
-        phi::errors::InvalidArgument("index's type should be int32"));
+        ::common::errors::InvalidArgument("index's type should be int32"));
     PADDLE_ENFORCE_EQ(index->shape.size(),
                       1,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The dimension of param [index] of IndexAdd "
                           "should be 1 ! Please Check."));
-    PADDLE_ENFORCE_EQ(
-        input->type(),
-        updates->type(),
-        phi::errors::InvalidArgument("The data types for input and updates "
-                                     "should be identical ! Please Check."));
+    PADDLE_ENFORCE_EQ(input->type(),
+                      updates->type(),
+                      ::common::errors::InvalidArgument(
+                          "The data types for input and updates "
+                          "should be identical ! Please Check."));
 
     auto pos_axis = axis;
     if (pos_axis < 0) pos_axis += input->shape.size();
     PADDLE_ENFORCE_EQ(pos_axis >= 0 && pos_axis < input->shape.size(),
                       true,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "Param [axis] of IndexAdd should satisfy 0 <= axis < "
                           "input.shape ! Please Check.\n"));
 
@@ -1637,12 +1761,14 @@ ir::Tensor ScatterAdd(const ir::Tensor& input,
   return target.arch.Match(
       [&](std::variant<common::UnknownArch, common::X86Arch, common::ARMArch>)
           -> ir::Tensor {
-        PADDLE_THROW(
-            phi::errors::InvalidArgument("Op IndexAdd only support NVGPU and "
-                                         "HygonDCU now ! Please Check.\n"));
+        PADDLE_THROW(::common::errors::InvalidArgument(
+            "Op IndexAdd only support NVGPU and "
+            "HygonDCU now ! Please Check.\n"));
       },
       [&](common::NVGPUArch) { return ScatterAddNvHygon(); },
-      [&](common::HygonDCUArchHIP) { return ScatterAddNvHygon(); });
+      [&](std::variant<common::HygonDCUArchHIP, common::HygonDCUArchSYCL>) {
+        return ScatterAddNvHygon();
+      });
 }
 
 }  // namespace pe

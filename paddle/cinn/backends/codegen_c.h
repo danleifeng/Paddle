@@ -102,6 +102,17 @@ class CodeGenC : public ir::IrPrinter {
 #define __DEFINE_VISIT(op__) void Visit(const ir::op__* op) override;
   NODETY_FORALL(__DEFINE_VISIT)
 #undef __DEFINE_VISIT
+  void Visit(const ir::_Module_* op) override;
+  void Visit(const ir::_LoweredFunc_* op) override;
+
+  void VisitBlock(const ir::stmt::BlockRef& block) override;
+  void VisitStmt(const ir::stmt::Let& stmt) override;
+  void VisitStmt(const ir::stmt::Store& stmt) override;
+  void VisitStmt(const ir::stmt::Alloc& stmt) override;
+  void VisitStmt(const ir::stmt::Free& stmt) override;
+  void VisitStmt(const ir::stmt::IfThenElse& stmt) override;
+  void VisitStmt(const ir::stmt::For& stmt) override;
+  void VisitStmt(const ir::stmt::Schedule& stmt) override;
 
 #define __DEFINE_VISIT(op__) \
   void Visit(const ir::intrinsics::op__* op) override;
@@ -114,11 +125,19 @@ class CodeGenC : public ir::IrPrinter {
 
   friend class ExternFunctionEmitter;
 
+  struct StoreHash {
+    size_t operator()(const ir::stmt::Store& stmt) const {
+      return std::hash<const Object*>()(stmt.get());
+    }
+  };
+
  protected:
   Target target_;
   std::stringstream ss_;
   bool inline_builtin_codes_{true};
   std::unordered_map<const ir::Store*, ir::Expr> store_to_offset_;
+  std::unordered_map<const ir::stmt::Store, ir::Expr, StoreHash>
+      store_stmt_to_offset_;
   std::unordered_map<const ir::Load*, ir::Expr> load_to_offset_;
 };
 

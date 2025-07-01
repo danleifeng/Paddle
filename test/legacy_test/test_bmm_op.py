@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16, paddle_static_guard
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestBmmOp(OpTest):
@@ -97,7 +96,7 @@ class TestBmmBF16Op(OpTest):
 
 
 class API_TestBmm(unittest.TestCase):
-    @test_with_pir_api
+
     def test_out(self):
         with paddle_static_guard():
             with paddle.static.program_guard(
@@ -155,6 +154,24 @@ class TestBmmAPIError(unittest.TestCase):
         self.assertRaises(ValueError, paddle.bmm, x_data, y_data_wrong1)
         self.assertRaises(ValueError, paddle.bmm, x_data, y_data_wrong2)
         self.assertRaises(ValueError, paddle.bmm, x_data, y_data_wrong3)
+
+
+class TestBmmOp_ZeroSize(OpTest):
+    def setUp(self):
+        self.op_type = "bmm"
+        self.python_api = paddle.bmm
+        self.public_python_api = paddle.bmm
+        X = np.random.random((10, 0, 4)).astype("float64")
+        Y = np.random.random((10, 4, 5)).astype("float64")
+        self.inputs = {'X': X, 'Y': Y}
+        Out = np.matmul(X, Y)
+        self.outputs = {'Out': Out}
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_checkout_grad(self):
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
 
 
 if __name__ == "__main__":

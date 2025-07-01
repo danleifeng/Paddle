@@ -127,7 +127,7 @@ class Quant2Int8MkldnnPass:
         self._pass_group = group
 
     def _convert_scale2tensor(self, scale):
-        tensor = core.LoDTensor()
+        tensor = core.DenseTensor()
         tensor.set(scale, core.CPUPlace())
         return tensor
 
@@ -272,22 +272,22 @@ class Quant2Int8MkldnnPass:
                         waiting_for_scale.update(tensor_names)
                         continue
                     elif input_name in self._var_quant_scales:
-                        self._var_quant_scales[
-                            output_name
-                        ] = self._var_quant_scales[input_name]
+                        self._var_quant_scales[output_name] = (
+                            self._var_quant_scales[input_name]
+                        )
                     elif output_name in self._var_quant_scales:
-                        self._var_quant_scales[
-                            input_name
-                        ] = self._var_quant_scales[output_name]
+                        self._var_quant_scales[input_name] = (
+                            self._var_quant_scales[output_name]
+                        )
 
                 elif op.name() == 'concat':
                     output_name = op.output("Out")[0]
                     if output_name in self._var_quant_scales:
                         input_names = op.input("X")
                         for input_name in input_names:
-                            self._var_quant_scales[
-                                input_name
-                            ] = self._var_quant_scales[output_name]
+                            self._var_quant_scales[input_name] = (
+                                self._var_quant_scales[output_name]
+                            )
                 elif op.name() in self._scale_ops:
                     input_name = op.input("X")[0]
                     output_name = op.output("Out")[0]

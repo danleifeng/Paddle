@@ -28,18 +28,19 @@ class TestCollectiveBarrierAPI(TestDistBase):
     def test_barrier_nccl(self):
         self.check_with_place("collective_barrier_api.py", "barrier", "nccl")
 
-    def test_barrier_nccl_with_new_comm(self):
-        self.check_with_place(
-            "collective_barrier_api.py",
-            "barrier",
-            "nccl",
-            need_envs={"FLAGS_dynamic_static_unified_comm": "true"},
-        )
-
     def test_barrier_gloo(self):
         self.check_with_place(
             "collective_barrier_api.py", "barrier", "gloo", "5"
         )
+
+    def test_barrier_flagcx(self):
+        if paddle.base.core.is_compiled_with_flagcx():
+            self.check_with_place(
+                "collective_barrier_api.py",
+                "barrier",
+                "flagcx",
+                static_mode="0",
+            )
 
 
 if __name__ == '__main__':

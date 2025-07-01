@@ -544,13 +544,13 @@ class TestQuantLinearOpWithPadding2(TestQuantLinearOp):
 class TestQuantLinearOp_NumFlattenDims_NegOne(unittest.TestCase):
     def test_api(self):
         def run_program(num_flatten_dims):
-            paddle.seed(SEED)
-            np.random.seed(SEED)
-            startup_program = Program()
-            main_program = Program()
+            with paddle.pir_utils.OldIrGuard():
+                paddle.seed(SEED)
+                np.random.seed(SEED)
+                startup_program = paddle.base.Program()
+                main_program = paddle.base.Program()
 
-            with paddle_static_guard():
-                with program_guard(main_program, startup_program):
+                with paddle.base.program_guard(main_program, startup_program):
                     quant_round_type = 0
                     quant_max_bound = 127.0
                     quant_min_bound = -127.0
@@ -611,7 +611,10 @@ class TestQuantLinearOp_NumFlattenDims_NegOne(unittest.TestCase):
 )
 class TestQuantLinearOpError(unittest.TestCase):
     def test_errors(self):
-        with program_guard(Program(), Program()):
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            program_guard(Program(), Program()),
+        ):
             quant_round_type = 0
             quant_max_bound = 127.0
             quant_min_bound = -127.0

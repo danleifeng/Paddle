@@ -18,7 +18,6 @@ import numpy as np
 
 import paddle
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 paddle.set_device('cpu')
 
@@ -32,7 +31,6 @@ class TestRenormAPI(unittest.TestCase):
         self.dim = 2
         self.max_norm = 2.05
 
-    @test_with_pir_api
     def test_renorm_api(self):
         paddle.enable_static()
         self.input_data()
@@ -122,6 +120,41 @@ class TestRenormAPI(unittest.TestCase):
                 ]
             )
             np.testing.assert_allclose(expected, np.array(y), rtol=1e-05)
+
+
+class TestRenormAPI_ZeroSize(unittest.TestCase):
+    def input_data(self):
+        self.shape = [2, 0, 3]
+        self.data_x = np.random.random(self.shape).astype('float64')
+        self.p = 1.0
+        self.dim = 2
+        self.max_norm = 2.05
+
+    def test_renorm_api(self):
+        paddle.enable_static()
+        self.input_data()
+
+        # case 1:
+        with paddle.static.program_guard(
+            paddle.static.Program(), paddle.static.Program()
+        ):
+            x = paddle.static.data(name="x", shape=self.shape, dtype='float64')
+            z = paddle.renorm(x, self.p, self.dim, self.max_norm)
+            exe = base.Executor(base.CPUPlace())
+            (res,) = exe.run(
+                feed={"x": self.data_x}, fetch_list=[z], return_numpy=False
+            )
+        np.testing.assert_allclose(np.array(res).shape, self.shape)
+
+    def test_dygraph_api(self):
+        self.input_data()
+        with base.dygraph.guard(base.CPUPlace()):
+            x = paddle.to_tensor(self.data_x, stop_gradient=False)
+            y = paddle.renorm(x, 1.0, 2, 2.05)
+            np.testing.assert_allclose(np.array(y).shape, self.shape)
+            z = paddle.mean(y)
+            z.backward(retain_graph=True)
+            np.testing.assert_allclose(x.grad.shape, x.shape)
 
 
 if __name__ == '__main__':

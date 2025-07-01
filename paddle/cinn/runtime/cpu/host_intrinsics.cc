@@ -28,7 +28,12 @@
 extern "C" {
 
 void __cinn_host_tanh_v(const cinn_buffer_t* x, cinn_buffer_t* out) {
-  CINN_CHECK_EQ(x->num_elements(), out->num_elements());
+  PADDLE_ENFORCE_EQ(
+      x->num_elements(),
+      out->num_elements(),
+      ::common::errors::InvalidArgument(
+          "The number of elements in input buffer (x) must be equal to the "
+          "number of elements in output buffer (out)."));
   int xn = x->num_elements();
   auto* x_data = reinterpret_cast<float*>(x->memory);
   auto* out_data = reinterpret_cast<float*>(out->memory);
@@ -239,6 +244,8 @@ inline double FN_FP64(cbrt)(double x) { return cbrt(x); }
 
 inline double FN_FP64(pow)(double x, double y) { return pow(x, y); }
 
+inline double FN_FP64(atan)(double x) { return atan(x); }
+
 #undef FN_FP64
 
 #define FN_INT32(func) cinn_host_##func##_int32
@@ -297,6 +304,7 @@ CINN_REGISTER_HELPER(host_intrinsics) {
   REGISTER_EXTERN_FUNC_1_IN_1_OUT(func__, host_target, double, double);
 
   REGISTER_EXTERN_FUNC_1_IN_1_OUT_FP64(cinn_host_cbrt_fp64);
+  REGISTER_EXTERN_FUNC_1_IN_1_OUT_FP64(cinn_host_atan_fp64);
 
 #undef REGISTER_EXTERN_FUNC_1_IN_1_OUT_FP64
 

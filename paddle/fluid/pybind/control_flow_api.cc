@@ -103,6 +103,7 @@ void BindPyLayerOp(py::module* m) {
            &PyLayerOp::forward_block,
            return_value_policy::reference)
       .def("update_output", &PyLayerOp::UpdateOutput)
+      .def("update_input", &PyLayerOp::UpdateInput)
       .def(
           "as_operation", &PyLayerOp::operation, return_value_policy::reference)
       .def("id",
@@ -144,7 +145,8 @@ void BindWhileOp(py::module* m) {
       .def("block_arguments",
            &WhileOp::block_args,
            return_value_policy::reference)
-      .def("optimize_update", &PyWhileOp::OptimizeUpdate);
+      .def("optimize_update", &PyWhileOp::OptimizeUpdate)
+      .def("add_extra_input", &PyWhileOp::AddExtraInput);
 }
 
 void BindAssertOp(py::module* m) {
@@ -212,7 +214,7 @@ void BuildPipeForPyLayer(Block* block, const std::vector<pir::Value>& values) {
 
 Value BuildHasElementsOp(Operation& fwd_op) {  // NOLINT
   PADDLE_ENFORCE(fwd_op.isa<WhileOp>(),
-                 phi::errors::PreconditionNotMet(
+                 common::errors::PreconditionNotMet(
                      "param op of BuildHasElementsOp must be while op."));
   auto fwdop = fwd_op.dyn_cast<WhileOp>();
   TuplePushOp push_op;
@@ -221,7 +223,7 @@ Value BuildHasElementsOp(Operation& fwd_op) {  // NOLINT
       push_op = iter->dyn_cast<TuplePushOp>();
       PADDLE_ENFORCE_EQ(push_op.container().use_empty(),
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "The last container in forward while op must used "
                             "after construct while_grad op"));
       break;
@@ -237,13 +239,13 @@ Value BuildHasElementsOp(Operation& fwd_op) {  // NOLINT
 void BuildPipeForBlock(Block* block) {
   PADDLE_ENFORCE_NOT_NULL(
       block,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The block used to hook local value can't be nullptr"));
   auto& builder = *(ApiBuilder::Instance().GetBuilder());
   Program* program = block->parent_program();
   PADDLE_ENFORCE_NOT_NULL(
       program,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The block used to hook local value must belong to a program"));
 
   auto original_position = builder.insertion_point();
@@ -274,18 +276,18 @@ namespace paddle::pybind {
 PyIfOp::PyIfOp(IfOp if_op) : IfOp(if_op) {
   PADDLE_ENFORCE_NOT_NULL(
       if_op,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The if_op used to construct PyIfOp can't be nullptr"));
 }
 
 void PyIfOp::UpdateOutput() {
   PADDLE_ENFORCE_NOT_NULL(
       operation_,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The if_op in PyIfOp used to update output can't be nullptr"));
   auto block = parent();
   PADDLE_ENFORCE_NOT_NULL(block,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "The parent block of if_op which used to update "
                               "output can't be nullptr"));
   Block::Iterator iter = **this;
@@ -300,27 +302,41 @@ void PyIfOp::UpdateOutput() {
 PyWhileOp::PyWhileOp(WhileOp while_op) : WhileOp(while_op) {
   PADDLE_ENFORCE_NOT_NULL(
       operation_,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The while_op used to construct PyWhileOp can't be nullptr"));
+}
+
+void PyWhileOp::AddExtraInput(const pir::Value& value) {
+  extra_inputs_.push_back(value);
 }
 
 std::vector<Value> PyWhileOp::OptimizeUpdate() {
   PADDLE_ENFORCE_NOT_NULL(operation_,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "The while_op in PyWhileOp used to remove unused "
                               "loop vars can't be nullptr"));
   auto parent_block = parent();
   PADDLE_ENFORCE_NOT_NULL(
       parent_block,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The parent block of while_op which used to remove "
           "unused loop vars can't be nullptr"));
 
-  operation_->Verify();
+  // Skip verify if operation has extra inputs
+  if (extra_inputs_.empty()) {
+    operation_->Verify();
+  }
   auto& body_block = body();
   auto yield_op = body_block.back().dyn_cast<YieldOp>();
   auto operand_num = operation_->num_operands();
-  bool no_change = true;
+
+  PADDLE_ENFORCE_EQ(
+      operand_num - 1 + extra_inputs_.size(),
+      body_block.args().size(),
+      common::errors::InvalidArgument("The number of operands in while_op and "
+                                      "the number of args in body block "
+                                      "should be equal."));
+  bool no_change = extra_inputs_.empty();
   std::vector<size_t> index_vec;
   std::vector<Value> res, new_input, new_yield_val{yield_op.operand_source(0)};
   for (uint32_t i = 0; i < num_results(); ++i) {
@@ -358,8 +374,8 @@ std::vector<Value> PyWhileOp::OptimizeUpdate() {
 
   for (size_t operand_index = 1u, arg_index = 0u; operand_index < operand_num;
        ++operand_index) {
+    operand_source(operand_index).set_type(body_block.arg(arg_index).type());
     if (yield_op.operand_source(operand_index) == body_block.arg(arg_index)) {
-      operand_source(operand_index).set_type(body_block.arg(arg_index).type());
       body_block.arg(arg_index).ReplaceAllUsesWith(
           operand_source(operand_index));
       body_block.EraseArg(arg_index);
@@ -372,6 +388,12 @@ std::vector<Value> PyWhileOp::OptimizeUpdate() {
       ++arg_index;
     }
   }
+  for (size_t extra_input_idx = 0u; extra_input_idx < extra_inputs_.size();
+       ++extra_input_idx) {
+    new_input.push_back(extra_inputs_[extra_input_idx]);
+    new_yield_val.push_back(
+        yield_op.operand_source(operand_num + extra_input_idx));
+  }
   if (no_change) return res;
   Block::Iterator iter = **this;
   Builder builder(ir_context(), false);
@@ -383,8 +405,13 @@ std::vector<Value> PyWhileOp::OptimizeUpdate() {
   builder.SetInsertionPointToBlockEnd(&body_block);
   builder.Build<YieldOp>(new_yield_val);
   operation_->Verify();
-  for (size_t result_index = 0; result_index < num_results(); ++result_index) {
+  for (size_t result_index = 0;
+       result_index < num_results() - extra_inputs_.size();
+       ++result_index) {
     res[index_vec[result_index]] = result(result_index);
+  }
+  for (size_t i = 0; i < extra_inputs_.size(); ++i) {
+    res.push_back(result(num_results() - extra_inputs_.size() + i));
   }
   return res;
 }

@@ -49,7 +49,7 @@ class TestProcessGroupFp32(unittest.TestCase):
 
     def test_create_process_group_xccl(self):
         device_id = paddle.distributed.ParallelEnv().dev_id
-        paddle.set_device('custom_cpu:%d' % device_id)
+        paddle.set_device(f'custom_cpu:{device_id}')
 
         pg = init_process_group()
 
@@ -167,12 +167,12 @@ class TestProcessGroupFp32(unittest.TestCase):
         )
         raw_tensor_y_1 = paddle.slice(tensor_y, [0], [0], [self.shape[0] // 2])
         if pg.rank() == 0:
-            task = pg.alltoall(tensor_x, tensor_out1)
+            task = pg.alltoall(tensor_out1, tensor_x)
             task.wait()
             # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         # rank 1
         else:
-            task = pg.alltoall(tensor_y, tensor_out2)
+            task = pg.alltoall(tensor_out2, tensor_y)
             task.wait()
             # paddle.base.core._custom_device_synchronize("custom_cpu", -1)
         out1_2 = paddle.slice(

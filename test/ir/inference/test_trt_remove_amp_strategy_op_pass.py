@@ -91,7 +91,7 @@ class TestRemoveStrategyOpBase:
         )
         config.enable_use_gpu(256, 0, PrecisionType.Half)
         config.enable_memory_optim()
-        config.disable_glog_info()
+        # config.disable_glog_info()
         if use_trt:
             config.enable_tensorrt_engine(
                 workspace_size=1 << 30,
@@ -123,15 +123,16 @@ class TestRemoveStrategyOpBase:
         # 2. Run the inference with Paddle Inference
         # 3. Run the inference with Paddle-TRT
         # 4. Compare their predict label
-        self.build_program()
-        baseline = self.infer_program()
-        actual = self.infer_program(use_trt=True)
-        same = (baseline == actual).sum() / len(baseline)
-        self.assertGreaterEqual(
-            same,
-            0.9,
-            "There are more then 10% output difference between Paddle-Inference and Paddle-TRT.",
-        )
+        with paddle.pir_utils.OldIrGuard():
+            self.build_program()
+            baseline = self.infer_program()
+            actual = self.infer_program(use_trt=True)
+            same = (baseline == actual).sum() / len(baseline)
+            self.assertGreaterEqual(
+                same,
+                0.9,
+                "There are more then 10% output difference between Paddle-Inference and Paddle-TRT.",
+            )
 
 
 @unittest.skipIf(
@@ -146,7 +147,10 @@ class TestRemoveStrategyOpAMP(TestRemoveStrategyOpBase, unittest.TestCase):
         exe = paddle.static.Executor(place)
 
         # Build program
-        with paddle.static.program_guard(train_program, startup_program):
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            paddle.static.program_guard(train_program, startup_program),
+        ):
             data = paddle.static.data(
                 name='X', shape=[None, 1, 28, 28], dtype='float32'
             )
@@ -190,8 +194,8 @@ class TestRemoveStrategyOpAMP(TestRemoveStrategyOpBase, unittest.TestCase):
 
 
 @unittest.skipIf(
-    paddle.inference.get_trt_compile_version() < (8, 5, 1),
-    "Quantization axis is consistent with Paddle after TRT 8.5.2.",
+    paddle.inference.get_trt_compile_version() < (8, 6, 1),
+    "Quantization axis is consistent with Paddle after TRT 8.6.1.",
 )
 class TestRemoveStrategyOpAMPQAT(TestRemoveStrategyOpBase, unittest.TestCase):
     def build_program(self):
@@ -201,7 +205,10 @@ class TestRemoveStrategyOpAMPQAT(TestRemoveStrategyOpBase, unittest.TestCase):
         exe = paddle.static.Executor(place)
 
         # Build program
-        with paddle.static.program_guard(train_program, startup_program):
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            paddle.static.program_guard(train_program, startup_program),
+        ):
             data = paddle.static.data(
                 name='X', shape=[None, 1, 28, 28], dtype='float32'
             )

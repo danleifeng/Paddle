@@ -14,9 +14,7 @@
 
 #include "paddle/cinn/backends/extern_func_emitter.h"
 
-#include <absl/hash/hash.h>
 #include <glog/raw_logging.h>
-
 #include <functional>
 #include <iostream>
 #include <string>
@@ -45,7 +43,10 @@ void ExternFunctionEmitterRegistry::Register(const ExternFuncID& name,
                  utils::GetStreamCnt(name).c_str());
   }
 #endif  // CINN_WITH_DEBUG
-  CHECK(!x.empty()) << "Extern Function name is empty.";
+  PADDLE_ENFORCE_EQ(
+      !x.empty(),
+      true,
+      ::common::errors::InvalidArgument("Extern Function name is empty."));
   data_[name] = x;
 }
 
@@ -68,7 +69,10 @@ ExternFunctionEmitterRegistry::ExternFunctionEmitterRegistry() {}
 
 const FunctionProto& ExternFunctionEmitter::func_proto() const {
   auto* proto = ExternFunctionProtoRegistry::Global().Lookup(func_name());
-  CHECK(proto) << "No prototype of function [" << func_name() << "]";
+  PADDLE_ENFORCE_NOT_NULL(
+      proto,
+      ::common::errors::InvalidArgument("No prototype of function [" +
+                                        std::string(func_name()) + "]"));
   return *proto;
 }
 
@@ -79,8 +83,8 @@ namespace std {
 
 size_t hash<cinn::backends::ExternFuncID>::operator()(
     const cinn::backends::ExternFuncID& x) const {
-  return absl::Hash<absl::string_view>{}(x.name) ^
-         absl::Hash<absl::string_view>{}(x.backend_id);
+  return std::hash<std::string_view>{}(x.name) ^
+         std::hash<std::string_view>{}(x.backend_id);
 }
 
 }  // namespace std

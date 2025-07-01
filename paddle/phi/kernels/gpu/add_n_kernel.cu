@@ -82,9 +82,9 @@ void AddNKernel(const Context &dev_ctx,
   const size_t in_num = x.size();
   for (int i = 0; i < in_num; ++i) {
     PADDLE_ENFORCE_EQ(
-        x[i]->initialized(),
+        x[i]->valid() && x[i]->has_allocation(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "This argument is invalid, %d-th tensor is uninitialized.", i));
   }
 

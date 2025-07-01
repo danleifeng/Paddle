@@ -27,6 +27,7 @@ namespace dialect {
 class ProcessMeshAttrStorage;
 class TensorDistAttrStorage;
 class OperationDistAttrStorage;
+class PlacementsAttrStorage;
 
 class ProcessMeshAttribute : public pir::AttrBase<ProcessMeshAttribute,
                                                   pir::Attribute,
@@ -61,6 +62,24 @@ class ProcessMeshAttribute : public pir::AttrBase<ProcessMeshAttribute,
                                   const std::vector<int64_t>& shape,
                                   const std::vector<int64_t>& process_ids,
                                   const std::vector<std::string>& dim_names);
+
+  static std::string name() { return "a_process_mesh"; }
+};
+
+class PlacementsAttribute : public pir::AttrBase<PlacementsAttribute,
+                                                 pir::Attribute,
+                                                 PlacementsAttrStorage> {
+ public:
+  using Base::Base;
+  const phi::distributed::Placements& placements() const;
+
+  size_t hash() const;
+  std::string to_string() const;
+
+  static std::string name() { return "a_placements"; }
+
+  static PlacementsAttribute get(
+      pir::IrContext* ctx, const phi::distributed::Placements& placements);
 };
 
 class TensorDistAttribute : public pir::AttrBase<TensorDistAttribute,
@@ -70,6 +89,7 @@ class TensorDistAttribute : public pir::AttrBase<TensorDistAttribute,
   using Base::Base;
   ProcessMeshAttribute process_mesh_attr() const;
   const std::vector<int64_t>& dims_mapping() const;
+  std::optional<PlacementsAttribute> placements_attr() const;
 
   // return vector of mesh dims on which the this tensor is partial on
   std::set<int64_t> partial_dims() const;
@@ -87,17 +107,22 @@ class TensorDistAttribute : public pir::AttrBase<TensorDistAttribute,
       pir::IrContext* ctx,
       ProcessMeshAttribute mesh,
       const std::vector<int64_t>& dims_mapping,
-      const flat_hash_map<int64_t, phi::ReduceType>& partial_status = {});
+      const flat_hash_map<int64_t, phi::ReduceType>& partial_status = {},
+      const std::optional<PlacementsAttribute>& placements = std::nullopt);
   static TensorDistAttribute get(
       pir::IrContext* ctx,
       const phi::distributed::ProcessMesh& mesh,
       const std::vector<int64_t>& dims_mapping,
-      const flat_hash_map<int64_t, phi::ReduceType>& partial_status = {}) {
+      const flat_hash_map<int64_t, phi::ReduceType>& partial_status = {},
+      const std::optional<PlacementsAttribute>& placements = std::nullopt) {
     return get(ctx,
                ProcessMeshAttribute::get(ctx, mesh),
                dims_mapping,
-               partial_status);
+               partial_status,
+               placements);
   }
+
+  static std::string name() { return "a_tensor_dist"; }
 };
 
 class OperationDistAttribute : public pir::AttrBase<OperationDistAttribute,
@@ -117,22 +142,30 @@ class OperationDistAttribute : public pir::AttrBase<OperationDistAttribute,
 
   uint32_t num_results() const;
 
+  int64_t chunk_id() const;
+
   static OperationDistAttribute get(pir::IrContext* ctx,
                                     ProcessMeshAttribute mesh,
                                     const std::vector<Attribute>& operands,
-                                    const std::vector<Attribute>& results);
+                                    const std::vector<Attribute>& results,
+                                    const int64_t& chunk_id = -1);
 
   static OperationDistAttribute get(pir::IrContext* ctx,
                                     const phi::distributed::ProcessMesh& mesh,
                                     const std::vector<Attribute>& operands,
-                                    const std::vector<Attribute>& results) {
-    return get(ctx, ProcessMeshAttribute::get(ctx, mesh), operands, results);
+                                    const std::vector<Attribute>& results,
+                                    const int64_t& chunk_id = -1) {
+    return get(
+        ctx, ProcessMeshAttribute::get(ctx, mesh), operands, results, chunk_id);
   }
+
+  static std::string name() { return "a_op_dist"; }
 };
 
 }  // namespace dialect
 }  // namespace paddle
 
 IR_DECLARE_EXPLICIT_TYPE_ID(paddle::dialect::ProcessMeshAttribute)
+IR_DECLARE_EXPLICIT_TYPE_ID(paddle::dialect::PlacementsAttribute)
 IR_DECLARE_EXPLICIT_TYPE_ID(paddle::dialect::TensorDistAttribute)
 IR_DECLARE_EXPLICIT_TYPE_ID(paddle::dialect::OperationDistAttribute)

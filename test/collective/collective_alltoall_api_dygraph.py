@@ -30,12 +30,12 @@ class TestCollectiveAllToAllAPI(test_base.TestCollectiveAPIRunnerBase):
             if indata.dtype == "bfloat16":
                 tindata = paddle.to_tensor(indata, "float32").cast("uint16")
                 tindata = paddle.split(tindata, 2, axis=0)
-                dist.alltoall(tindata, toutdata)
+                dist.alltoall(toutdata, tindata)
                 return [data.cast("float32").numpy() for data in toutdata]
             else:
                 tindata = paddle.to_tensor(indata)
                 tindata = paddle.split(tindata, 2, axis=0)
-                dist.alltoall(tindata, toutdata)
+                dist.alltoall(toutdata, tindata)
                 return [data.numpy() for data in toutdata]
 
 

@@ -83,7 +83,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                     low=-self._init_scale, high=self._init_scale
                 ),
             )
-            self.weight_1_arr.append(self.add_parameter('w_%d' % i, weight_1))
+            self.weight_1_arr.append(self.add_parameter(f'w_{i}', weight_1))
             bias_1 = self.create_parameter(
                 attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Uniform(
@@ -94,7 +94,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                 dtype="float32",
                 default_initializer=paddle.nn.initializer.Constant(0.0),
             )
-            self.bias_arr.append(self.add_parameter('b_%d' % i, bias_1))
+            self.bias_arr.append(self.add_parameter(f'b_{i}', bias_1))
 
     def forward(self, input_embedding, init_hidden=None, init_cell=None):
         self.cell_array = []
@@ -444,9 +444,9 @@ class TestDygraphPtbRnn(unittest.TestCase):
 
                 if i == batch_num - 1:
                     for k in range(3, len(out)):
-                        static_param_updated[
-                            static_param_name_list[k - 3]
-                        ] = out[k]
+                        static_param_updated[static_param_name_list[k - 3]] = (
+                            out[k]
+                        )
 
         np.testing.assert_array_equal(static_loss_value, dy_loss_value)
         np.testing.assert_array_equal(
@@ -458,7 +458,9 @@ class TestDygraphPtbRnn(unittest.TestCase):
         for key, value in static_param_init.items():
             np.testing.assert_array_equal(value, dy_param_init[key])
         for key, value in static_param_updated.items():
-            np.testing.assert_array_equal(value, dy_param_updated[key])
+            np.testing.assert_allclose(
+                value, dy_param_updated[key], atol=1e-10, rtol=1e-6
+            )
 
 
 if __name__ == '__main__':

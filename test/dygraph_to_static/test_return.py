@@ -19,7 +19,6 @@ from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
     test_ast_only,
-    test_legacy_and_pt_and_pir,
     test_legacy_only,
 )
 from ifelse_simple_func import dyfunc_with_if_else
@@ -191,7 +190,7 @@ def two_value(x):
     return x * 2, x + 1
 
 
-def diff_return_hepler(x):
+def diff_return_helper(x):
     if False:
         y = x + 1
         z = x - 1
@@ -202,7 +201,7 @@ def diff_return_hepler(x):
 
 def test_diff_return(x):
     x = paddle.to_tensor(x)
-    y, z = diff_return_hepler(x)
+    y, z = diff_return_helper(x)
     if y.shape[0] > 1:
         y = y + 1
     return y, z
@@ -279,7 +278,6 @@ class TestReturnBase(Dy2StTestBase):
             self.assertEqual(dygraph_res, static_res)
 
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         if hasattr(self, "error"):
@@ -326,7 +324,6 @@ class TestReturnIf(Dy2StTestBase):
         else:
             self.assertEqual(dygraph_res, static_res)
 
-    @test_legacy_and_pt_and_pir
     @test_ast_only
     def test_transformed_static_result(self):
         self.init_dygraph_func()
@@ -428,7 +425,6 @@ class TestReturnIfElse(Dy2StTestBase):
         else:
             self.assertEqual(dygraph_res, static_res)
 
-    @test_legacy_and_pt_and_pir
     @test_ast_only
     def test_transformed_static_result(self):
         self.init_dygraph_func()

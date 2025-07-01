@@ -65,7 +65,7 @@ List<std::optional<Index>> GetMaskedOutIndexes(
   PADDLE_ENFORCE_EQ(
       in_msg_out_indexes->size(),
       out_msg_out_indexes->size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "The size of in_msg_out_indexes and out_msg_out_indexes "
           "should be equal, but got in_msg_out_indexes size = %d, "
           "out_msg_out_indexes size = %d.",
@@ -106,7 +106,7 @@ Equation EraseIndexes(
   return ret_equation;
 }
 
-std::vector<Index> GenerateWriteBroadcastTensorIndexs(
+std::vector<Index> GenerateWriteBroadcastTensorIndices(
     const std::shared_ptr<config::NaiveOpEquationContext>& ctx,
     const Equations& in_msg2out_msg_equations) {
   const auto& equation_graph_view =
@@ -137,10 +137,10 @@ WriteBroadcastDisabledBidirectionEquationGenerator::GetDirectionEquations()
           const std::shared_ptr<config::NaiveOpEquationContext>& ctx) {
         const auto& in_msg2out_msg_equations =
             naive_bidirection_equation_generator_.equations();
-        const auto& truncated_output_tensor_idxes =
-            GenerateWriteBroadcastTensorIndexs(ctx, in_msg2out_msg_equations);
+        const auto& truncated_output_tensor_indices =
+            GenerateWriteBroadcastTensorIndices(ctx, in_msg2out_msg_equations);
         ret->emplace_back(EraseIndexes(in_msg2out_msg_equations->at(idx),
-                                       truncated_output_tensor_idxes));
+                                       truncated_output_tensor_indices));
       });
   return ret;
 }

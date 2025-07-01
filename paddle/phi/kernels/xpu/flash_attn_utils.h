@@ -13,9 +13,6 @@
 // limitations under the License.
 
 #pragma once
-
-#ifdef PADDLE_WITH_XPU
-
 #include <vector>
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/common/memory_utils.h"
@@ -24,7 +21,6 @@
 namespace xfa = baidu::xpu::xfa;
 namespace phi {
 
-#ifdef PADDLE_WITH_XPU_XRE5
 using XPUTypeFP16 = typename XPUTypeTrait<phi::dtype::float16>::Type;
 using XPUTypeBF16 = typename XPUTypeTrait<phi::dtype::bfloat16>::Type;
 
@@ -42,7 +38,11 @@ XPU_FA_TGEMM get_flash_attn_tgemm() {
       (std::is_same<phi::dtype::float16, T>::value ||
        std::is_same<XPUTypeFP16, T>::value)) {
     return XPU_FA_TGEMM::FA_FLOAT16;
-  } else if (std::getenv("XPU_PADDLE_FA_TGEMM_FLOAT")) {
+  } else if ((std::is_same<phi::dtype::bfloat16, T>::value ||
+              std::is_same<XPUTypeBF16, T>::value) &&
+             std::getenv("XPU_PADDLE_FA_BFLOAT16_XTE") != nullptr) {
+    return XPU_FA_TGEMM::FA_FLOAT16;
+  } else if (std::getenv("XPU_PADDLE_FA_TGEMM_FLOAT") != nullptr) {
     return XPU_FA_TGEMM::FA_FLOAT;
   } else {
     return XPU_FA_TGEMM::FA_TFLOAT32;
@@ -50,7 +50,7 @@ XPU_FA_TGEMM get_flash_attn_tgemm() {
 }
 
 static void GenerateRNGState(
-    const XPUContext& ctx,
+    const XPUContext& dev_ctx,
     const paddle::optional<DenseTensor>& fixed_seed_offset,
     int64_t* seed_offset_data,
     const std::string& rng_name,
@@ -76,15 +76,11 @@ static void GenerateRNGState(
       auto gen = phi::GetRandomSeedGenerator(rng_name);
       seed_offset_pair = gen->IncrementOffset(inc);
     } else {
-      auto* gen = ctx.GetGenerator();
+      auto* gen = dev_ctx.GetGenerator();
       seed_offset_pair = gen->IncrementOffset(inc);
     }
     seed_offset_data[0] = static_cast<int64_t>(seed_offset_pair.first);
     seed_offset_data[1] = static_cast<int64_t>(seed_offset_pair.second);
   }
 }
-
-#endif
-
 }  // namespace phi
-#endif

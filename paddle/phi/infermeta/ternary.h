@@ -48,6 +48,13 @@ void AddmmInferMeta(const MetaTensor& input,
                     float alpha,
                     MetaTensor* out);
 
+void BaddbmmInferMeta(const MetaTensor& input,
+                      const MetaTensor& x,
+                      const MetaTensor& y,
+                      float beta,
+                      float alpha,
+                      MetaTensor* out);
+
 void AffineChannelInferMeta(const MetaTensor& x,
                             const MetaTensor& scale,
                             const MetaTensor& bias,
@@ -88,6 +95,18 @@ void CollectFpnProposalsInferMeta(
     int post_nms_topn,
     MetaTensor* fpn_rois,
     MetaTensor* rois_num,
+    MetaConfig config = MetaConfig());
+
+void CSoftmaxWithMultiLabelCrossEntropyInferMeta(
+    const MetaTensor& logits,
+    const MetaTensor& label,
+    const MetaTensor& smooth_weight,
+    int64_t ignore_index,
+    bool sum_multi_label_loss,
+    int rank,
+    int nranks,
+    MetaTensor* softmax,
+    MetaTensor* loss,
     MetaConfig config = MetaConfig());
 
 void DistributedPushSparseInferMeta(
@@ -143,6 +162,12 @@ void CalcReducedAttnScoresInferMeta(const MetaTensor& q,
                                     const MetaTensor& softmax_lse,
                                     MetaTensor* reduced_scores);
 
+void FlashAttnV3InferMeta(const MetaTensor& q,
+                          const MetaTensor& k,
+                          const MetaTensor& v,
+                          MetaTensor* out,
+                          MetaTensor* softmax_lse);
+
 void InstanceNormInferMeta(const MetaTensor& x,
                            const MetaTensor& scale,
                            const MetaTensor& bias,
@@ -152,18 +177,25 @@ void InstanceNormInferMeta(const MetaTensor& x,
                            MetaTensor* saved_variance,
                            MetaConfig config = MetaConfig());
 
+void FasterTokenizerInferMeta(const MetaTensor& vocab,
+                              const MetaTensor& text,
+                              const MetaTensor& text_pair,
+                              bool do_lower_case,
+                              bool is_split_into_words,
+                              int max_seq_len,
+                              bool pad_to_max_seq_len,
+                              MetaTensor* input_ids,
+                              MetaTensor* segment_ids,
+                              MetaConfig config = MetaConfig());
+
 void GlobalGatherInferMeta(const MetaTensor& x,
                            const MetaTensor& local_count,
                            const MetaTensor& global_count,
-                           int ring_id,
-                           bool use_calc_stream,
                            MetaTensor* out);
 
 void GlobalScatterInferMeta(const MetaTensor& x,
                             const MetaTensor& local_count,
                             const MetaTensor& global_count,
-                            int ring_id,
-                            bool use_calc_stream,
                             MetaTensor* out);
 
 void AddGroupNormSiluInferMeta(const MetaTensor& x,
@@ -187,7 +219,8 @@ void GroupNormInferMeta(const MetaTensor& x,
                         const std::string& data_layout,
                         MetaTensor* y,
                         MetaTensor* mean,
-                        MetaTensor* variance);
+                        MetaTensor* variance,
+                        MetaConfig config = MetaConfig());
 
 void LayerNormInferMeta(const MetaTensor& x,
                         const MetaTensor& scale,
@@ -229,6 +262,53 @@ void MatchMatrixTensorInferMeta(const MetaTensor& x,
                                 MetaTensor* out,
                                 MetaTensor* tmp,
                                 MetaConfig config = MetaConfig());
+
+void MatrixRankAtolRtolInferMeta(const MetaTensor& x,
+                                 const MetaTensor& atol,
+                                 const MetaTensor& rtol,
+                                 bool hermitian,
+                                 MetaTensor* out);
+
+void MoeCombineInferMeta(const MetaTensor& x,
+                         const MetaTensor& combine_weights,
+                         const MetaTensor& scatter_index,
+                         MetaTensor* y);
+
+void MoeCombineNoWeightInferMeta(const MetaTensor& x,
+                                 const MetaTensor& combine_weights,
+                                 const MetaTensor& scatter_index,
+                                 float epsilon,
+                                 MetaTensor* y);
+
+void MoeGateDispatchPartialNoSoftmaxTopKInferMeta(
+    const MetaTensor& x,
+    const MetaTensor& combine_weights,
+    const MetaTensor& expert_id,
+    int64_t k,
+    int64_t capacity,
+    int64_t num_experts,
+    bool use_pad,
+    int64_t expert_start_index,
+    int64_t expert_end_index,
+    bool reverse_token_drop,
+    MetaTensor* y,
+    MetaTensor* combine_weights_out,
+    MetaTensor* scatter_index,
+    MetaTensor* scatter_index_rev,
+    MetaTensor* expert_offset,
+    MetaTensor* expert_nums_local);
+
+void MoeGateDispatchPermuteInferMeta(const MetaTensor& x,
+                                     const MetaTensor& gate_logits,
+                                     const MetaTensor& corr_bias,
+                                     int64_t k,
+                                     int64_t capacity,
+                                     int64_t world_size,
+                                     MetaTensor* y,
+                                     MetaTensor* combine_weights,
+                                     MetaTensor* scatter_index,
+                                     MetaTensor* expert_offset,
+                                     MetaTensor* expert_id);
 
 void MovingAverageAbsMaxScaleInferMeta(const MetaTensor& x,
                                        const MetaTensor& in_accum,
@@ -373,7 +453,7 @@ void TdmSamplerInferMeta(const MetaTensor& x,
                          const MetaTensor& layer,
                          bool output_positive,
                          const std::vector<int>& neg_samples_num_list,
-                         const std::vector<int>& layer_offset_lod,
+                         const std::vector<int>& layer_offset,
                          int seed,
                          int dtype,
                          MetaTensor* out,

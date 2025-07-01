@@ -21,8 +21,8 @@
 #include <utility>
 
 #include "paddle/common/flags.h"
-#include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/stream_callback_manager.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/core/platform/stream_callback_manager.h"
 
 namespace paddle {
 namespace framework {
@@ -69,6 +69,15 @@ class CPUGarbageCollector : public GarbageCollector {
 class XPUGarbageCollector : public GarbageCollector {
  public:
   XPUGarbageCollector(const phi::XPUPlace &place, size_t max_memory_size);
+
+ protected:
+  void ClearCallback(const std::function<void()> &callback) override;
+};
+
+class XPUPinnedGarbageCollector : public GarbageCollector {
+ public:
+  XPUPinnedGarbageCollector(const phi::XPUPinnedPlace &place,
+                            size_t max_memory_size);
 
  protected:
   void ClearCallback(const std::function<void()> &callback) override;

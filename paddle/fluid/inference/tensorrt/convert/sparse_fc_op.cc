@@ -83,8 +83,8 @@ class SparseFcOpConverter : public OpConverter {
     } else if (activation_type == "gelu") {
       act = plugin::SpmmPluginDynamic::Activation::kGelu;
     } else if (activation_type != "") {
-      PADDLE_THROW(phi::errors::Fatal("unknown activation_type %s",
-                                      activation_type.c_str()));
+      PADDLE_THROW(common::errors::Fatal("unknown activation_type %s",
+                                         activation_type.c_str()));
     }
     return new plugin::SpmmPluginDynamic("CustomSpmmPluginDynamic",
                                          type,
@@ -115,8 +115,8 @@ class SparseFcOpConverter : public OpConverter {
     auto* Y_v = scope.FindVar(op_desc.Input(w_name).front());
     PADDLE_ENFORCE_NOT_NULL(
         Y_v,
-        phi::errors::NotFound(
-            "Can not find %s presistable var of sparse_fc in scope.", w_name));
+        common::errors::NotFound(
+            "Can not find %s persistable var of sparse_fc in scope.", w_name));
     auto* Y_t = Y_v->GetMutable<phi::DenseTensor>();
     int x_num_col_dims =
         op_desc.HasAttr("x_num_col_dims")
@@ -152,7 +152,7 @@ class SparseFcOpConverter : public OpConverter {
     PADDLE_ENFORCE_EQ(
         Y_t->dims().size(),
         2UL,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The sparse_fc's weight should be a matrix with 2 dims, but "
             "it's %d-dimensional.",
             Y_t->dims().size()));  // a matrix
@@ -166,10 +166,10 @@ class SparseFcOpConverter : public OpConverter {
       }
     };
     bool with_fp16 = engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
-    auto regist_fc = [&](nvinfer1::ITensor* inputs,
-                         int n_output,
-                         TensorRTEngine::Weight& weight,
-                         TensorRTEngine::Weight& bias) {
+    auto register_fc = [&](nvinfer1::ITensor* inputs,
+                           int n_output,
+                           TensorRTEngine::Weight& weight,
+                           TensorRTEngine::Weight& bias) {
       if (enable_int8 || support_int8) {
         // add conv1x1 layer
         nvinfer1::DimsHW nv_ksize(1, 1);
@@ -187,7 +187,7 @@ class SparseFcOpConverter : public OpConverter {
           PADDLE_ENFORCE_EQ(
               op_desc.HasAttr("out_threshold"),
               true,
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "must have out threshold in fc layers in int8 mode"));
           float out_scale = 0;
           if (enable_int8) {
@@ -235,10 +235,10 @@ class SparseFcOpConverter : public OpConverter {
         }
       }
     };
-    auto regist_sparse_fc = [&](nvinfer1::ITensor* inputs,
-                                int n_output,
-                                TensorRTEngine::Weight* weight,
-                                TensorRTEngine::Weight* bias) {
+    auto register_sparse_fc = [&](nvinfer1::ITensor* inputs,
+                                  int n_output,
+                                  TensorRTEngine::Weight* weight,
+                                  TensorRTEngine::Weight* bias) {
       if (enable_int8 || support_int8) {
         // add conv layer
         float out_scale = 0;
@@ -246,7 +246,7 @@ class SparseFcOpConverter : public OpConverter {
           PADDLE_ENFORCE_EQ(
               op_desc.HasAttr("out_threshold"),
               true,
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "must have out threshold in sparse_fc layers in int8 mode"));
           out_scale = PADDLE_GET_CONST(float, op_desc.GetAttr("out_threshold"));
         } else {
@@ -320,10 +320,6 @@ class SparseFcOpConverter : public OpConverter {
               .values));
       bias_num = b_t->numel();
     }
-    // Running the TRT Static Shape mode: x_num_col_dims-1
-    if (!engine_->with_dynamic_shape()) {
-      x_num_col_dims--;
-    }
     // If use tensorrt'oss, the x_dim and x_num_col_dims need change, and can
     // not add Shuffle layer in ernie's multihead.
     // Sparse inference doesn't support variable length for now.
@@ -335,12 +331,12 @@ class SparseFcOpConverter : public OpConverter {
       TensorRTEngine::Weight bias{nvinfer1::DataType::kFLOAT,
                                   static_cast<void*>(bias_data),
                                   static_cast<size_t>(bias_num)};
-      regist_fc(X, n_output, weight, bias);
+      register_fc(X, n_output, weight, bias);
     } else {  // need reshape input before and after fc
       PADDLE_ENFORCE_GT(
           x_dim.nbDims,
           x_num_col_dims,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Params and input dims mismatch. Paddle-TRT FC "
               "converter expects x_dim.nbDims > x_num_col_dims, but "
               "x_dim.nbDims : %d, x_num_col_dims : %d.",
@@ -386,7 +382,7 @@ class SparseFcOpConverter : public OpConverter {
       if (enable_int8 || support_int8) {
         engine_->SetTensorDynamicRange(reshape_itensor, in_scale);
       }
-      regist_sparse_fc(reshape_itensor, n_output, &weight, &bias);
+      register_sparse_fc(reshape_itensor, n_output, &weight, &bias);
     }
   }
 };

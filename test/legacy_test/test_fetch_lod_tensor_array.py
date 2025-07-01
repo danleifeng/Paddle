@@ -21,29 +21,31 @@ import paddle
 from paddle import base
 
 
-class TestFetchLoDTensorArray(unittest.TestCase):
+class TestFetchDenseTensorArray(unittest.TestCase):
     def build_program(self, main_program, startup_program):
-        with base.unique_name.guard():
-            with base.program_guard(main_program, startup_program):
-                i = paddle.zeros(shape=[1], dtype='int64')
-                img = paddle.static.data(
-                    name='image', shape=[-1, 784], dtype='float32'
-                )
-                label = paddle.static.data(
-                    name='label', shape=[-1, 1], dtype='int64'
-                )
-                loss = simple_fc_net_with_inputs(img, label, class_num=10)
-                loss = simple_fc_net()
-                opt = paddle.optimizer.SGD(learning_rate=0.001)
-                opt.minimize(loss)
+        with (
+            base.unique_name.guard(),
+            base.program_guard(main_program, startup_program),
+        ):
+            i = paddle.zeros(shape=[1], dtype='int64')
+            img = paddle.static.data(
+                name='image', shape=[-1, 784], dtype='float32'
+            )
+            label = paddle.static.data(
+                name='label', shape=[-1, 1], dtype='int64'
+            )
+            loss = simple_fc_net_with_inputs(img, label, class_num=10)
+            loss = simple_fc_net()
+            opt = paddle.optimizer.SGD(learning_rate=0.001)
+            opt.minimize(loss)
 
-                array = paddle.tensor.array_write(x=img, i=i)
-                i = paddle.increment(i)
-                paddle.tensor.array_write(x=label, i=i, array=array)
-                i = paddle.increment(i)
-                paddle.tensor.array_write(x=loss, i=i, array=array)
+            array = paddle.tensor.array_write(x=img, i=i)
+            i = paddle.increment(i)
+            paddle.tensor.array_write(x=label, i=i, array=array)
+            i = paddle.increment(i)
+            paddle.tensor.array_write(x=loss, i=i, array=array)
 
-                return loss, array
+            return loss, array
 
     def check_network(self, use_cuda=True):
         main_program = base.Program()
@@ -78,7 +80,7 @@ class TestFetchLoDTensorArray(unittest.TestCase):
             self.assertEqual(array_v[2].shape, ())
             np.testing.assert_allclose(loss_v, array_v[2], rtol=1e-05)
 
-    def test_fetch_lod_tensor_array(self):
+    def test_fetch_dense_tensor_array(self):
         if base.core.is_compiled_with_cuda():
             self.check_network(use_cuda=True)
         self.check_network(use_cuda=False)

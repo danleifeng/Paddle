@@ -20,6 +20,9 @@ namespace ir {
 namespace ir_utils {
 
 void IrVerify(Expr e);
+
+void IrVerify(const ir::_Module_* module);
+
 }  // namespace ir_utils
 }  // namespace ir
 }  // namespace cinn

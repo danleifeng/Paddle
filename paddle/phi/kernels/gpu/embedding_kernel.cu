@@ -106,13 +106,13 @@ struct EmbeddingCUDAFunctor {
 };
 
 template <typename T, typename Context>
-void EmbeddingKernel(const Context &ctx,
+void EmbeddingKernel(const Context &dev_ctx,
                      const DenseTensor &input,
                      const DenseTensor &weight,
                      int64_t padding_idx,
                      DenseTensor *out) {
   EmbeddingCUDAFunctor<T, Context> functor(
-      ctx, input, weight, padding_idx, out);
+      dev_ctx, input, weight, padding_idx, out);
 
   if (input.dtype() == phi::DataType::INT32) {
     functor.template apply<int32_t>();
@@ -121,8 +121,8 @@ void EmbeddingKernel(const Context &ctx,
   } else if (input.dtype() == phi::DataType::INT16) {
     functor.template apply<int16_t>();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int16, int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int16, int32 and int64"));
   }
 }
 

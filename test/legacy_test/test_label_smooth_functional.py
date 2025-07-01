@@ -20,7 +20,6 @@ import paddle
 import paddle.base.dygraph as dg
 import paddle.nn.functional as F
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 class LabelSmoothTestCase(unittest.TestCase):
@@ -46,16 +45,18 @@ class LabelSmoothTestCase(unittest.TestCase):
         paddle.enable_static()
         main = base.Program()
         start = base.Program()
-        with base.unique_name.guard():
-            with base.program_guard(main, start):
-                label_var = paddle.static.data(
-                    "input", self.label_shape, dtype=self.dtype
-                )
-                y_var = F.label_smooth(
-                    label_var,
-                    prior_dist=self.prior_dist,
-                    epsilon=self.epsilon,
-                )
+        with (
+            base.unique_name.guard(),
+            base.program_guard(main, start),
+        ):
+            label_var = paddle.static.data(
+                "input", self.label_shape, dtype=self.dtype
+            )
+            y_var = F.label_smooth(
+                label_var,
+                prior_dist=self.prior_dist,
+                epsilon=self.epsilon,
+            )
         feed_dict = {"input": self.label}
         exe = base.Executor(place)
         exe.run(start)
@@ -66,14 +67,13 @@ class LabelSmoothTestCase(unittest.TestCase):
         paddle.enable_static()
         main = base.Program()
         start = base.Program()
-        with base.unique_name.guard():
-            with base.program_guard(main, start):
-                label_var = paddle.static.data(
-                    "input", self.label_shape, dtype=self.dtype
-                )
-                y_var = F.label_smooth(
-                    label_var, prior_dist=self.prior_dist, epsilon=self.epsilon
-                )
+        with base.unique_name.guard(), base.program_guard(main, start):
+            label_var = paddle.static.data(
+                "input", self.label_shape, dtype=self.dtype
+            )
+            y_var = F.label_smooth(
+                label_var, prior_dist=self.prior_dist, epsilon=self.epsilon
+            )
         feed_dict = {"input": self.label}
         exe = base.Executor(place)
         exe.run(start)
@@ -89,7 +89,6 @@ class LabelSmoothTestCase(unittest.TestCase):
         y_np = y_var.numpy()
         return y_np
 
-    @test_with_pir_api
     def _test_equivalence(self, place):
         place = base.CPUPlace()
         result1 = self.base_layer(place)
@@ -109,9 +108,8 @@ class LabelSmoothTestCase(unittest.TestCase):
 class LabelSmoothErrorTestCase(LabelSmoothTestCase):
     def runTest(self):
         place = base.CPUPlace()
-        with dg.guard(place):
-            with self.assertRaises(ValueError):
-                self.paddle_dygraph_layer()
+        with dg.guard(place), self.assertRaises(ValueError):
+            self.paddle_dygraph_layer()
 
 
 def add_cases(suite):

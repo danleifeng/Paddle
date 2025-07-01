@@ -14,7 +14,6 @@
 
 #include "paddle/cinn/runtime/cuda/cuda_util.h"
 
-#include <absl/container/flat_hash_map.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <curand.h>
@@ -37,6 +36,7 @@
 #include "paddle/cinn/utils/profiler.h"
 #include "paddle/cinn/utils/timer.h"
 #include "paddle/common/enforce.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace cinn {
 namespace runtime {
@@ -81,6 +81,11 @@ class CublasHandle {
 int64_t cinn_get_value_in_cuda_kernel_args(void *v_args, int idx) {
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
   return args[idx].operator int64_t();
+}
+
+void *cinn_get_item_in_cuda_kernel_args(void *v_args, int idx) {
+  cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
+  return static_cast<void *>(&args[idx]);
 }
 
 void cinn_call_cuda_kernel(void *kernel_fn,
@@ -133,6 +138,56 @@ void cinn_call_cuda_kernel(void *kernel_fn,
   }
 }
 
+void cinn_call_cuda_cooperative_kernel(void *kernel_fn,
+                                       void *v_args,
+                                       int num_args,
+                                       int grid_x,
+                                       int grid_y,
+                                       int grid_z,
+                                       int block_x,
+                                       int block_y,
+                                       int block_z,
+                                       int shared_memory_bytes,
+                                       void *stream) {
+  VLOG(3) << "cinn_call_cuda_cooperative_kernel, grid_dim={" << grid_x << ", "
+          << grid_y << ", " << grid_z << "}, block_dim={" << block_x << ", "
+          << block_y << ", " << block_z << "}, num_args=" << num_args
+          << ", shared_memory_bytes=" << shared_memory_bytes
+          << ", stream=" << stream << ", kernel_fn=" << kernel_fn;
+
+  std::vector<void *> kernel_args;
+  {
+    cinn::utils::RecordEvent record_run("prepare_args",
+                                        cinn::utils::EventType::kInstruction);
+    kernel_args.reserve(num_args);
+    cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
+    for (int idx = 0; idx < num_args; ++idx) {
+      if (args[idx].type_code() == ::cinn_type_code<cinn_buffer_t *>()) {
+        kernel_args.emplace_back(
+            &((cinn_buffer_t *)(args[idx]))->memory);  // NOLINT
+      } else {
+        kernel_args.emplace_back(args[idx].data_addr());
+      }
+    }
+  }
+
+  {
+    cinn::utils::RecordEvent record_run("cuLaunchCooperativeKernel",
+                                        cinn::utils::EventType::kInstruction);
+    CUDA_DRIVER_CALL(
+        cuLaunchCooperativeKernel(static_cast<CUfunction>(kernel_fn),
+                                  grid_x,
+                                  grid_y,
+                                  grid_z,
+                                  block_x,
+                                  block_y,
+                                  block_z,
+                                  shared_memory_bytes,
+                                  static_cast<CUstream>(stream),
+                                  kernel_args.data()))
+  }
+}
+
 void cinn_call_cublas(void *v_args,
                       int num_args,
                       bool trans_a,
@@ -154,7 +209,7 @@ void cinn_call_cublas(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       3,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "Expected number of arguments is 3, but received %d.", num_args));
   cublasHandle_t &cuhandle = CublasHandle::GetInstance().GetCublasHandle();
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -209,7 +264,7 @@ void cinn_call_cublas(void *v_args,
     std::stringstream ss;
     ss << "unsupported cublas data type: " << static_cast<int>(type_code)
        << ", bytes = " << bytes;
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
 
   if (a1 * a2 * b1 * b2 == 1) {
@@ -412,7 +467,7 @@ void cinn_call_batched_cublas(void *v_args,
   // A * [B, C, D, ...] or [B, C, D, ...] * A
   PADDLE_ENFORCE_EQ((num_args - 1) % 2,
                     0,
-                    phi::errors::PreconditionNotMet(
+                    ::common::errors::PreconditionNotMet(
                         "(num_args - 1) should be divided by 2."));
   cublasHandle_t &cuhandle = CublasHandle::GetInstance().GetCublasHandle();
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -436,7 +491,7 @@ void cinn_call_batched_cublas(void *v_args,
     std::stringstream ss;
     ss << "unsupported cublas data type: " << static_cast<int>(type_code)
        << ", bytes = " << bytes;
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
 
   int m = trans_o ? (trans_a ? a4 : a3) : (trans_b ? b3 : b4);
@@ -546,7 +601,7 @@ void cinn_call_cuda_memset(
     void *v_args, int num_args, int value, size_t count, void *stream) {
   PADDLE_ENFORCE_EQ(num_args,
                     1,
-                    phi::errors::PreconditionNotMet(
+                    ::common::errors::PreconditionNotMet(
                         "The cinn_call_cuda_memset only accept a output."));
   VLOG(4) << "call cinn_call_cuda_memset with value=" << value
           << ", count=" << count;
@@ -566,7 +621,7 @@ void cinn_call_cuda_memcpy(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       2,
-      phi::errors::PreconditionNotMet(
+      ::common::errors::PreconditionNotMet(
           "The cinn_call_cuda_memset only accept a input and a output."));
   VLOG(4) << "call cinn_call_cuda_memcpy with count=" << count;
 
@@ -635,13 +690,13 @@ class ConvAlgoMap {
 
  private:
   ConvAlgoMap() {}
-  absl::flat_hash_map<std::string, int> algo_map_;
+  paddle::flat_hash_map<std::string, int> algo_map_;
 };
 
 cudnnDataType_t convert_to_cudnn_dtype(void *v_args, int num_args) {
   PADDLE_ENFORCE_GT(num_args,
                     0,
-                    phi::errors::PreconditionNotMet(
+                    ::common::errors::PreconditionNotMet(
                         "the number of arguments must larger than zero"));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
   auto type_code = args[0].operator cinn_buffer_t *()->type.code;
@@ -650,7 +705,7 @@ cudnnDataType_t convert_to_cudnn_dtype(void *v_args, int num_args) {
     auto t = args[i].operator cinn_buffer_t *()->type.code;
     int b = args[0].operator cinn_buffer_t *()->type.bits;
     if (t != type_code || bits != b) {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(::common::errors::InvalidArgument(
           "The types of all arguments need to be consistent."));
     }
   }
@@ -669,7 +724,7 @@ cudnnDataType_t convert_to_cudnn_dtype(void *v_args, int num_args) {
     std::stringstream ss;
     ss << "unsupported cudnn data type: " << static_cast<int>(type_code)
        << ", bits = " << bits;
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
   return data_type;
 }
@@ -683,7 +738,7 @@ cudnnDataType_t get_cudnn_compute_dtype(cudnnDataType_t data_type) {
     case CUDNN_DATA_DOUBLE:
       return CUDNN_DATA_DOUBLE;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(::common::errors::InvalidArgument(
           "unsupported cudnn data type, only support "
           "float16/bfloat16/float32/float64 now!"));
   }
@@ -697,7 +752,7 @@ std::string debug_cudnn_tensor_format(cudnnTensorFormat_t tensor_format) {
     case CUDNN_TENSOR_NHWC:
       return "NHWC";
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(::common::errors::InvalidArgument(
           "Only support NCHW and NHWC data layout\n"));
   }
   return "";
@@ -714,7 +769,7 @@ std::string debug_cudnn_tensor_dtype(cudnnDataType_t tensor_dtype) {
     case CUDNN_DATA_DOUBLE:
       return "float64";
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(::common::errors::InvalidArgument(
           "Only support float16/bfloat16/float32/float64 now!"));
   }
   return "";
@@ -731,8 +786,8 @@ std::string debug_cudnn_pool_mode(cudnnPoolingMode_t pool_mode) {
     case CUDNN_POOLING_AVERAGE_COUNT_EXCLUDE_PADDING:
       return "avg_exclude_padding";
     default:
-      PADDLE_THROW(
-          phi::errors::InvalidArgument("Pool only support max and avg now!"));
+      PADDLE_THROW(::common::errors::InvalidArgument(
+          "Pool only support max and avg now!"));
   }
   return "";
 }
@@ -765,8 +820,8 @@ void cinn_call_cudnn_conv2d_forward(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       3,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 3, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 3, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -843,10 +898,6 @@ void cinn_call_cudnn_conv2d_forward(void *v_args,
     conv_algo_map.InsertAlgo(hash_key, static_cast<int>(algo_perf.algo));
   }
 
-  if (GetCinnCudnnDeterministic()) {
-    algo = static_cast<cudnnConvolutionFwdAlgo_t>(1);
-  }
-
   size_t workspace_size = 0;
   CUDNN_CALL(cudnnGetConvolutionForwardWorkspaceSize(
       handle, x_desc, w_desc, conv_desc, y_desc, algo, &workspace_size));
@@ -919,8 +970,8 @@ void cinn_call_cudnn_conv2d_backward_data(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       3,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 3, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 3, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -1000,10 +1051,6 @@ void cinn_call_cudnn_conv2d_backward_data(void *v_args,
     conv_algo_map.InsertAlgo(hash_key, static_cast<int>(algo_perf.algo));
   }
 
-  if (GetCinnCudnnDeterministic()) {
-    algo = CUDNN_CONVOLUTION_BWD_DATA_ALGO_1;
-  }
-
   size_t workspace_size = 0;
   CUDNN_CALL(cudnnGetConvolutionBackwardDataWorkspaceSize(
       handle, w_desc, y_desc, conv_desc, x_desc, algo, &workspace_size));
@@ -1076,8 +1123,8 @@ void cinn_call_cudnn_conv2d_backward_filter(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       3,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 3, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 3, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -1158,10 +1205,6 @@ void cinn_call_cudnn_conv2d_backward_filter(void *v_args,
     algo_map.InsertAlgo(hash_key, static_cast<int>(algo_perf.algo));
   }
 
-  if (GetCinnCudnnDeterministic()) {
-    algo = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1;
-  }
-
   size_t workspace_size = 0;
   CUDNN_CALL(cudnnGetConvolutionBackwardFilterWorkspaceSize(
       handle, x_desc, y_desc, conv_desc, w_desc, algo, &workspace_size));
@@ -1230,8 +1273,8 @@ void cinn_call_cudnn_pool2d_forward(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       2,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 2, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 2, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -1242,10 +1285,6 @@ void cinn_call_cudnn_pool2d_forward(void *v_args,
   cudnnPoolingMode_t pool_mode = static_cast<cudnnPoolingMode_t>(mode);
   cudnnTensorFormat_t tensor_format = static_cast<cudnnTensorFormat_t>(format);
   cudnnDataType_t data_type = convert_to_cudnn_dtype(v_args, num_args);
-
-  if (GetCinnCudnnDeterministic() && pool_mode == CUDNN_POOLING_MAX) {
-    pool_mode = CUDNN_POOLING_MAX_DETERMINISTIC;
-  }
 
   std::string hash_key =
       "pool2d forward, layout=" + debug_cudnn_tensor_format(tensor_format) +
@@ -1328,8 +1367,8 @@ void cinn_call_cudnn_pool2d_backward(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       4,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 4, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 4, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -1342,10 +1381,6 @@ void cinn_call_cudnn_pool2d_backward(void *v_args,
   cudnnPoolingMode_t pool_mode = static_cast<cudnnPoolingMode_t>(mode);
   cudnnTensorFormat_t tensor_format = static_cast<cudnnTensorFormat_t>(format);
   cudnnDataType_t data_type = convert_to_cudnn_dtype(v_args, num_args);
-
-  if (GetCinnCudnnDeterministic() && pool_mode == CUDNN_POOLING_MAX) {
-    pool_mode = CUDNN_POOLING_MAX_DETERMINISTIC;
-  }
 
   std::string hash_key =
       "pool2d backward, layout=" + debug_cudnn_tensor_format(tensor_format) +
@@ -1442,8 +1477,8 @@ void cinn_call_cudnn_softmax_forward(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       2,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 2, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 2, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -1516,8 +1551,8 @@ void cinn_call_cudnn_softmax_backward(void *v_args,
   PADDLE_ENFORCE_EQ(
       num_args,
       3,
-      phi::errors::InvalidArgument(
-          "Expected number of argruments is 3, but recived %d.", num_args));
+      ::common::errors::InvalidArgument(
+          "Expected number of argruments is 3, but received %d.", num_args));
   cudnnHandle_t &handle = CudnnHandle::GetInstance().GetCudnnHandle();
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   cinn_pod_value_t *args = static_cast<cinn_pod_value_t *>(v_args);
@@ -1613,12 +1648,12 @@ void Gemm(const cublasHandle_t &cublas,
   }
 
   int contracting_size = lhs_trans ? lhs_row : lhs_col;
-  PADDLE_ENFORCE_EQ(
-      contracting_size,
-      (rhs_trans ? rhs_col : rhs_row),
-      phi::errors::PreconditionNotMet("The contracting dimension value of lhs "
-                                      "matrix should be equal to the "
-                                      "one of rhs matrix."));
+  PADDLE_ENFORCE_EQ(contracting_size,
+                    (rhs_trans ? rhs_col : rhs_row),
+                    ::common::errors::PreconditionNotMet(
+                        "The contracting dimension value of lhs "
+                        "matrix should be equal to the "
+                        "one of rhs matrix."));
   auto trans_a = rhs_trans ? CUBLAS_OP_T : CUBLAS_OP_N;
   auto trans_b = lhs_trans ? CUBLAS_OP_T : CUBLAS_OP_N;
   cublasSgemm(cublas,
@@ -1662,11 +1697,11 @@ void GemmStridedBatched(const cublasHandle_t &cublas,
   PADDLE_ENFORCE_EQ(
       lhs_bs,
       rhs_bs,
-      phi::errors::InvalidArgument("bs of lhs and rhs dismatch."));
+      ::common::errors::InvalidArgument("bs of lhs and rhs mismatch."));
   PADDLE_ENFORCE_EQ(
       lhs_bs,
       output_bs,
-      phi::errors::InvalidArgument("bs of lhs and output dismatch."));
+      ::common::errors::InvalidArgument("bs of lhs and output mismatch."));
 
   // copy values of bias_data to the output_data
   if (bias_data != nullptr) {
@@ -1678,12 +1713,12 @@ void GemmStridedBatched(const cublasHandle_t &cublas,
   }
 
   int contracting_size = lhs_trans ? lhs_row : lhs_col;
-  PADDLE_ENFORCE_EQ(
-      contracting_size,
-      (rhs_trans ? rhs_col : rhs_row),
-      phi::errors::PreconditionNotMet("The contracting dimension value of lhs "
-                                      "matrix should be equal to the "
-                                      "one of rhs matrix."));
+  PADDLE_ENFORCE_EQ(contracting_size,
+                    (rhs_trans ? rhs_col : rhs_row),
+                    ::common::errors::PreconditionNotMet(
+                        "The contracting dimension value of lhs "
+                        "matrix should be equal to the "
+                        "one of rhs matrix."));
   auto trans_a = rhs_trans ? CUBLAS_OP_T : CUBLAS_OP_N;
   auto trans_b = lhs_trans ? CUBLAS_OP_T : CUBLAS_OP_N;
   int64_t lhs_stride = lhs_row * lhs_col;
@@ -1737,7 +1772,7 @@ void cinn_call_cholesky_nvgpu(void *v_args,
   cinn_buffer_t *x = args[0].operator cinn_buffer_t *();
   cinn_buffer_t *out = args[1].operator cinn_buffer_t *();
   // In cuSOLVER, dense matrix stores in COL_MAJOR, thus FILL_MODE needs to be
-  // filpped. See also:
+  // flipped. See also:
   // https://docs.nvidia.com/cuda/cusolver/index.html#matrix-dense-format
   cublasFillMode_t uplo =
       upper ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
@@ -1747,13 +1782,13 @@ void cinn_call_cholesky_nvgpu(void *v_args,
   PADDLE_ENFORCE_EQ(
       x->type.code,
       cinn_type_code_t::cinn_type_float,
-      phi::errors::InvalidArgument("x's type code (%d) is inequal to %d.",
-                                   x->type.code,
-                                   cinn_type_code_t::cinn_type_float));
+      ::common::errors::InvalidArgument("x's type code (%d) is inequal to %d.",
+                                        x->type.code,
+                                        cinn_type_code_t::cinn_type_float));
   PADDLE_ENFORCE_EQ(
       bits == 32 || bits == 64,
       true,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "Unsupported bits = %d float data type for cholesky", bits));
 
   auto cuda_stream = static_cast<cudaStream_t>(stream);
@@ -1801,7 +1836,7 @@ void cinn_call_cholesky_nvgpu(void *v_args,
   for (int i = 0; i < host_info.size(); i++) {
     PADDLE_ENFORCE_EQ(host_info[i],
                       0,
-                      phi::errors::PreconditionNotMet(
+                      ::common::errors::PreconditionNotMet(
                           "Cholesky decomposition fail, please check the %d"
                           "th input matrix.",
                           i + 1));
@@ -1838,28 +1873,28 @@ void cinn_call_triangular_solve_nvgpu(void *v_args,
   cinn_buffer_t *input2 = args[1].operator cinn_buffer_t *();
   cinn_buffer_t *output = args[2].operator cinn_buffer_t *();
 
-  PADDLE_ENFORCE_EQ(
-      input1->type.code,
-      cinn_type_code_t::cinn_type_float,
-      phi::errors::InvalidArgument("input1's type code (%d) is inequal to %d.",
-                                   input1->type.code,
-                                   cinn_type_code_t::cinn_type_float));
-  PADDLE_ENFORCE_EQ(
-      input2->type.code,
-      cinn_type_code_t::cinn_type_float,
-      phi::errors::InvalidArgument("input1's type code (%d) is inequal to %d.",
-                                   input2->type.code,
-                                   cinn_type_code_t::cinn_type_float));
+  PADDLE_ENFORCE_EQ(input1->type.code,
+                    cinn_type_code_t::cinn_type_float,
+                    ::common::errors::InvalidArgument(
+                        "input1's type code (%d) is inequal to %d.",
+                        input1->type.code,
+                        cinn_type_code_t::cinn_type_float));
+  PADDLE_ENFORCE_EQ(input2->type.code,
+                    cinn_type_code_t::cinn_type_float,
+                    ::common::errors::InvalidArgument(
+                        "input1's type code (%d) is inequal to %d.",
+                        input2->type.code,
+                        cinn_type_code_t::cinn_type_float));
   PADDLE_ENFORCE_EQ(input1->type.bits,
                     input2->type.bits,
-                    phi::errors::InvalidArgument(
-                        "input1 and ipnput2's type bits is dismatch."));
+                    ::common::errors::InvalidArgument(
+                        "input1 and input2's type bits is mismatch."));
   uint8_t bits = input1->type.bits;
   uint8_t bytes = bits / 8;
   PADDLE_ENFORCE_EQ(
       bits == 32 || bits == 64,
       true,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "Unsupported bits = %d float data type for triangular solve", bits));
 
   std::string debug_info =
@@ -1938,7 +1973,7 @@ void cinn_gpu_cublas_mul(const std::vector<int> &attrs,
   cublasHandle_t &handle = CublasHandle::GetInstance().GetCublasHandle();
   PADDLE_ENFORCE_EQ(input1->type.code,
                     cinn_type_code_t::cinn_type_float,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "Expected type code of input is %d, but received %d.",
                         cinn_type_code_t::cinn_type_float,
                         input1->type.code));
@@ -1950,7 +1985,7 @@ void cinn_gpu_cublas_mul(const std::vector<int> &attrs,
   int M = 1;
   PADDLE_ENFORCE_GE(attrs.size(),
                     6,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "Expected size of attributions is 6, but received %d.",
                         attrs.size()));
   for (int i = 0; i < attrs[attrs.size() - 2]; i++) {
@@ -1987,12 +2022,12 @@ void cinn_gpu_cublas_gemm(const std::vector<int> &attrs,
   cudaStream_t custream = static_cast<cudaStream_t>(stream);
   CUBLAS_CALL(cublasSetStream(handle, custream));
 
-  PADDLE_ENFORCE_EQ(
-      lhs->type.code,
-      cinn_type_code_t::cinn_type_float,
-      phi::errors::InvalidArgument("lhs's type code (%d) is inequal to %d.",
-                                   lhs->type.code,
-                                   cinn_type_code_t::cinn_type_float));
+  PADDLE_ENFORCE_EQ(lhs->type.code,
+                    cinn_type_code_t::cinn_type_float,
+                    ::common::errors::InvalidArgument(
+                        "lhs's type code (%d) is inequal to %d.",
+                        lhs->type.code,
+                        cinn_type_code_t::cinn_type_float));
   const float *lhs_data = reinterpret_cast<const float *>(lhs->memory);
   const float *rhs_data = reinterpret_cast<const float *>(rhs->memory);
   const float *bias_data =
@@ -2001,7 +2036,7 @@ void cinn_gpu_cublas_gemm(const std::vector<int> &attrs,
 
   PADDLE_ENFORCE_GE(attrs.size(),
                     13,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "Expected size of attributions is greater or "
                         "qeual to 13, but received %d.",
                         attrs.size()));
@@ -2027,18 +2062,18 @@ void cinn_gpu_cublas_gemm(const std::vector<int> &attrs,
   VLOG(4) << "The out_trans value used by cinn_gpu_cublas_gemm: " << out_trans;
   VLOG(4) << "The alpha value used by cinn_gpu_cublas_gemm: " << alpha;
   VLOG(4) << "The beta value used by cinn_gpu_cublas_gemm: " << beta;
-  PADDLE_ENFORCE_EQ(
-      lhs_dim_size,
-      rhs_dim_size,
-      phi::errors::InvalidArgument("dimension dismatch between lhs and rhs."));
-  PADDLE_ENFORCE_EQ(
-      lhs_dim_size,
-      out_dim_size,
-      phi::errors::InvalidArgument("dimension dismatch between lhs and out."));
+  PADDLE_ENFORCE_EQ(lhs_dim_size,
+                    rhs_dim_size,
+                    ::common::errors::InvalidArgument(
+                        "dimension mismatch between lhs and rhs."));
+  PADDLE_ENFORCE_EQ(lhs_dim_size,
+                    out_dim_size,
+                    ::common::errors::InvalidArgument(
+                        "dimension mismatch between lhs and out."));
   PADDLE_ENFORCE_EQ(
       (lhs_dim_size == 2 || lhs_dim_size == 3),
       true,
-      phi::errors::InvalidArgument("left operand has 2 or 3 dimension."));
+      ::common::errors::InvalidArgument("left operand has 2 or 3 dimension."));
 
   if (lhs_dim_size == 2) {
     // [row, col]
@@ -2188,7 +2223,7 @@ void cinn_call_gaussian_random(
     double *ptr = reinterpret_cast<double *>(output->memory);
     CURAND_CALL(curandGenerateNormalDouble(generator, ptr, numel, mean, std));
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(::common::errors::InvalidArgument(
         "gaussian_random only support float32 and float64! Please check."));
   }
 }
@@ -2217,7 +2252,7 @@ void cinn_call_uniform_random(
     double *ptr = reinterpret_cast<double *>(output->memory);
     CURAND_CALL(curandGenerateUniformDouble(generator, ptr, numel));
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(::common::errors::InvalidArgument(
         "uniform_random only support float32 and float64! Please check."));
   }
 }
@@ -2241,7 +2276,7 @@ void cinn_call_randint(void *v_args, int num_args, int seed, void *stream) {
     unsigned int *ptr = reinterpret_cast<unsigned int *>(output->memory);
     CURAND_CALL(curandGenerate(generator, ptr, numel));
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(::common::errors::InvalidArgument(
         "randint only support int32! Please check."));
   }
 }
@@ -2251,7 +2286,7 @@ void cinn_call_randint(void *v_args, int num_args, int seed, void *stream) {
 namespace {
 cudnnDataType_t convert_to_cudnn_dtype(cinn_buffer_t *input) {
   PADDLE_ENFORCE_NOT_NULL(
-      input, phi::errors::NotFound("the pointer of input is null"));
+      input, ::common::errors::NotFound("the pointer of input is null"));
   auto type_code = input->type.code;
   int bits = input->type.bits;
   cudnnDataType_t data_type;
@@ -2269,25 +2304,25 @@ cudnnDataType_t convert_to_cudnn_dtype(cinn_buffer_t *input) {
     std::stringstream ss;
     ss << "unsupported cudnn data type: " << static_cast<int>(type_code)
        << ", bits = " << bits;
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
   return data_type;
 }
 }  // namespace
 
-#define GetAttrValue(attr_map, key_name, default_value)   \
-  int key_name = 0;                                       \
-  if (attr_map.count(#key_name) != 0) {                   \
-    key_name = attr_map.find(#key_name)->second;          \
-  } else if (default_value >= 0) {                        \
-    key_name = default_value;                             \
-  } else {                                                \
-    std::stringstream ss;                                 \
-    ss << #key_name << " is not exist in attr_map!";      \
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str())); \
+#define GetAttrValue(attr_map, key_name, default_value)        \
+  int key_name = 0;                                            \
+  if (attr_map.count(#key_name) != 0) {                        \
+    key_name = attr_map.find(#key_name)->second;               \
+  } else if (default_value >= 0) {                             \
+    key_name = default_value;                                  \
+  } else {                                                     \
+    std::stringstream ss;                                      \
+    ss << #key_name << " is not exist in attr_map!";           \
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str())); \
   }
 
-void cinn_gpu_cudnn_conv2d(const absl::flat_hash_map<std::string, int> &attr,
+void cinn_gpu_cudnn_conv2d(const paddle::flat_hash_map<std::string, int> &attr,
                            cinn_buffer_t *x,
                            cinn_buffer_t *w,
                            cinn_buffer_t *y,
@@ -2401,10 +2436,6 @@ void cinn_gpu_cudnn_conv2d(const absl::flat_hash_map<std::string, int> &attr,
     conv_algo_map.InsertAlgo(hash_key, static_cast<int>(algo_perf.algo));
   }
 
-  if (GetCinnCudnnDeterministic()) {
-    algo = static_cast<cudnnConvolutionFwdAlgo_t>(1);
-  }
-
   size_t ws_size = 0;
   CUDNN_CALL(cudnnGetConvolutionForwardWorkspaceSize(
       handle, x_desc, w_desc, conv_desc, y_desc, algo, &ws_size));
@@ -2449,7 +2480,7 @@ void cinn_gpu_cudnn_conv2d(const absl::flat_hash_map<std::string, int> &attr,
 }
 
 void cinn_gpu_cudnn_conv2d_backward_data(
-    const absl::flat_hash_map<std::string, int> &attr,
+    const paddle::flat_hash_map<std::string, int> &attr,
     cinn_buffer_t *w,
     cinn_buffer_t *dy,
     cinn_buffer_t *dx,
@@ -2555,10 +2586,6 @@ void cinn_gpu_cudnn_conv2d_backward_data(
     conv_algo_map.InsertAlgo(hash_key, static_cast<int>(algo_perf.algo));
   }
 
-  if (GetCinnCudnnDeterministic()) {
-    algo = CUDNN_CONVOLUTION_BWD_DATA_ALGO_1;
-  }
-
   size_t ws_size = 0;
   CUDNN_CALL(cudnnGetConvolutionBackwardDataWorkspaceSize(
       handle, w_desc, y_desc, conv_desc, x_desc, algo, &ws_size));
@@ -2603,7 +2630,7 @@ void cinn_gpu_cudnn_conv2d_backward_data(
 }
 
 void cinn_gpu_cudnn_conv2d_backward_filter(
-    const absl::flat_hash_map<std::string, int> &attr,
+    const paddle::flat_hash_map<std::string, int> &attr,
     cinn_buffer_t *x,
     cinn_buffer_t *dy,
     cinn_buffer_t *dw,
@@ -2709,10 +2736,6 @@ void cinn_gpu_cudnn_conv2d_backward_filter(
     algo_map.InsertAlgo(hash_key, static_cast<int>(algo_perf.algo));
   }
 
-  if (GetCinnCudnnDeterministic()) {
-    algo = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1;
-  }
-
   size_t ws_size = 0;
   CUDNN_CALL(cudnnGetConvolutionBackwardFilterWorkspaceSize(
       handle, x_desc, y_desc, conv_desc, w_desc, algo, &ws_size));
@@ -2765,7 +2788,7 @@ void cinn_gpu_cudnn_pool2d(const std::vector<int> &attrs,
   CUDNN_CALL(cudnnSetStream(handle, static_cast<cudaStream_t>(stream)));
   PADDLE_ENFORCE_EQ(attrs.size(),
                     17,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "Expected size of attributions is 17, but received %d.",
                         attrs.size()));
   // Here the input paddings are pad_top, pad_bottom, pad_left, pad_right.

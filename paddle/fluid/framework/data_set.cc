@@ -23,8 +23,8 @@
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
 #include "paddle/fluid/framework/io/fs.h"
 #include "paddle/fluid/framework/threadpool.h"
-#include "paddle/fluid/platform/monitor.h"
-#include "paddle/fluid/platform/timer.h"
+#include "paddle/phi/core/platform/monitor.h"
+#include "paddle/phi/core/platform/timer.h"
 
 #ifdef PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/wrapper/fleet.h"
@@ -43,8 +43,7 @@ COMMON_DECLARE_int32(gpugraph_storage_mode);
 COMMON_DECLARE_string(graph_edges_split_mode);
 COMMON_DECLARE_bool(query_dest_rank_by_multi_node);
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 // constructor
 template <typename T>
@@ -79,7 +78,7 @@ DatasetImpl<T>::DatasetImpl()
   cur_channel_ = 0;
   fleet_send_batch_size_ = 1024;
   fleet_send_sleep_seconds_ = 0;
-  merge_by_insid_ = false;
+  merge_by_ins_id_ = false;
   merge_by_sid_ = true;
   enable_pv_merge_ = false;
   merge_size_ = 2;
@@ -191,7 +190,7 @@ void DatasetImpl<T>::SetParseLogKey(bool parse_logkey) {
 
 template <typename T>
 void DatasetImpl<T>::SetMergeByInsId(int merge_size) {
-  merge_by_insid_ = true;
+  merge_by_ins_id_ = true;
   parse_ins_id_ = true;
   merge_size_ = merge_size;
 }
@@ -394,7 +393,7 @@ static int compute_thread_batch_nccl(
     int need_ins_num = thread_max_batch_num * thr_num;
     // data is too less
     if ((int64_t)need_ins_num > total_instance_num) {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "error instance num:[%d] less need ins num:[%d]",
           total_instance_num,
           need_ins_num));
@@ -428,7 +427,7 @@ static int compute_thread_batch_nccl(
                  << ", thread avg batch num " << thread_avg_batch_num;
   }
 #else
-  PADDLE_THROW(phi::errors::Unavailable(
+  PADDLE_THROW(common::errors::Unavailable(
       "dataset compute nccl batch number need compile with GLOO"));
 #endif
   return thread_avg_batch_num;
@@ -466,22 +465,21 @@ void MultiSlotDataset::PrepareTrain() {
     }
   }
 #else
-  PADDLE_THROW(
-      phi::errors::Unavailable("dataset set heterps need compile with GLOO"));
+  PADDLE_THROW(common::errors::Unavailable(
+      "dataset set heterps need compile with GLOO"));
 #endif
   return;
 }
 
-inline std::vector<std::shared_ptr<paddle::framework::ThreadPool>>&
-GetReadThreadPool(int thread_num) {
-  static std::vector<std::shared_ptr<paddle::framework::ThreadPool>>
-      thread_pools;
+inline std::vector<std::shared_ptr<phi::ThreadPool>>& GetReadThreadPool(
+    int thread_num) {
+  static std::vector<std::shared_ptr<phi::ThreadPool>> thread_pools;
   if (!thread_pools.empty()) {
     return thread_pools;
   }
   thread_pools.resize(thread_num);
   for (int i = 0; i < thread_num; ++i) {
-    thread_pools[i].reset(new paddle::framework::ThreadPool(1));
+    thread_pools[i].reset(new phi::ThreadPool(1));
   }
   return thread_pools;
 }
@@ -603,7 +601,13 @@ template <typename T>
 void DatasetImpl<T>::PreLoadIntoMemory() {
   VLOG(3) << "DatasetImpl<T>::PreLoadIntoMemory() begin";
   if (preload_thread_num_ != 0) {
-    CHECK(static_cast<size_t>(preload_thread_num_) == preload_readers_.size());
+    PADDLE_ENFORCE_EQ(static_cast<size_t>(preload_thread_num_),
+                      preload_readers_.size(),
+                      common::errors::InvalidArgument(
+                          "Preload thread number (%d) does not "
+                          "match the size of preload readers (%d).",
+                          preload_thread_num_,
+                          preload_readers_.size()));
     preload_threads_.clear();
     for (int64_t i = 0; i < preload_thread_num_; ++i) {
       preload_threads_.emplace_back(
@@ -611,7 +615,13 @@ void DatasetImpl<T>::PreLoadIntoMemory() {
           preload_readers_[i].get());
     }
   } else {
-    CHECK(static_cast<size_t>(thread_num_) == readers_.size());
+    PADDLE_ENFORCE_EQ(
+        static_cast<size_t>(thread_num_),
+        readers_.size(),
+        common::errors::InvalidArgument(
+            "Thread number (%d) does not match the size of readers (%d).",
+            thread_num_,
+            readers_.size()));
     preload_threads_.clear();
     for (int64_t i = 0; i < thread_num_; ++i) {
       preload_threads_.emplace_back(
@@ -877,7 +887,7 @@ void MultiSlotDataset::GlobalShuffle(int thread_num) {
           << input_channel_->Size();
 
   auto get_client_id = [this, fleet_ptr](const Record& data) -> size_t {
-    if (this->merge_by_insid_) {
+    if (this->merge_by_ins_id_) {
       return XXH64(data.ins_id_.data(), data.ins_id_.length(), 0) %
              this->trainer_num_;
     } else if (this->shuffle_by_uid_) {
@@ -975,18 +985,39 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
   int cur_channel = 0;
   uint64_t output_channels_data_size = 0;
   uint64_t consume_channels_data_size = 0;
-  CHECK(multi_output_channel_.size() == multi_consume_channel_.size());
+  PADDLE_ENFORCE_EQ(multi_output_channel_.size(),
+                    multi_consume_channel_.size(),
+                    common::errors::InvalidArgument(
+                        "The size of multi_output_channel (%d) does not match "
+                        "the size of multi_consume_channel (%d).",
+                        multi_output_channel_.size(),
+                        multi_consume_channel_.size()));
+
   for (size_t i = 0; i < multi_output_channel_.size(); ++i) {
     output_channels_data_size += multi_output_channel_[i]->Size();
     consume_channels_data_size += multi_consume_channel_[i]->Size();
   }
+
   if (output_channels_data_size != 0) {
-    CHECK(consume_channels_data_size == 0);  // NOLINT
+    PADDLE_ENFORCE_EQ(consume_channels_data_size,
+                      0,
+                      common::errors::InvalidArgument(
+                          "When output_channels_data_size (%d) is not zero, "
+                          "consume_channels_data_size (%d) should be zero.",
+                          output_channels_data_size,
+                          consume_channels_data_size));
     cur_channel = 0;
   } else {
-    CHECK(output_channels_data_size == 0);  // NOLINT
+    PADDLE_ENFORCE_EQ(
+        output_channels_data_size,
+        0,
+        common::errors::InvalidArgument(
+            "When output_channels_data_size is zero, it should be zero. "
+            "consume_channels_data_size: %d",
+            consume_channels_data_size));
     cur_channel = 1;
   }
+
   if (cur_channel == 0) {  // NOLINT
     origin_channels = &multi_output_channel_;
     other_channels = &multi_consume_channel_;
@@ -998,10 +1029,22 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
     origin_pv_channels = &multi_pv_consume_;
     other_pv_channels = &multi_pv_output_;
   }
-  CHECK(origin_channels != nullptr);     // NOLINT
-  CHECK(other_channels != nullptr);      // NOLINT
-  CHECK(origin_pv_channels != nullptr);  // NOLINT
-  CHECK(other_pv_channels != nullptr);   // NOLINT
+  PADDLE_ENFORCE_NOT_NULL(origin_channels,
+                          common::errors::InvalidArgument(
+                              "origin_channels should not be nullptr, please "
+                              "check if it is properly initialized."));
+  PADDLE_ENFORCE_NOT_NULL(other_channels,
+                          common::errors::InvalidArgument(
+                              "other_channels should not be nullptr, "
+                              "ensure it is correctly set before usage."));
+  PADDLE_ENFORCE_NOT_NULL(
+      origin_pv_channels,
+      common::errors::InvalidArgument("origin_pv_channels must not be nullptr, "
+                                      "verify its initialization."));
+  PADDLE_ENFORCE_NOT_NULL(
+      other_pv_channels,
+      common::errors::InvalidArgument(
+          "other_pv_channels must not be nullptr, confirm its setup."));
 
   paddle::framework::Channel<T> total_data_channel =
       paddle::framework::MakeChannel<T>();
@@ -1096,9 +1139,27 @@ void DatasetImpl<T>::CreateReaders() {
   VLOG(3) << "thread num in Dataset: " << thread_num_;
   VLOG(3) << "Filelist size in Dataset: " << filelist_.size();
   VLOG(3) << "channel num in Dataset: " << channel_num_;
-  CHECK(thread_num_ > 0) << "thread num should > 0";
-  CHECK(channel_num_ > 0) << "channel num should > 0";
-  CHECK(channel_num_ <= thread_num_) << "channel num should <= thread num";
+  PADDLE_ENFORCE_GT(thread_num_,
+                    0,
+                    common::errors::InvalidArgument(
+                        "The number of threads (thread_num) should "
+                        "be greater than 0. Received: %d",
+                        thread_num_));
+  PADDLE_ENFORCE_GT(
+      channel_num_,
+      0,
+      common::errors::InvalidArgument("The number of channels (channel_num) "
+                                      "should be greater than 0. Received: %d",
+                                      channel_num_));
+  PADDLE_ENFORCE_LE(channel_num_,
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "The number of channels (channel_num) should be less "
+                        "than or equal to the number of threads (thread_num). "
+                        "Received channel_num: %d, thread_num: %d",
+                        channel_num_,
+                        thread_num_));
+
   VLOG(3) << "readers size: " << readers_.size();
   if (!readers_.empty()) {
     VLOG(3) << "readers_.size() = " << readers_.size()
@@ -1174,8 +1235,17 @@ void DatasetImpl<T>::CreatePreLoadReaders() {
   if (preload_thread_num_ == 0) {
     preload_thread_num_ = thread_num_;
   }
-  CHECK(preload_thread_num_ > 0) << "thread num should > 0";
-  CHECK(input_channel_ != nullptr);
+  PADDLE_ENFORCE_GT(preload_thread_num_,
+                    0,
+                    common::errors::InvalidArgument(
+                        "The number of preload threads (preload_thread_num) "
+                        "should be greater than 0. Received: %d",
+                        preload_thread_num_));
+  PADDLE_ENFORCE_NOT_NULL(input_channel_,
+                          common::errors::InvalidArgument(
+                              "The input_channel should not be nullptr. Please "
+                              "ensure it is properly initialized."));
+
   preload_readers_.clear();
   for (int i = 0; i < preload_thread_num_; ++i) {
     preload_readers_.push_back(
@@ -1296,7 +1366,14 @@ int MultiSlotDataset::ReceiveFromClient(int msg_type,
   while (ar.Cursor() < ar.Finish()) {
     data.push_back(ar.Get<Record>());
   }
-  CHECK(ar.Cursor() == ar.Finish());
+  PADDLE_ENFORCE_EQ(ar.Cursor(),
+                    ar.Finish(),
+                    common::errors::InvalidArgument(
+                        "Cursor position does not match finish position. The "
+                        "cursor should be at the finish position. Received "
+                        "cursor position: %d, expected finish position: %d.",
+                        ar.Cursor(),
+                        ar.Finish()));
 
   auto fleet_ptr = framework::FleetWrapper::GetInstance();
   // not use random because it doesn't perform well here.
@@ -1437,7 +1514,13 @@ void MultiSlotDataset::GenerateLocalTablesUnlock(int table_id,
     return;
   }
 
-  CHECK(multi_output_channel_.size() != 0);  // NOLINT
+  PADDLE_ENFORCE_NE(
+      multi_output_channel_.size(),
+      0,
+      common::errors::InvalidArgument("The size of multi_output_channel should "
+                                      "not be zero. Received size: %zu.",
+                                      multi_output_channel_.size()));
+  // NOLINT
   auto fleet_ptr_ = framework::FleetWrapper::GetInstance();
   std::vector<std::unordered_map<uint64_t, std::vector<float>>>&
       local_map_tables = fleet_ptr_->GetLocalTable();
@@ -1510,8 +1593,8 @@ void MultiSlotDataset::GenerateLocalTablesUnlock(int table_id,
 
 void MultiSlotDataset::MergeByInsId() {
   VLOG(3) << "MultiSlotDataset::MergeByInsId begin";
-  if (!merge_by_insid_) {
-    VLOG(3) << "merge_by_insid=false, will not MergeByInsId";
+  if (!merge_by_ins_id_) {
+    VLOG(3) << "merge_by_ins_id=false, will not MergeByInsId";
     return;
   }
   auto multi_slot_desc = data_feed_desc_.multi_slot_desc();
@@ -1524,7 +1607,13 @@ void MultiSlotDataset::MergeByInsId() {
       use_slots_is_dense.push_back(slot.is_dense());
     }
   }
-  CHECK(multi_output_channel_.size() != 0);  // NOLINT
+  PADDLE_ENFORCE_NE(
+      multi_output_channel_.size(),
+      0,
+      common::errors::InvalidArgument("The size of multi_output_channel should "
+                                      "not be zero. Received size: %zu.",
+                                      multi_output_channel_.size()));
+  // NOLINT
   auto channel_data = paddle::framework::MakeChannel<Record>();
   VLOG(3) << "multi_output_channel_.size() " << multi_output_channel_.size();
   for (auto& item : multi_output_channel_) {
@@ -1699,7 +1788,13 @@ void MultiSlotDataset::MergeByInsId() {
     vec_data.clear();
     vec_data.shrink_to_fit();
   }
-  CHECK(channel_data->Size() == 0);  // NOLINT
+  PADDLE_ENFORCE_EQ(
+      channel_data->Size(),
+      0,
+      common::errors::InvalidArgument(
+          "The size of channel_data should be zero. Received size: %zu.",
+          channel_data->Size()));
+  // NOLINT
   channel_data->Clear();
   VLOG(3) << "MultiSlotDataset::MergeByInsId end";
 }
@@ -1776,8 +1871,14 @@ void MultiSlotDataset::PreprocessChannel(
       input_channel_->Close();
       input_channel_->ReadAll(slots_shuffle_original_data_);
     } else {
-      CHECK(out_channel_size > 0);  // NOLINT
-      if (cur_channel_ == 0) {      // NOLINT
+      PADDLE_ENFORCE_GT(out_channel_size,
+                        0,
+                        common::errors::InvalidArgument(
+                            "The out_channel_size should be greater "
+                            "than 0. Received size: %d.",
+                            out_channel_size));
+      // NOLINT
+      if (cur_channel_ == 0) {  // NOLINT
         for (auto& item : multi_output_channel_) {
           std::vector<Record> vec_data;
           item->Close();
@@ -1844,8 +1945,12 @@ void MultiSlotDataset::PreprocessChannel(
   //     end_size += static_cast<int>(item->Size());
   //   }
   // }
-  CHECK(input_channel_->Size() == 0)
-      << "input channel should be empty before slots shuffle";
+  PADDLE_ENFORCE_EQ(input_channel_->Size(),
+                    0,
+                    common::errors::InvalidArgument(
+                        "The input channel should be empty before "
+                        "slots shuffle. Received size: %zu.",
+                        input_channel_->Size()));
 }
 
 // slots shuffle to input_channel_ with needed-shuffle slots
@@ -1853,7 +1958,7 @@ void MultiSlotDataset::SlotsShuffle(
     const std::set<std::string>& slots_to_replace) {
   PADDLE_ENFORCE_EQ(slots_shuffle_fea_eval_,
                     true,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "fea eval mode off, need to set on for slots shuffle"));
   platform::Timer timeline;
   timeline.Start();
@@ -1888,9 +1993,27 @@ void SlotRecordDataset::CreateReaders() {
   VLOG(3) << "thread num in Dataset: " << thread_num_;
   VLOG(3) << "Filelist size in Dataset: " << filelist_.size();
   VLOG(3) << "channel num in Dataset: " << channel_num_;
-  CHECK(thread_num_ > 0) << "thread num should > 0";
-  CHECK(channel_num_ > 0) << "channel num should > 0";
-  CHECK(channel_num_ <= thread_num_) << "channel num should <= thread num";
+  PADDLE_ENFORCE_GT(
+      thread_num_,
+      0,
+      common::errors::InvalidArgument(
+          "The thread number should be greater than 0. Received: %d.",
+          thread_num_));
+  PADDLE_ENFORCE_GT(
+      channel_num_,
+      0,
+      common::errors::InvalidArgument(
+          "The channel number should be greater than 0. Received: %d.",
+          channel_num_));
+  PADDLE_ENFORCE_LE(
+      channel_num_,
+      thread_num_,
+      common::errors::InvalidArgument(
+          "The channel number should be less than or equal to the thread "
+          "number. Received channel number: %d, thread number: %d.",
+          channel_num_,
+          thread_num_));
+
   VLOG(3) << "readers size: " << readers_.size();
   if (!readers_.empty()) {
     VLOG(3) << "readers_.size() = " << readers_.size()
@@ -2013,8 +2136,8 @@ void SlotRecordDataset::PrepareTrain() {
     }
   }
 #else
-  PADDLE_THROW(
-      phi::errors::Unavailable("dataset set heterps need compile with GLOO"));
+  PADDLE_THROW(common::errors::Unavailable(
+      "dataset set heterps need compile with GLOO"));
 #endif
   return;
 }
@@ -2072,5 +2195,4 @@ void SlotRecordDataset::DynamicAdjustReadersNum(int thread_num) {
   PrepareTrain();
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework

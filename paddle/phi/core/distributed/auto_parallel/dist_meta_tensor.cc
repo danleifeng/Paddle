@@ -16,17 +16,16 @@ limitations under the License. */
 
 #include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 phi::DDim DistMetaTensor::dims() const {
   // member values in tensor_ have higher priority than those in DistMetaTensor
   if (tensor_ != nullptr) {
-    PADDLE_ENFORCE_EQ(
-        this->is_dist(),
-        true,
-        phi::errors::InvalidArgument("The current MetaTensor doesn't contains "
-                                     "DistTensor when call `dims` method."));
+    PADDLE_ENFORCE_EQ(this->is_dist(),
+                      true,
+                      common::errors::InvalidArgument(
+                          "The current MetaTensor doesn't contains "
+                          "DistTensor when call `dims` method."));
     return MetaTensor::dims();
   } else {
     return dims_;
@@ -38,7 +37,7 @@ const distributed::TensorDistAttr& DistMetaTensor::dist_attr() const {
   if (tensor_ != nullptr) {
     PADDLE_ENFORCE_EQ(this->is_dist(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The current MetaTensor doesn't contains "
                           "DistTensor when call `dist_attr` method."));
     return static_cast<phi::distributed::DistTensor*>(tensor_)->dist_attr();
@@ -51,5 +50,4 @@ bool DistMetaTensor::initialized() const {
   return tensor_ != nullptr || dist_attr_ != TensorDistAttr();
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

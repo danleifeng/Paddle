@@ -20,7 +20,7 @@
 namespace phi {
 template <typename T>
 struct RmsFunctor<T, phi::CPUContext> {
-  RmsFunctor(const phi::CPUContext &ctx,
+  RmsFunctor(const phi::CPUContext &dev_ctx,
              const DenseTensor &param,
              const DenseTensor &mean_square,
              const DenseTensor &grad,
@@ -49,20 +49,20 @@ struct RmsFunctor<T, phi::CPUContext> {
 
     PADDLE_ENFORCE_EQ(p_tensor.IsSharedBufferWith(*param_out),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Param and ParamOut must be the same Tensor"));
     PADDLE_ENFORCE_EQ(mom_tensor.IsSharedBufferWith(*moment_out),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Moment and MomentOut must be the same Tensor"));
     PADDLE_ENFORCE_EQ(
         ms_tensor.IsSharedBufferWith(*mean_square_out),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "MeanSquare and MeanSquareOut must be the same Tensor"));
 
     auto &grad_tensor = grad;
-    auto &place = *ctx.eigen_device();
+    auto &place = *dev_ctx.eigen_device();
     auto lr_value = lr_tensor.data<T>()[0];
 
     auto p = EigenVector<T>::Flatten(p_tensor);
@@ -81,13 +81,13 @@ struct RmsFunctor<T, phi::CPUContext> {
         PADDLE_ENFORCE_EQ(
             mg_tensor->Holder(),
             mean_grad_out->Holder(),
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "MeanGrad and MeanGradOut must be the same Tensor"));
       } else {
         PADDLE_ENFORCE_EQ(
             mg_tensor,
             mean_grad_out,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "MeanGrad and MeanGradOut must be the same Tensor"));
       }
       auto mg = EigenVector<T>::Flatten(*mg_tensor);

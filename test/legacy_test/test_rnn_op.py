@@ -173,7 +173,9 @@ class TestRNNOp(OpTest):
 
     def test_output(self):
         self.check_output(
-            no_check_set=['Reserve', 'DropoutState'], check_pir=True
+            no_check_set=['Reserve', 'DropoutState'],
+            check_pir=True,
+            check_symbol_infer=False,
         )
 
     def set_attrs(self):

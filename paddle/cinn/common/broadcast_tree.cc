@@ -43,14 +43,17 @@ bool SearchBroadcastImplForUnary(const T& unary, const DoEachT& DoEach) {
   return SearchBroadcast(operand, DoEach);
 }
 
-template <typename DoEachT>
-bool SearchBroadcastImpl(const symbol::Negative<symbol::DimExpr>& unary,
-                         const DoEachT& DoEach) {
-  return SearchBroadcastImplForUnary(unary, DoEach);
+template <typename T, typename DoEachT>
+bool SearchBroadcastImplForBinary(const T& binary, const DoEachT& DoEach) {
+  const auto& lhs = binary->lhs;
+  const auto& rhs = binary->rhs;
+  if (SearchBroadcast(lhs, DoEach)) return true;
+  if (SearchBroadcast(rhs, DoEach)) return true;
+  return false;
 }
 
 template <typename DoEachT>
-bool SearchBroadcastImpl(const symbol::Reciprocal<symbol::DimExpr>& unary,
+bool SearchBroadcastImpl(const symbol::Negative<symbol::DimExpr>& unary,
                          const DoEachT& DoEach) {
   return SearchBroadcastImplForUnary(unary, DoEach);
 }
@@ -77,6 +80,12 @@ bool SearchBroadcastImpl(const symbol::Mul<symbol::DimExpr>& variadic,
 }
 
 template <typename DoEachT>
+bool SearchBroadcastImpl(const symbol::Div<symbol::DimExpr>& binary,
+                         const DoEachT& DoEach) {
+  return SearchBroadcastImplForBinary(binary, DoEach);
+}
+
+template <typename DoEachT>
 bool SearchBroadcastImpl(const symbol::Max<symbol::DimExpr>& variadic,
                          const DoEachT& DoEach) {
   return SearchBroadcastImplForVariadic(variadic, DoEach);
@@ -93,7 +102,11 @@ bool SearchBroadcastImpl(const symbol::Broadcast<symbol::DimExpr>& variadic,
                          const DoEachT& DoEach) {
   const auto& operands = *(variadic.operands);
   for (const auto& operand : operands) {
-    CHECK(!operand.isa<int64_t>());
+    PADDLE_ENFORCE_EQ(!operand.isa<int64_t>(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "Invalid operand type. Expected operand "
+                          "not to be of type int64_t."));
     if (SearchBroadcast(operand, DoEach)) return true;
   }
   return DoEach(variadic);
@@ -255,8 +268,13 @@ std::optional<symbol::Broadcastable<symbol::DimExpr>> GetFirstCstrBroadcastable(
       }
     }
     if (lhs_symbol.has_value() && rhs_symbol.has_value()) {
-      CHECK(lhs_symbol != rhs_symbol)
-          << lhs_symbol.value() << " != " << rhs_symbol.value();
+      PADDLE_ENFORCE_NE(lhs_symbol,
+                        rhs_symbol,
+                        ::common::errors::InvalidArgument(
+                            "Symbols should not be equal. "
+                            "Received lhs_symbol = %s, rhs_symbol = %s.",
+                            lhs_symbol.value(),
+                            rhs_symbol.value()));
       ret = symbol::Broadcastable<symbol::DimExpr>{lhs_symbol.value(),
                                                    rhs_symbol.value()};
       return true;
@@ -292,9 +310,12 @@ std::optional<symbol::Broadcastable<symbol::DimExpr>> GetFirstCstrBroadcastable(
     const auto& operands = broadcast.operands;
     PADDLE_ENFORCE_GE(operands->size(),
                       2,
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "The operands size should be greater than 2."));
-    CHECK(operands->at(0) != operands->at(1));
+    PADDLE_ENFORCE_NE(
+        operands->at(0),
+        operands->at(1),
+        ::common::errors::InvalidArgument("Operands should not be equal. "));
     ret = symbol::Broadcastable<symbol::DimExpr>{operands->at(0),
                                                  operands->at(1)};
     return true;

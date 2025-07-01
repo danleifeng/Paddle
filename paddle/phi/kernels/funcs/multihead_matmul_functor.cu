@@ -572,7 +572,7 @@ inline void MatmulWithHeadQK(const phi::GPUContext &context,
 #if defined(__HIPCC__) || (defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700)
           PADDLE_ENFORCE_EQ(bias_is_mask,
                             false,
-                            phi::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "QK_bias is mask can't be supported on rocm or "
                                 "cuda_arch<700"));
 #else
@@ -614,7 +614,7 @@ inline void MatmulWithHeadQK(const phi::GPUContext &context,
 #if defined(__HIPCC__) || (defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700)
           PADDLE_ENFORCE_EQ(bias_is_mask,
                             false,
-                            phi::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "QK_bias is mask can't be supported on rocm or "
                                 "cuda_arch<700"));
 #else
@@ -627,7 +627,7 @@ inline void MatmulWithHeadQK(const phi::GPUContext &context,
           } else if (block.x <= 4096) {
             SOFTMAX_KERNEL_WITH_MASK(4);
           } else {
-            PADDLE_THROW(phi::errors::InvalidArgument(
+            PADDLE_THROW(common::errors::InvalidArgument(
                 "Cannot support the length of attention > 8192."));
           }
 #endif
@@ -735,7 +735,7 @@ void MultiheadGPUComputeFunctor<T>::operator()(const phi::GPUContext &dev_ctx,
 
 template class MultiheadGPUComputeFunctor<float>;
 
-// device function 'operator()' is not supportted until cuda 10.0
+// device function 'operator()' is not supported until cuda 10.0
 // HIP defined __HIP_NO_HALF_CONVERSIONS__ in hip.cmake
 #if defined(PADDLE_WITH_CUDA) && CUDA_VERSION >= 10000
 template class MultiheadGPUComputeFunctor<half>;

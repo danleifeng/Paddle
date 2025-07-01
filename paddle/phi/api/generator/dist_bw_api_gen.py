@@ -14,6 +14,7 @@
 
 import argparse
 
+import dist_api_gen
 import yaml
 from backward_api_gen import BackwardAPI
 from dist_api_gen import DistForwardAPI
@@ -194,10 +195,14 @@ RESHARD_VECTOR_OUTPUT_TEMPLATE = """
 NONEED_TO_RESHARD_OUTPUT_TEMPLATE = """
     // API `{}` does not need to reshard output."""
 
+SET_LOCAL_SHAPE_TEMPLATE = """
+      {meta_tensor}.set_dims(phi::make_ddim(local_shape));"""
+
 
 class DistBackwardAPI(DistForwardAPI, BackwardAPI):
     def __init__(self, backward_item_yaml):
         BackwardAPI.__init__(self, backward_item_yaml)
+        self.forward_config = backward_item_yaml['forward']
         self.init_dist_api_members()
 
     # override DistForwardAPI's method
@@ -283,6 +288,94 @@ class DistBackwardAPI(DistForwardAPI, BackwardAPI):
 
         return output_creation_code
 
+    def generate_bw_infer_local_shape_code(self, need_kernel=False):
+        arg_name = self.infer_meta['local_shape']
+        assert arg_name in self.outputs['names'], (
+            f"Auto Parallel will calculate local_shape for {arg_name} "
+            f"in {self.api}, but {arg_name} is not found in its outputs."
+        )
+
+        _, fw_inputs, fw_attrs, fw_outputs = self.parse_forward_config(
+            self.forward_config
+        )
+        # shape_type = self.attrs['attr_info'][shape_name][0]
+        # out_name = self.dist_output_args[0]
+        dist_out_name = self.dist_output_args[
+            self.outputs['names'].index(arg_name)
+        ]
+        shape_type = self.get_shape_type(fw_attrs['attr_info'])
+        return_code = dist_api_gen.CALCULATE_LOCAL_SHAPE_TEMPLATE.format(
+            out_name=dist_out_name,
+            out_dist_attr=(
+                "PADDLE_GET_CONST(phi::distributed::TensorDistAttr, spmd_info.second[0]);"
+                if self.infer_meta['spmd_rule']
+                else f"phi::distributed::TensorDistAttr(common::vectorize({dist_out_name}->dims()))"
+            ),
+            dtype=shape_type,
+            op_name=self.kernel['func'][0],
+        )
+        if need_kernel:
+            return (
+                dist_api_gen.CALCULATE_LOCAL_SHAPE_KERNEL_TEMPLATE.format(
+                    out_grad_dist_attr=(
+                        "PADDLE_GET_CONST(phi::distributed::TensorDistAttr, spmd_info.first[1]);"
+                        if self.infer_meta['spmd_rule']
+                        else "phi::distributed::TensorDistAttr(common::vectorize(out_grad.dims()))"
+                    ),
+                    dtype=shape_type,
+                    op_name=self.kernel['func'][0],
+                )
+                + return_code
+            )
+        return return_code
+
+    def generate_infer_meta_code(self) -> str:
+        (
+            infer_meta_func_code,
+            input_args_code,
+            output_decl_code,
+            output_args_code,
+        ) = self.generate_infer_meta_func_and_args_code()
+
+        infer_meta_code = ""
+
+        if self.infer_meta['global_shape'] is not None:
+            for i, out_name in enumerate(self.outputs['names']):
+                if out_name == self.infer_meta[
+                    'global_shape'
+                ] and self.need_to_generate_code_for_inplace_impl(i):
+                    infer_meta_code += dist_api_gen.SET_DIMS_TEMPLATE.format(
+                        dst=self.dist_output_args[i],
+                        src=(
+                            self.dist_output_args[i] + '_tmp'
+                            if i > 0
+                            else self.dist_output_args[i]
+                        ),
+                    )
+
+        infer_meta_code = (
+            infer_meta_code
+            + dist_api_gen.INFER_META_TEMPLATE.format(
+                infer_meta_func_code, input_args_code, output_args_code
+            )
+        )
+        # TODO(GhostScreaming): kernel like reshape need calculate local_shape
+        if self.infer_meta['local_shape'] is not None:
+            if (
+                self.kernel['param'] is not None
+                and self.infer_meta['local_shape'] not in self.kernel['param']
+            ):
+                infer_meta_code += self.generate_bw_infer_local_shape_code()
+            else:
+                infer_meta_code += self.generate_bw_infer_local_shape_code(
+                    need_kernel=True
+                )
+            infer_meta_code += SET_LOCAL_SHAPE_TEMPLATE.format(
+                meta_tensor="meta_" + self.dense_output_args[0]
+            )
+
+        return output_decl_code + infer_meta_code
+
     # override DistForwardAPI's method
     def generate_return_code(self) -> str:
         return "return;"
@@ -299,7 +392,7 @@ class DistBackwardAPI(DistForwardAPI, BackwardAPI):
     # <class 'backward_api_gen.BackwardAPI'>,
     # <class 'api_base.BaseAPI'>,
     # <class 'object'>
-    # if don't override it, the ForwardAPI's gene_output wiil be called
+    # if don't override it, the ForwardAPI's gene_output will be called
     def gene_output(
         self,
         out_dtype_list,
@@ -391,7 +484,7 @@ class DistBackwardAPI(DistForwardAPI, BackwardAPI):
             )
         )
         infer_meta_code = self.generate_infer_meta_code()
-        kernel_call_code = self.generate_kernel_call_code()
+        kernel_call_code = self.generate_kernel_call_code(is_forward=False)
         fallback_code = self.generate_fallback_code()
         reshard_output_code = self.generate_reshard_output_code()
         return_code = self.generate_return_code()
@@ -446,13 +539,26 @@ def source_include(header_file_path, fw_header_file_path):
 #include "paddle/phi/api/profiler/event_tracing.h"
 #include "paddle/phi/api/profiler/supplement_tracing.h"
 
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/distributed/nccl_comm_context.h"
+#elif defined(PADDLE_WITH_XPU_BKCL)
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/distributed/bkcl_comm_context.h"
+#elif defined(PADDLE_WITH_CUSTOM_DEVICE)
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#include "paddle/phi/core/distributed/xccl_comm_context.h"
+#endif
+
 #ifdef PADDLE_WITH_DISTRIBUTE
+#include "paddle/phi/core/distributed/store/store_utils.h"
 #include "paddle/phi/infermeta/spmd_rules/rules.h"
 #include "paddle/phi/core/distributed/auto_parallel/reshard/reshard_utils.h"
 #endif
 
 PD_DECLARE_bool(conv2d_disable_cudnn);
 COMMON_DECLARE_int32(low_precision_op_list);
+COMMON_DECLARE_bool(benchmark);
 """
 
 
@@ -494,9 +600,9 @@ def generate_backward_api(
     header_file.write(namespace[0])
 
     include_header_file = (
-        "paddle/phi/api/backward/fused_backward_api.h"
+        "paddle/phi/api/backward/fused_backward_api_base.h"
         if is_fused_backward_yaml
-        else "paddle/phi/api/backward/backward_api.h"
+        else "paddle/phi/api/backward/backward_api_base.h"
     )
     include_fw_header_file = (
         "paddle/phi/api/include/fused_api.h"
@@ -552,13 +658,13 @@ def main():
     parser.add_argument(
         '--backward_header_path',
         help='output of generated backward header code file',
-        default='paddle/phi/api/backward/backward_api.h',
+        default='paddle/phi/api/backward/backward_api_base.h',
     )
 
     parser.add_argument(
         '--backward_source_path',
         help='output of generated backward source code file',
-        default='paddle/phi/api/lib/backward_api.cc',
+        default='paddle/phi/api/lib/backward_api_base.cc',
     )
 
     options = parser.parse_args()

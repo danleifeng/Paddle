@@ -33,6 +33,7 @@ from paddle.static.amp.fp16_utils import (
 )
 
 from .converter import Converter
+from .dist_attribute import TensorDistAttr
 from .process_group import get_world_process_group
 from .utils import get_logger, to_list
 
@@ -63,9 +64,16 @@ class ProxyLayer(Layer):
 
         # Consider ProxyLayer as not Paddle inner function because it contains
         # user-defined layer.
-        as_not_paddle_func(
-            inspect.getmodule(ProxyLayer).__name__ + ".ProxyLayer"
-        )
+        for fn_name in [
+            "_train",
+            "_eval",
+            "_predict",
+            "call_loss",
+            "call_metrics",
+        ]:
+            as_not_paddle_func(
+                f"{inspect.getmodule(ProxyLayer).__name__}.ProxyLayer.{fn_name}"
+            )
 
     @paddle.jit.not_to_static
     def append_loss_to_shadow_output(self, mode):
@@ -241,6 +249,7 @@ class ProgramHelper:
         self.build_info = BuildInfo()
         self._logger = get_logger(logging.INFO)
         self.lazy_init = False
+        self._all_params_dist_attr = {}
 
     def reset(self):
         """
@@ -378,13 +387,33 @@ class ProgramHelper:
                     i
                 ].name
 
+        is_comm = False
         for param in dy_params:
+            if param.is_dist():
+                process_mesh, dims_mapping = self._all_params_dist_attr[
+                    param.name
+                ]
+                var_dist_attr = TensorDistAttr()
+                var_dist_attr.process_mesh = process_mesh
+                var_dist_attr.dims_mapping = dims_mapping
+                is_comm = True
+                with paddle.no_grad():
+                    tmp = paddle.base.core.reshard(param, var_dist_attr)
+                if tmp._is_initialized():
+                    param.get_tensor()._share_data_with(tmp.get_tensor())
+                else:
+                    # Only setting the "param" to "None" can't release the memory
+                    param.get_tensor()._clear()
+                    param = None
+
             # create var in scope and share parameters to scope
             if param is None:
                 continue
             if param.name not in dy_param_name_to_pir_param_name:
-                # Release the reduntant params
+                # Release the redundant params
                 param.get_tensor()._clear()
+                continue
+            if not param._is_initialized():
                 continue
             if param.is_dense():
                 value_name = dy_param_name_to_pir_param_name[param.name]
@@ -415,14 +444,30 @@ class ProgramHelper:
                 pir_scope_param._share_data_with(
                     param.get_tensor().get_tensor()
                 )
+                param.get_tensor()._clear()
+
+        world_group = get_world_process_group()
+        if (
+            is_comm
+            and world_group.nranks > 1
+            and paddle.distributed.get_world_size() > 1
+        ):
+            paddle.disable_static()
+            barrier_tensor = paddle.full([1], 1, dtype="int32")
+            # barrier is not available in xpu for now
+            if not paddle.framework.core.is_compiled_with_xpu():
+                paddle._legacy_C_ops.barrier(
+                    barrier_tensor, barrier_tensor, 'ring_id', 0
+                )
+            paddle.enable_static()
 
     def init(self, main_program, place, dist_context):
         if self.lazy_init:
             return
 
-        amp_stragety = dist_context.strategy.amp
-        amp_config = copy.deepcopy(amp_stragety.to_dict())
-        need_cast_paramter = amp_stragety.enable and amp_config["level"] in [
+        amp_strategy = dist_context.strategy.amp
+        amp_config = copy.deepcopy(amp_strategy.to_dict())
+        need_cast_parameter = amp_strategy.enable and amp_config["level"] in [
             "o2",
             "o3",
         ]
@@ -450,8 +495,10 @@ class ProgramHelper:
             if param is None:
                 continue
             if param.name not in main_program.global_block().vars:
-                # Release the reduntant params
+                # Release the redundant params
                 param.get_tensor()._clear()
+                continue
+            if not param._is_initialized():
                 continue
             if param.is_dense():
                 # get param_var's dist_attr
@@ -471,14 +518,14 @@ class ProgramHelper:
                     param.numpy(), dist_attr
                 )
                 param_tensor.set(sliced_param, place)
-                if not need_cast_paramter:
+                if not need_cast_parameter:
                     param.get_tensor()._clear()
             elif param.is_dist():
                 dense_tensor = global_scope().var(param.name).get_tensor()
                 dense_tensor._share_data_with(param.get_tensor().get_tensor())
 
         # transform the parameter in eager mode for amp.
-        if need_cast_paramter:
+        if need_cast_parameter:
             for param in self.concrete_program.parameters:
                 amp_dtype = amp_config["dtype"]
                 scope_var = global_scope().find_var(param.name)
@@ -517,21 +564,25 @@ class ProgramHelper:
                     param.get_tensor()._clear()
                 with paddle.base.dygraph.guard():
                     if amp_dtype == "float16":
-                        with paddle.no_grad():
-                            with paddle.base.framework._dygraph_place_guard(
+                        with (
+                            paddle.no_grad(),
+                            paddle.base.framework._dygraph_place_guard(
                                 place=place
-                            ):
-                                t_casted = param_used.cast(
-                                    dtype=core.VarDesc.VarType.FP16
-                                )
+                            ),
+                        ):
+                            t_casted = param_used.cast(
+                                dtype=core.VarDesc.VarType.FP16
+                            )
                     elif amp_dtype == "bfloat16":
-                        with paddle.no_grad():
-                            with paddle.base.framework._dygraph_place_guard(
+                        with (
+                            paddle.no_grad(),
+                            paddle.base.framework._dygraph_place_guard(
                                 place=place
-                            ):
-                                t_casted = param_used.cast(
-                                    dtype=core.VarDesc.VarType.BF16
-                                )
+                            ),
+                        ):
+                            t_casted = param_used.cast(
+                                dtype=core.VarDesc.VarType.BF16
+                            )
                     # NOTE(lizhiyu): Clear the origin param. Don't use `param_used.get_tensor().get_tensor()._clear()` to
                     #                clear the `DistTensor`, because it can't clear the `_holder`,
                     #                which `param_used.get_tensor().get_tensor()` will copy one `DenseTensor`.
@@ -551,10 +602,23 @@ class ProgramHelper:
         ):
             paddle.disable_static()
             barrier_tensor = paddle.full([1], 1, dtype="int32")
-            paddle._legacy_C_ops.barrier(
-                barrier_tensor, barrier_tensor, 'ring_id', 0
-            )
+            # barrier is not available in xpu for now
+            if not paddle.framework.core.is_compiled_with_xpu():
+                paddle._legacy_C_ops.barrier(
+                    barrier_tensor, barrier_tensor, 'ring_id', 0
+                )
             paddle.enable_static()
+
+    def cache_whole_graph_dist_attr(self, all_params):
+        for param_value in all_params:
+            dist_attr = param_value.dist_attr()
+            if dist_attr:
+                process_mesh = dist_attr.process_mesh
+                dims_mapping = dist_attr.dims_mapping
+                self._all_params_dist_attr[param_value.name] = [
+                    process_mesh,
+                    dims_mapping,
+                ]
 
     @property
     def concrete_program(self):

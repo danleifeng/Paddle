@@ -28,8 +28,7 @@
 #include "paddle/fluid/operators/controlflow/while_op_helper.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void OpInOutInfo::Build(const OperatorBase *op) {
   is_built_ = true;
@@ -83,9 +82,9 @@ static bool VarCanBeDeleted(const std::string &name,
 
   auto type = var_desc->Proto()->type().type();
 
-  return type == proto::VarType::LOD_TENSOR ||
+  return type == proto::VarType::DENSE_TENSOR ||
          type == proto::VarType::SELECTED_ROWS ||
-         type == proto::VarType::LOD_TENSOR_ARRAY;
+         type == proto::VarType::DENSE_TENSOR_ARRAY;
 }
 
 std::unordered_map<const OperatorBase *, std::vector<std::string>>
@@ -193,17 +192,17 @@ void DeleteUnusedTensors(const Scope &scope,
       garbages.emplace_back(var->GetMutable<phi::SelectedRows>()
                                 ->mutable_value()
                                 ->MoveMemoryHolder());
-    } else if (var->IsType<LoDTensorArray>()) {
-      auto *lod_tensor_arr = var->GetMutable<LoDTensorArray>();
-      for (auto &t : *lod_tensor_arr) {
+    } else if (var->IsType<phi::TensorArray>()) {
+      auto *dense_tensor_arr = var->GetMutable<phi::TensorArray>();
+      for (auto &t : *dense_tensor_arr) {
         garbages.emplace_back(t.MoveMemoryHolder());
       }
-      // NOTE(wangxi): need clear the vector, otherwise lod_tensor_arr.size() is
-      // wrong, if size() decrease in next step, an error maybe occur.
-      lod_tensor_arr->clear();
+      // NOTE(wangxi): need clear the vector, otherwise dense_tensor_arr.size()
+      // is wrong, if size() decrease in next step, an error maybe occur.
+      dense_tensor_arr->clear();
     } else if (var->IsType<Strings>()) {
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Type %s of variable %s is not supported eager deletion.",
           framework::ToTypeName(var->Type()),
           var_name));
@@ -253,10 +252,10 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
                                     const bool &for_partial_block) {
   ProgramDesc program{origin_program};
   size_t block_num = program.Size();
-  PADDLE_ENFORCE_GE(
-      block_num,
-      1,
-      phi::errors::PermissionDenied("Program should have at least one block"));
+  PADDLE_ENFORCE_GE(block_num,
+                    1,
+                    common::errors::PermissionDenied(
+                        "Program should have at least one block"));
   // Note(zhangbo): For dygraph2static inplace policy, origin_program is a
   // partial program(only include forward or backward), and control flow op's
   // attr skip_eager_deletion_vars has been updated at graph->program before
@@ -309,16 +308,16 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
       for (auto sub_block_id : sub_block_ids) {
         PADDLE_ENFORCE_GE(sub_block_id,
                           0,
-                          phi::errors::PermissionDenied(
+                          common::errors::PermissionDenied(
                               "sub_block id must be non-negative number"));
         PADDLE_ENFORCE_LT(sub_block_id,
                           block_num,
-                          phi::errors::PermissionDenied(
+                          common::errors::PermissionDenied(
                               "sub_block id exceeds max block num"));
         PADDLE_ENFORCE_EQ(
             found_skip_vars[sub_block_id],
             false,
-            phi::errors::PermissionDenied(
+            common::errors::PermissionDenied(
                 "there are 2 ops which refer to the same sub_block %d",
                 sub_block_id));
 
@@ -350,5 +349,4 @@ GetEagerDeletionCleanVarsForPartial(const ProgramDesc &origin_program,
   return result;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

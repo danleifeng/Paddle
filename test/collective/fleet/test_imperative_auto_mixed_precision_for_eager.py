@@ -148,7 +148,7 @@ class TestAutoCast(unittest.TestCase):
     def test_custom_op_list_exception(self):
         self.custom_op_list_exception()
 
-    def amp_guard_upsupported_fp16_op(self):
+    def amp_guard_unsupported_fp16_op(self):
         data = np.random.uniform(-1, 1, [10, 3, 32, 32]).astype('float32')
         with base.dygraph.guard():
             conv2d = paddle.nn.Conv2D(3, 2, 3, bias_attr=False)
@@ -170,8 +170,8 @@ class TestAutoCast(unittest.TestCase):
         self.assertTrue(out_purefp16_fp16.dtype == paddle.float16)
         self.assertTrue(out_purefp16_fp32.dtype == paddle.float32)
 
-    def test_amp_guard_upsupported_fp16_op(self):
-        self.amp_guard_upsupported_fp16_op()
+    def test_amp_guard_unsupported_fp16_op(self):
+        self.amp_guard_unsupported_fp16_op()
 
     def mode_exception(self):
         def func():
@@ -561,9 +561,9 @@ class TestGradScalerStateDict(unittest.TestCase):
             for param in resnet.parameters():
                 if param.trainable:
                     np_array = np.array(param._grad_ivar().value().get_tensor())
-                    dy_grad_value[
-                        param.name + base.core.grad_var_suffix()
-                    ] = np_array
+                    dy_grad_value[param.name + base.core.grad_var_suffix()] = (
+                        np_array
+                    )
 
             resnet.clear_gradients()
 
@@ -864,9 +864,9 @@ class TestPureFp16SaveLoad(unittest.TestCase):
             for param in resnet.parameters():
                 if param.trainable:
                     np_array = np.array(param._grad_ivar().value().get_tensor())
-                    dy_grad_value[
-                        param.name + base.core.grad_var_suffix()
-                    ] = np_array
+                    dy_grad_value[param.name + base.core.grad_var_suffix()] = (
+                        np_array
+                    )
 
             resnet.clear_gradients()
 
@@ -1152,9 +1152,9 @@ class TestResnet2(unittest.TestCase):
             for param in resnet.parameters():
                 if param.trainable:
                     np_array = np.array(param._grad_ivar().value().get_tensor())
-                    dy_grad_value[
-                        param.name + base.core.grad_var_suffix()
-                    ] = np_array
+                    dy_grad_value[param.name + base.core.grad_var_suffix()] = (
+                        np_array
+                    )
 
             resnet.clear_gradients()
 

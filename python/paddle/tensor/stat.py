@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Sequence, overload
+import warnings
+from typing import TYPE_CHECKING, Literal
 
-from typing_extensions import TypeAlias
+from typing_extensions import TypeAlias, overload
 
 import paddle
 from paddle import _C_ops
@@ -29,9 +30,10 @@ from ..base.data_feeder import check_type, check_variable_and_dtype
 from ..common_ops_import import Variable
 from ..framework import LayerHelper, core
 from .math import _get_reduce_axis_with_tensor
-from .search import where
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
 
 _Interpolation: TypeAlias = Literal[
@@ -50,7 +52,8 @@ def mean(
     Computes the mean of the input tensor's elements along ``axis``.
 
     Args:
-        x (Tensor): The input Tensor with data type float32, float64.
+        x (Tensor): The input Tensor with data type bool, bfloat16, float16, float32,
+            float64, int32, int64, complex64, complex128.
         axis (int|list|tuple|None, optional): The axis along which to perform mean
             calculations. ``axis`` should be int, list(int) or tuple(int). If
             ``axis`` is a list/tuple of dimension(s), mean is calculated along
@@ -108,7 +111,17 @@ def mean(
         check_variable_and_dtype(
             x,
             'x/input',
-            ['uint16', "int32", 'float16', 'float32', 'float64'],
+            [
+                'bool',
+                'uint16',
+                'float16',
+                'float32',
+                'float64',
+                'int32',
+                'int64',
+                'complex64',
+                'complex128',
+            ],
             'mean/reduce_mean',
         )
         check_type(
@@ -180,18 +193,34 @@ def var(
         )
 
     u = mean(x, axis, True, name)
-    out = paddle.sum(paddle.pow((x - u), 2), axis, keepdim=keepdim, name=name)
+    dtype = paddle.float32 if x.dtype == paddle.float16 else x.dtype
+    out = paddle.sum(
+        paddle.pow((x - u), 2), axis, keepdim=keepdim, name=name, dtype=dtype
+    )
 
-    dtype = x.dtype
     n = paddle.cast(paddle.numel(x), "int64") / paddle.cast(
         paddle.numel(out), "int64"
     )
     n = n.astype(dtype)
     if unbiased:
         one_const = paddle.ones([], x.dtype)
-        n = where(n > one_const, n - 1.0, one_const)
+        if paddle.in_dynamic_mode() and n <= one_const:
+            warnings.warn("Degrees of freedom is <= 0.", stacklevel=2)
+        n = n - 1.0
     n.stop_gradient = True
     out /= n
+
+    def _replace_nan(out):
+        out_nan = paddle.full_like(out, paddle.nan)
+        out_nan.stop_gradient = out.stop_gradient
+        return out_nan
+
+    if 0 in x.shape:
+        out = _replace_nan(out)
+    if len(x.shape) == 0 and not unbiased:
+        out = paddle.to_tensor(0, stop_gradient=out.stop_gradient)
+    if out.dtype != x.dtype:
+        return out.astype(x.dtype)
     return out
 
 
@@ -264,7 +293,7 @@ def numel(x: Tensor, name: str | None = None) -> Tensor:
     Returns the number of elements for a tensor, which is a 0-D int64 Tensor with shape [].
 
     Args:
-        x (Tensor): The input Tensor, it's data type can be bool, float16, float32, float64, int32, int64, complex64, complex128.
+        x (Tensor): The input Tensor, it's data type can be bool, float16, float32, float64, uint8, int8, int32, int64, complex64, complex128.
         name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
@@ -303,8 +332,7 @@ def nanmedian(
     keepdim: bool = ...,
     mode: Literal['min'] = ...,
     name: str | None = ...,
-) -> tuple[Tensor, Tensor]:
-    ...
+) -> tuple[Tensor, Tensor]: ...
 
 
 @overload
@@ -314,8 +342,7 @@ def nanmedian(
     keepdim: bool = ...,
     mode: Literal['avg', 'min'] = ...,
     name: str | None = ...,
-) -> Tensor:
-    ...
+) -> Tensor: ...
 
 
 def nanmedian(
@@ -448,8 +475,7 @@ def median(
     keepdim: bool = ...,
     mode: Literal['min'] = ...,
     name: str | None = ...,
-) -> tuple[Tensor, Tensor]:
-    ...
+) -> tuple[Tensor, Tensor]: ...
 
 
 @overload
@@ -459,8 +485,7 @@ def median(
     keepdim: bool = ...,
     mode: Literal['avg', 'min'] = ...,
     name: str | None = ...,
-) -> Tensor:
-    ...
+) -> Tensor: ...
 
 
 def median(
@@ -474,7 +499,7 @@ def median(
     Compute the median along the specified axis.
 
     Args:
-        x (Tensor): The input Tensor, it's data type can be float16, float32, float64, int32, int64.
+        x (Tensor): The input Tensor, it's data type can be bfloat16, float16, float32, float64, int32, int64.
         axis (int|None, optional): The axis along which to perform median calculations ``axis`` should be int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
@@ -573,10 +598,6 @@ def median(
     if not isinstance(x, (Variable, paddle.pir.Value)):
         raise TypeError("In median, the input x should be a Tensor.")
 
-    if in_dynamic_mode() and x.size == 0:
-        # TODO: Currently, `__eq__` don't support arguments (`pir.Value` & `int`)
-        raise ValueError("In median, the size of input x should not be 0.")
-
     is_flatten = False
     dims = len(x.shape)
     if dims == 0:
@@ -633,7 +654,7 @@ def median(
             keepdim=True,
         )
     else:  # mode == 'min'
-        if sz & 1 == 0:
+        if sz & 1 == 0 and kth != 0:
             out_tensor = paddle.slice(
                 tensor_topk, axes=[axis], starts=[kth - 1], ends=[kth]
             )
@@ -712,7 +733,7 @@ def _compute_quantile(
         axis (int|list, optional): The axis along which to calculate quantile. ``axis`` should be int or list of int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
-            If ``axis`` is a list, quantile is calculated over all elements of given axises.
+            If ``axis`` is a list, quantile is calculated over all elements of given axes.
             If ``axis`` is None, quantile is calculated over all elements of ``x``. Default is None.
         keepdim (bool, optional): Whether to reserve the reduced dimension(s)
             in the output Tensor. If ``keepdim`` is True, the dimensions of
@@ -740,7 +761,7 @@ def _compute_quantile(
     elif isinstance(q, (list, tuple)):
         if len(q) <= 0:
             raise ValueError("q should not be empty")
-    elif isinstance(q, Variable):
+    elif isinstance(q, (Variable, paddle.pir.Value)):
         if len(q.shape) > 1:
             raise ValueError("q should be a 0-D tensor or a 1-D tensor")
         if len(q.shape) == 0:
@@ -751,7 +772,9 @@ def _compute_quantile(
         )
     for q_num in q:
         # we do not validate tensor q in static mode
-        if not in_dynamic_or_pir_mode() and isinstance(q_num, Variable):
+        if not in_dynamic_mode() and isinstance(
+            q_num, (Variable, paddle.pir.Value)
+        ):
             break
         if q_num < 0 or q_num > 1:
             raise ValueError("q should be in range [0, 1]")
@@ -894,7 +917,7 @@ def quantile(
         axis (int|list, optional): The axis along which to calculate quantile. ``axis`` should be int or list of int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
-            If ``axis`` is a list, quantile is calculated over all elements of given axises.
+            If ``axis`` is a list, quantile is calculated over all elements of given axes.
             If ``axis`` is None, quantile is calculated over all elements of ``x``. Default is None.
         keepdim (bool, optional): Whether to reserve the reduced dimension(s)
             in the output Tensor. If ``keepdim`` is True, the dimensions of
@@ -978,7 +1001,7 @@ def nanquantile(
         axis (int|list, optional): The axis along which to calculate quantile. ``axis`` should be int or list of int.
             ``axis`` should be in range [-D, D), where D is the dimensions of ``x`` .
             If ``axis`` is less than 0, it works the same way as :math:`axis + D`.
-            If ``axis`` is a list, quantile is calculated over all elements of given axises.
+            If ``axis`` is a list, quantile is calculated over all elements of given axes.
             If ``axis`` is None, quantile is calculated over all elements of ``x``. Default is None.
         keepdim (bool, optional): Whether to reserve the reduced dimension(s)
             in the output Tensor. If ``keepdim`` is True, the dimensions of

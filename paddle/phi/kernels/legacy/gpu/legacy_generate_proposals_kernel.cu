@@ -156,7 +156,7 @@ void CUDAGenerateProposalsKernel(const Context &dev_ctx,
 
   PADDLE_ENFORCE_GE(eta,
                     1.,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Not support adaptive NMS. The attribute 'eta' "
                         "should not less than 1. But received eta=[%d]",
                         eta));
@@ -253,7 +253,7 @@ void CUDAGenerateProposalsKernel(const Context &dev_ctx,
                             dev_ctx.stream());
     rpn_rois_num->Resize({num});
   }
-  phi::LoD lod;
+  phi::LegacyLoD lod;
   lod.emplace_back(offset);
   rpn_rois->set_lod(lod);
   rpn_roi_probs->set_lod(lod);

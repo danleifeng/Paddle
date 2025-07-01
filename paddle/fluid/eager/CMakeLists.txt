@@ -35,6 +35,7 @@ add_subdirectory(custom_operator)
 if(NOT ((NOT WITH_PYTHON) AND ON_INFER))
   add_subdirectory(accumulation)
   add_subdirectory(pylayer)
+  add_subdirectory(to_static)
   cc_library(
     grad_tensor_holder
     SRCS grad_tensor_holder.cc
@@ -49,7 +50,7 @@ endif()
 cc_library(
   eager_nan_inf_utils
   SRCS nan_inf_utils.cc
-  DEPS phi common enforce)
+  DEPS phi common)
 cc_library(
   grad_node_info
   SRCS grad_node_info.cc

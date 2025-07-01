@@ -28,7 +28,7 @@ static std::vector<int64_t> GetInputShape(phi::DDim dim,
                                           std::vector<int> axis) {
   PADDLE_ENFORCE_GT(dim.size(),
                     0,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The Input(%s) has not been initialized properly. The "
                         "shape of Input(%s) = [%s].",
                         dim));
@@ -57,13 +57,13 @@ class FusedMatmulOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GT(
         ndims_x,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The first input tensor X's dimension size must be greater than 0,"
             " but received the first input tensor X's dimension size is 0. "));
     PADDLE_ENFORCE_GT(
         ndims_y,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The second input tensor Y's dimension size must be greater than 0,"
             " but received the second input tensor Y's dimension size is 0. "));
 
@@ -129,7 +129,7 @@ class FusedMatmulOp : public framework::OperatorWithKernel {
       const phi::DenseTensor& tensor,
       const phi::KernelKey& expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
 #ifdef PADDLE_WITH_DNNL

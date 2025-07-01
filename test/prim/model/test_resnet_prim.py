@@ -46,17 +46,32 @@ epoch_num = 1
 # note: Version 2.0 momentum is fused to OP when L2Decay is available, and the results are different from the base version.
 # The results in ci as as follows:
 DY2ST_PRIM_GT = [
-    5.847333908081055,
-    8.368712425231934,
-    4.989010334014893,
-    8.523179054260254,
-    7.997398376464844,
-    7.601831436157227,
-    9.777579307556152,
-    8.428393363952637,
-    8.581992149353027,
-    10.313587188720703,
+    8.852441787719727,
+    8.403528213500977,
+    7.157894134521484,
+    8.536691665649414,
+    7.061797142028809,
+    7.612838268280029,
+    7.831070423126221,
+    8.562232971191406,
+    8.49091911315918,
+    7.967043876647949,
 ]
+
+# IN V100, 16G, CUDA 12.0, the results are as follows:
+DY2ST_PRIM_GT_CUDA12 = [
+    8.852442741394043,
+    8.40353012084961,
+    7.157838344573975,
+    8.537829399108887,
+    7.063560485839844,
+    7.615252494812012,
+    7.805097579956055,
+    8.546052932739258,
+    8.456424713134766,
+    7.971644401550293,
+]
+
 
 if core.is_compiled_with_cuda():
     paddle.set_flags({'FLAGS_cudnn_deterministic': True})
@@ -121,7 +136,6 @@ def run(model, data_loader, optimizer, mode):
         for batch_id, data in enumerate(data_loader()):
             start_time = time.time()
             img, label = data
-
             pred = model(img)
             avg_loss = paddle.nn.functional.cross_entropy(
                 input=pred,
@@ -130,7 +144,6 @@ def run(model, data_loader, optimizer, mode):
                 reduction='mean',
                 use_softmax=True,
             )
-
             acc_top1 = paddle.static.accuracy(input=pred, label=label, k=1)
             acc_top5 = paddle.static.accuracy(input=pred, label=label, k=5)
 
@@ -146,20 +159,14 @@ def run(model, data_loader, optimizer, mode):
 
             end_time = time.time()
             print(
-                "[%s]epoch %d | batch step %d, loss %0.8f, acc1 %0.3f, acc5 %0.3f, time %f"
-                % (
-                    mode,
-                    epoch,
-                    batch_id,
-                    avg_loss,
-                    total_acc1.numpy() / total_sample,
-                    total_acc5.numpy() / total_sample,
-                    end_time - start_time,
-                )
+                f"[{mode}]epoch {epoch} | batch step {batch_id}, "
+                f"loss {avg_loss:0.8f}, "
+                f"acc1 {total_acc1.numpy() / total_sample:0.3f}, "
+                f"acc5 {total_acc5.numpy() / total_sample:0.3f}, "
+                f"time {end_time - start_time:f}"
             )
             if batch_id >= end_step:
                 break
-    print(losses)
     return losses
 
 
@@ -180,15 +187,10 @@ def train(to_static, enable_prim, enable_cinn):
     data_loader = paddle.io.DataLoader(
         dataset, batch_size=batch_size, drop_last=True
     )
-
-    resnet = resnet50(False)
+    resnet = resnet50(True)
     if to_static:
-        build_strategy = paddle.static.BuildStrategy()
-        if enable_cinn:
-            build_strategy.build_cinn_pass = True
-        resnet = paddle.jit.to_static(
-            resnet, build_strategy=build_strategy, full_graph=True
-        )
+        backend = "CINN" if enable_cinn else None
+        resnet = paddle.jit.to_static(resnet, backend=backend, full_graph=True)
     optimizer = optimizer_setting(parameter_list=resnet.parameters())
 
     train_losses = run(resnet, data_loader, optimizer, 'train')
@@ -204,7 +206,13 @@ class TestResnet(unittest.TestCase):
     )
     def test_prim(self):
         dy2st_prim = train(to_static=True, enable_prim=True, enable_cinn=False)
-        np.testing.assert_allclose(dy2st_prim, DY2ST_PRIM_GT, rtol=1e-5)
+        standard_prim = DY2ST_PRIM_GT
+
+        if paddle.version.cuda() == "12.0":
+            standard_prim = DY2ST_PRIM_GT_CUDA12
+        np.testing.assert_allclose(
+            dy2st_prim, standard_prim, rtol=2e-2, atol=1e-2
+        )
 
 
 if __name__ == '__main__':

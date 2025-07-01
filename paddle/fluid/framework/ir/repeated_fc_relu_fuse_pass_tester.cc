@@ -17,15 +17,11 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/ir/repeated_fc_relu_fuse_pass.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class VarDesc;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void TestMain(int num_fc) {
   // inputs                                 operator    output
@@ -64,7 +60,7 @@ void TestMain(int num_fc) {
   PADDLE_ENFORCE_EQ(
       num_nodes_before - (num_fc_nodes_before - 1) + 1,
       num_nodes_after,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "num_nodes_before = %d, num_fc_nodes_before = %d, num_nodes_after = "
           "%d.",
           num_nodes_before,
@@ -72,16 +68,14 @@ void TestMain(int num_fc) {
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    phi::errors::InvalidArgument("num_fused_nodes_after = %d.",
-                                                 num_fused_nodes_after));
+                    common::errors::InvalidArgument(
+                        "num_fused_nodes_after = %d.", num_fused_nodes_after));
 }
 
 TEST(RepeatedFCReluFusePass, basic_3) { TestMain(3); }
 
 TEST(RepeatedFCReluFusePass, basic_9) { TestMain(9); }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(repeated_fc_relu_fuse_pass);

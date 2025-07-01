@@ -18,7 +18,7 @@
 #include "paddle/cinn/hlir/dialect/operator/ir/op_dialect.h"
 #include "paddle/cinn/hlir/dialect/runtime/ir/runtime_dialect.h"
 #include "paddle/cinn/runtime/flags.h"
-#include "paddle/common/enforce.h"
+#include "paddle/common/errors.h"
 #include "paddle/common/flags.h"
 #include "paddle/fluid/pir/dialect/kernel/ir/kernel_dialect.h"
 #include "paddle/pir/include/core/builtin_type.h"
@@ -156,7 +156,7 @@ struct StaticDimToDynamicConverter {
       PADDLE_ENFORCE_EQ(
           origin_shape.size(),
           target_shape.size(),
-          phi::errors::InvalidArgument(
+          ::common::errors::InvalidArgument(
               "The size of origin shape and target shape is not equal,"
               "where the size of origin shape:%d but the size of target "
               "shape:%d.",
@@ -198,9 +198,16 @@ struct StaticDimToDynamicConverter {
     return AppliedOnceUnaryImpl(dim_expr, symbol);
   }
 
-  bool AppliedOnceImpl(const symbol::Reciprocal<symbol::DimExpr>& dim_expr,
+  template <typename T>
+  bool AppliedOnceBinaryImpl(const T& dim_expr, const std::string& symbol) {
+    const auto& lhs = dim_expr->lhs;
+    const auto& rhs = dim_expr->rhs;
+    return AppliedOnce(lhs, symbol) || AppliedOnce(rhs, symbol);
+  }
+
+  bool AppliedOnceImpl(const symbol::Div<symbol::DimExpr>& dim_expr,
                        const std::string& symbol) {
-    return AppliedOnceUnaryImpl(dim_expr, symbol);
+    return AppliedOnceBinaryImpl(dim_expr, symbol);
   }
 
   template <typename T>
@@ -273,6 +280,24 @@ struct StaticDimToDynamicConverter {
   }
 
   template <typename T>
+  std::optional<symbol::DimExpr> ConvertBinaryDimExprImpl(
+      const T& dim_expr, int64_t c, const std::string& symbol) {
+    const auto& lhs = dim_expr->lhs;
+    const auto& rhs = dim_expr->rhs;
+    const auto& converted_lhs = ConvertDimExpr(lhs, c, symbol);
+    const auto& converted_rhs = ConvertDimExpr(rhs, c, symbol);
+    if (!converted_lhs.has_value() && !converted_rhs.has_value())
+      return std::nullopt;
+    if (converted_lhs.has_value() && converted_rhs.has_value()) {
+      return T{converted_lhs.value(), converted_rhs.value()};
+    }
+    if (converted_lhs.has_value()) {
+      return T{converted_lhs.value(), rhs};
+    }
+    return T{lhs, converted_rhs.value()};
+  }
+
+  template <typename T>
   std::optional<symbol::DimExpr> ConvertListDimExprImpl(
       const T& dim_expr, int64_t c, const std::string& symbol) {
     const auto& [operands] = dim_expr;
@@ -297,13 +322,6 @@ struct StaticDimToDynamicConverter {
   }
 
   std::optional<symbol::DimExpr> ConvertDimExprImpl(
-      const symbol::Reciprocal<symbol::DimExpr>& dim_expr,
-      int64_t c,
-      const std::string& symbol) {
-    return ConvertUnaryDimExprImpl(dim_expr, c, symbol);
-  }
-
-  std::optional<symbol::DimExpr> ConvertDimExprImpl(
       const symbol::Add<symbol::DimExpr>& dim_expr,
       int64_t c,
       const std::string& symbol) {
@@ -315,6 +333,13 @@ struct StaticDimToDynamicConverter {
       int64_t c,
       const std::string& symbol) {
     return ConvertListDimExprImpl(dim_expr, c, symbol);
+  }
+
+  std::optional<symbol::DimExpr> ConvertDimExprImpl(
+      const symbol::Div<symbol::DimExpr>& dim_expr,
+      int64_t c,
+      const std::string& symbol) {
+    return ConvertBinaryDimExprImpl(dim_expr, c, symbol);
   }
 
   std::optional<symbol::DimExpr> ConvertDimExprImpl(
@@ -399,7 +424,10 @@ struct StaticDimToDynamicConverter {
   template <typename DoEachT>
   void ForEachConstantToSymbol(const DoEachT& DoEach) {
     const auto& map = *GetGlobalStaticDimToDynamicMap();
-    CHECK(map.has_value());
+    PADDLE_ENFORCE_EQ(map.has_value(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "map is empty, it should have value"));
     for (const auto& [constant, symbol] : map.value()) {
       DoEach(constant, symbol);
     }

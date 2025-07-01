@@ -13,14 +13,12 @@
 # limitations under the License.
 
 
-import os
-from functools import wraps
-
 import paddle
 from paddle.framework.dtype import bind_datatype, bind_vartype
 
 
 def _switch_to_pir_():
+    bind_datatype()
     paddle.base.framework.global_var._use_pir_api_ = True
     paddle.framework.set_flags({"FLAGS_enable_pir_in_executor": True})
     paddle.pir.register_paddle_dialect()
@@ -42,6 +40,7 @@ def _switch_to_pir_():
 
 
 def _switch_to_old_ir_():
+    bind_vartype()
     paddle.base.framework.global_var._use_pir_api_ = False
     paddle.framework.set_flags({"FLAGS_enable_pir_in_executor": False})
 
@@ -74,7 +73,6 @@ class IrGuard:
         if not self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": True})
             paddle.base.framework.global_var._use_pir_api_ = True
-            bind_datatype()
             self._switch_to_pir()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -83,7 +81,6 @@ class IrGuard:
         if not self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
             paddle.base.framework.global_var._use_pir_api_ = False
-            bind_vartype()
             self._switch_to_old_ir()
 
     def _switch_to_pir(self):
@@ -114,8 +111,6 @@ class OldIrGuard:
             paddle.enable_static()
         if self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-            paddle.base.framework.global_var._use_pir_api_ = False
-            bind_vartype()
             _switch_to_old_ir_()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -123,8 +118,6 @@ class OldIrGuard:
             paddle.disable_static()
         if self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": True})
-            paddle.base.framework.global_var._use_pir_api_ = True
-            bind_datatype()
             _switch_to_pir_()
 
 
@@ -135,15 +128,11 @@ class DygraphPirGuard:
         ]
         if not self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": True})
-            paddle.base.framework.global_var._use_pir_api_ = True
-            bind_datatype()
             self._switch_to_pir()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if not self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-            paddle.base.framework.global_var._use_pir_api_ = False
-            bind_vartype()
             self._switch_to_old_ir()
 
     def _switch_to_pir(self):
@@ -171,52 +160,12 @@ class DygraphOldIrGuard:
         ]
         if self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": False})
-            paddle.base.framework.global_var._use_pir_api_ = False
-            bind_vartype()
             _switch_to_old_ir_()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.old_flag:
             paddle.framework.set_flags({"FLAGS_enable_pir_api": True})
-            paddle.base.framework.global_var._use_pir_api_ = True
-            bind_datatype()
             _switch_to_pir_()
-
-
-def test_with_pir_api(func):
-    @wraps(func)
-    def impl(*args, **kwargs):
-        skip_old_ir = os.environ.get("FLAGS_CI_skip_old_ir", "False")
-        skip_pir = os.environ.get("FLAGS_CI_skip_pir", "False")
-        if skip_old_ir == "False" or not skip_old_ir:
-            with OldIrGuard():
-                func(*args, **kwargs)
-        if skip_pir == "False" or not skip_pir:
-            with IrGuard():
-                func(*args, **kwargs)
-
-    return impl
-
-
-def test_with_old_ir_only(func):
-    @wraps(func)
-    def impl(*args, **kwargs):
-        with OldIrGuard():
-            func(*args, **kwargs)
-
-    return impl
-
-
-def test_with_dygraph_pir(func):
-    @wraps(func)
-    def impl(*args, **kwargs):
-        with DygraphOldIrGuard():
-            func(*args, **kwargs)
-
-        with DygraphPirGuard():
-            func(*args, **kwargs)
-
-    return impl
 
 
 def get_memory(value):
@@ -254,3 +203,21 @@ def analysis_io(program: paddle.pir.Program):
             total_io += get_memory(value)
 
     return total_io / 1024 / 1024 / 1024
+
+
+def append_activation_in_pir(input, act=None, use_cudnn=None):
+    if act is None:
+        return input
+
+    act_name_mapping = {
+        "hard_swish": "hardswish",
+    }
+    act = act_name_mapping.get(act, act)
+
+    attrs = ()
+    if use_cudnn:
+        attrs = ('use_cudnn', use_cudnn)
+    act_op = getattr(paddle._C_ops, act)
+    if act == 'softmax':
+        return act_op(input, -1)
+    return act_op(input, *attrs)

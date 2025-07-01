@@ -32,7 +32,6 @@
 #include <vector>
 
 #include "paddle/phi/core/enforce.h"
-
 // Utility functions for TCP socket.
 namespace phi {
 namespace distributed {
@@ -45,7 +44,6 @@ using SocketType = int;
 
 namespace tcputils {
 
-constexpr int LISTENQ = 2048;
 constexpr std::chrono::seconds kDelay = std::chrono::seconds(3);
 constexpr std::chrono::seconds kNoTimeout = std::chrono::seconds::zero();
 constexpr std::chrono::seconds kDefaultTimeout = std::chrono::seconds(360);
@@ -83,8 +81,8 @@ void send_bytes(SocketType socket, const T* buffer, size_t len) {
     PADDLE_ENFORCE_GT(
         byte_sent,
         0,
-        phi::errors::InvalidArgument("TCP send error. Details: %s.",
-                                     socket_error().message()));
+        common::errors::InvalidArgument("TCP send error. Details: %s.",
+                                        socket_error().message()));
     to_send -= byte_sent;
     ptr += byte_sent;
   }
@@ -103,10 +101,10 @@ void receive_bytes(SocketType socket, T* buffer, size_t len) {
     PADDLE_ENFORCE_GE(
         byte_received,
         0,
-        phi::errors::InvalidArgument("TCP receive error. Details: %s.",
-                                     socket_error().message()));
+        common::errors::InvalidArgument("TCP receive error. Details: %s.",
+                                        socket_error().message()));
     if (byte_received == 0) {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "TCP connection reset by peer. Details: %s.",
           socket_error().message()));
     }

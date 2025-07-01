@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
 import re
 import sys
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import paddle
 import paddle.distributed as dist
@@ -24,11 +27,33 @@ from paddle.distributed.fleet.utils.log_util import logger
 
 from .save_for_auto import save_for_auto_inference
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from io import BytesIO
+
+    from typing_extensions import Unpack
+
+    from paddle import Tensor
+    from paddle._typing import NestedStructure
+    from paddle.nn.layer.layers import _StateDict
+    from paddle.static import Program
+
+    class _SaveConfig(TypedDict, total=False):
+        use_binary_format: bool
+        gather_to: int | Sequence[int] | None
+        state_type: Literal['params', 'opt']
+        max_grouped_size: str | int
+
+
 __all__ = ["save", "save_for_auto_inference"]
 
 
 @dygraph_only
-def save(state_dict, path, **configs):
+def save(
+    state_dict: dict[str, Any] | _StateDict | NestedStructure[Tensor] | Program,
+    path: str | BytesIO,
+    **configs: Unpack[_SaveConfig],
+) -> None:
     '''
     Save a state dict to the specified path in both distributed and single-card environment.
 
@@ -62,7 +87,7 @@ def save(state_dict, path, **configs):
             3. state_type(str):
                 Value can be 'params' or 'opt', specifying to save parameters or optimizer state.
             4. max_grouped_size(str|int):
-                To limit the max size(how many bits) a object group to be transfered a time.
+                To limit the max size(how many bits) a object group to be transferred a time.
                 If str, the format must be as num+'G/M/K', for example, 3G, 2K, 10M, etc. Default is 3G.
 
     Returns:
@@ -72,7 +97,8 @@ def save(state_dict, path, **configs):
 
         .. code-block:: python
 
-            >>> # doctest: +SKIP('TODO: the error will be fix in the feature')
+            >>> # doctest: +SKIP('TODO: the error will be fixed in the future')
+            >>> # type: ignore
             >>> import paddle
             >>> paddle.distributed.init_process_group(backend='nccl')
             >>> paddle.distributed.fleet.init(is_collective=True)

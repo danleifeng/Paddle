@@ -94,28 +94,54 @@ inline std::vector<int> get_new_shape(
                           "The shape of dimension tensor should be [1] or [],"
                           "but received d%.",
                           tensor->dims()));
+    if (tensor->dtype() == phi::DataType::INT64) {
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
-    if (tensor->place().GetType() == phi::AllocationType::CUSTOM) {
-      DenseTensor temp;
-      phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
-      vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
-      continue;
-    }
+      if (tensor->place().GetType() == phi::AllocationType::CUSTOM) {
+        DenseTensor temp;
+        phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
+        vec_new_shape.push_back(static_cast<int64_t>(*temp.data<int64_t>()));
+        continue;
+      }
 #endif
 #ifdef PADDLE_WITH_XPU
-    if (tensor->place().GetType() == phi::AllocationType::XPU) {
-      DenseTensor temp;
-      phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
-      vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
-      continue;
-    }
+      if (tensor->place().GetType() == phi::AllocationType::XPU) {
+        DenseTensor temp;
+        phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
+        vec_new_shape.push_back(static_cast<int64_t>(*temp.data<int64_t>()));
+        continue;
+      }
 #endif
-    if (tensor->place().GetType() == phi::AllocationType::GPU) {
-      DenseTensor temp;
-      phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
-      vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
-    } else {
-      vec_new_shape.push_back(static_cast<int32_t>(*tensor->data<int32_t>()));
+      if (tensor->place().GetType() == phi::AllocationType::GPU) {
+        DenseTensor temp;
+        phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
+        vec_new_shape.push_back(static_cast<int64_t>(*temp.data<int64_t>()));
+      } else {
+        vec_new_shape.push_back(static_cast<int64_t>(*tensor->data<int64_t>()));
+      }
+    } else if (tensor->dtype() == phi::DataType::INT32) {
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+      if (tensor->place().GetType() == phi::AllocationType::CUSTOM) {
+        DenseTensor temp;
+        phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
+        vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
+        continue;
+      }
+#endif
+#ifdef PADDLE_WITH_XPU
+      if (tensor->place().GetType() == phi::AllocationType::XPU) {
+        DenseTensor temp;
+        phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
+        vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
+        continue;
+      }
+#endif
+      if (tensor->place().GetType() == phi::AllocationType::GPU) {
+        DenseTensor temp;
+        phi::Copy(*dev_ctx, *tensor, phi::CPUPlace(), true, &temp);
+        vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
+      } else {
+        vec_new_shape.push_back(static_cast<int32_t>(*tensor->data<int32_t>()));
+      }
     }
   }
 
@@ -154,20 +180,19 @@ inline std::vector<T> get_new_data_from_tensor(
 }
 
 #if defined(__NVCC__) || defined(__HIPCC__)
-using phi::kps::details::FastDivMod;
 
 struct FastDivModForInterpolate {
  public:
-  FastDivMod channels_div;
-  FastDivMod output_w_div;
-  FastDivMod output_wc_div;
+  FastDivMod<int64_t> channels_div;
+  FastDivMod<int64_t> output_w_div;
+  FastDivMod<int64_t> output_wc_div;
 
-  explicit HOSTDEVICE FastDivModForInterpolate(const int channels,
-                                               const int output_w,
-                                               const int outout_wc)
-      : channels_div(FastDivMod(channels)),
-        output_w_div(FastDivMod(output_w)),
-        output_wc_div(FastDivMod(outout_wc)) {}
+  explicit HOSTDEVICE FastDivModForInterpolate(const int64_t channels,
+                                               const int64_t output_w,
+                                               const int64_t output_wc)
+      : channels_div(channels),
+        output_w_div(output_w),
+        output_wc_div(output_wc) {}
 };
 
 #endif

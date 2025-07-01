@@ -43,7 +43,7 @@
   support_dygraph_mode : true
 
 - op : block_multihead_attention_
-  args : (Tensor qkv, Tensor key_cache, Tensor value_cache, Tensor seq_lens_encoder, Tensor seq_lens_decoder, Tensor seq_lens_this_time, Tensor padding_offsets, Tensor cum_offsets, Tensor cu_seqlens_q, Tensor cu_seqlens_k, Tensor block_tables, Tensor pre_key_cache, Tensor pre_value_cache, Tensor rope_emb, Tensor mask,  Tensor tgt_mask, Tensor cache_k_quant_scales, Tensor cache_v_quant_scales, Tensor cache_k_dequant_scales, Tensor cache_v_dequant_scales, Tensor qkv_out_scale, Tensor qkv_bias, Tensor out_shift, Tensor out_smooth, Tensor max_enc_len_this_time, Tensor max_dec_len_this_time, int max_seq_len, int block_size, bool use_neox_style, bool dynamic_cachekv_quant=false, int quant_round_type=1, float quant_max_bound=127.0, float quant_min_bound=-127.0, float out_scale=-1, str compute_dtype = "default")
+  args : (Tensor qkv, Tensor key_cache, Tensor value_cache, Tensor seq_lens_encoder, Tensor seq_lens_decoder, Tensor seq_lens_this_time, Tensor padding_offsets, Tensor cum_offsets, Tensor cu_seqlens_q, Tensor cu_seqlens_k, Tensor block_tables, Tensor pre_key_cache, Tensor pre_value_cache, Tensor rope_emb, Tensor mask,  Tensor tgt_mask, Tensor cache_k_quant_scales, Tensor cache_v_quant_scales, Tensor cache_k_dequant_scales, Tensor cache_v_dequant_scales, Tensor qkv_out_scale, Tensor qkv_bias, Tensor out_shift, Tensor out_smooth, Tensor max_enc_len_this_time, Tensor max_dec_len_this_time, int max_seq_len, int block_size, bool use_neox_style, bool dynamic_cachekv_quant=false, int quant_round_type=1, float quant_max_bound=127.0, float quant_min_bound=-127.0, float out_scale=-1, str compute_dtype="default", float rope_theta=10000.0)
   output : Tensor(fmha_out), Tensor(qkv_out), Tensor(key_cache_out), Tensor(value_cache_out)
   infer_meta :
     func : BlockMultiheadAttentionInferMeta
@@ -57,7 +57,7 @@
     skip_transform : max_enc_len_this_time, max_dec_len_this_time
 
 - op : block_multihead_attention_xpu
-  args : (Tensor qkv, Tensor key_cache, Tensor value_cache, Tensor seq_lens_encoder, Tensor seq_lens_decoder, Tensor seq_lens_this_time, Tensor padding_offsets, Tensor cum_offsets, Tensor cu_seqlens_q, Tensor cu_seqlens_k, Tensor block_tables, Tensor cache_k_per_batch_maxs, Tensor cache_v_per_batch_maxs, Tensor pre_key_cache, Tensor pre_value_cache, Tensor rope_emb, Tensor mask,  Tensor tgt_mask, Tensor cache_k_quant_scales, Tensor cache_v_quant_scales, Tensor cache_k_dequant_scales, Tensor cache_v_dequant_scales, Tensor qkv_out_scale, Tensor qkv_bias, Tensor out_shift, Tensor out_smooth, Tensor max_enc_len_this_time, Tensor max_dec_len_this_time, int max_seq_len, int block_size, bool use_neox_style, bool dynamic_cachekv_quant=false, int quant_round_type=1, float quant_max_bound=127.0, float quant_min_bound=-127.0, float out_scale=-1, str compute_dtype = "default")
+  args : (Tensor qkv, Tensor key_cache, Tensor value_cache, Tensor seq_lens_encoder, Tensor seq_lens_decoder, Tensor seq_lens_this_time, Tensor padding_offsets, Tensor cum_offsets, Tensor cu_seqlens_q, Tensor cu_seqlens_k, Tensor block_tables, Tensor cache_k_per_batch_maxs, Tensor cache_v_per_batch_maxs, Tensor pre_key_cache, Tensor pre_value_cache, Tensor rope_emb, Tensor mask,  Tensor tgt_mask, Tensor cache_k_quant_scales, Tensor cache_v_quant_scales, Tensor cache_k_dequant_scales, Tensor cache_v_dequant_scales, Tensor qkv_out_scale, Tensor qkv_bias, Tensor out_shift, Tensor out_smooth, Tensor max_enc_len_this_time, Tensor max_dec_len_this_time, int max_seq_len, int block_size, bool use_neox_style, bool dynamic_cachekv_quant=false, int quant_round_type=1, float quant_max_bound=127.0, float quant_min_bound=-127.0, float out_scale=-1, str compute_dtype="default", float rope_theta=10000.0)
   output : Tensor(fmha_out), Tensor(qkv_out), Tensor(key_cache_out), Tensor(value_cache_out)
   infer_meta :
     func : BlockMultiheadAttentionInferXPUMeta
@@ -185,7 +185,7 @@
   kernel :
     func : fc_xpu
     data_type : x
-  optional : bias, x_max, scale_max, out_max_in
+  optional : bias, x_max, w_max, scale_max, out_max_in
 
 - op : fp8_fp8_half_gemm_fused
   args : (Tensor x, Tensor y, Tensor bias, bool transpose_x = false, bool transpose_y = false, float scale = 1.0f, str output_dtype = "float16", str activation_type = "identity")
@@ -274,6 +274,7 @@
   output : Tensor(out), Tensor(seed_offset)
   infer_meta :
     func : FusedDropoutAddInferMeta
+    spmd_rule : FusedDropoutAddSpmd
     param : [x, y]
   kernel :
     func : fused_dropout_add
@@ -293,6 +294,8 @@
     func : fused_elementwise_add
     data_type : x
   support_dygraph_mode : true
+  traits : pir::BinaryElementWiseTrait
+  interfaces: paddle::dialect::LayoutTransformationInterface
 
 - op : fused_elementwise_div
   args: (Tensor x, Tensor y, int axis = -1, str fuse_activation = "", float fuse_alpha
@@ -306,6 +309,8 @@
     func : fused_elementwise_div
     data_type : x
   support_dygraph_mode : true
+  traits : pir::BinaryElementWiseTrait
+  interfaces: paddle::dialect::LayoutTransformationInterface
 
 - op : fused_elementwise_mul
   args: (Tensor x, Tensor y, int axis = -1, str fuse_activation = "", float fuse_alpha
@@ -319,6 +324,8 @@
     func : fused_elementwise_mul
     data_type : x
   support_dygraph_mode : true
+  traits : pir::BinaryElementWiseTrait
+  interfaces: paddle::dialect::LayoutTransformationInterface
 
 - op : fused_elementwise_sub
   args: (Tensor x, Tensor y, int axis = -1, str fuse_activation = "", float fuse_alpha
@@ -332,6 +339,8 @@
     func : fused_elementwise_sub
     data_type : x
   support_dygraph_mode : true
+  traits : pir::BinaryElementWiseTrait
+  interfaces: paddle::dialect::LayoutTransformationInterface
 
 - op : fused_elemwise_activation
   args: (Tensor x, Tensor y, str[] functor_list, int axis = -1, float scale = 0.0, bool save_intermediate_out
@@ -379,11 +388,27 @@
   output : Tensor(dweight_out), Tensor(dbias_out)
   infer_meta:
     func : FusedLinearParamGradAddInferMeta
+    spmd_rule : FusedLinearParamGradAddInferSpmd
   optional : dweight, dbias
   kernel:
     func : fused_linear_param_grad_add
     data_type : dout
   support_dygraph_mode : true
+  traits : pir::SideEffectTrait
+
+- op : fused_multi_transformer_
+  args : (Tensor x, Tensor[] ln_scales, Tensor[] ln_biases, Tensor[] qkv_weights, Tensor[] qkv_biases, Tensor[] cache_kvs, Tensor[] pre_caches, Tensor rotary_tensor, Tensor beam_offset, Tensor time_step, Tensor seq_lengths, Tensor src_mask, Tensor[] out_linear_weights, Tensor[] out_linear_biases, Tensor[] ffn_ln_scales, Tensor[] ffn_ln_biases, Tensor[] ffn1_weights, Tensor[] ffn1_biases, Tensor[] ffn2_weights, Tensor[] ffn2_biases, bool pre_layer_norm = true, float epsilon = 1e-5, float residual_alpha = 1.0f, float dropout_rate = .5f, int rotary_emb_dims = 0, bool is_test = false, str dropout_implementation = "downgrade_in_infer", str act_method = "gelu", bool trans_qkvw = true, int ring_id = -1, str norm_type = "layernorm", bool use_neox_rotary_style=true, int gqa_group_size=-1)
+  output :  Tensor[](cache_kv_outs){out_linear_weights.size()}, Tensor(out)
+  infer_meta :
+    func : FusedMultiTransformerInferMeta
+  kernel :
+    func : fused_multi_transformer
+    data_type : x
+  optional : ln_biases, qkv_biases, cache_kvs, pre_caches, rotary_tensor, beam_offset, time_step, seq_lengths, src_mask, out_linear_biases, ffn_ln_biases, ffn1_biases, ffn2_biases, cache_kv_outs
+  inplace : (cache_kvs -> cache_kv_outs)
+  support_dygraph_mode : true
+  data_transform :
+    skip_transform : time_step
 
 - op : fused_multi_transformer_int8_xpu
   args : (Tensor x, Tensor[] ln_scale, Tensor[] ln_bias, Tensor[] qkv_in_max, Tensor[] qkvw, Tensor[] qkv_bias, Tensor[] qkv_scales, Tensor[] out_linear_in_max, Tensor[] out_linear_w, Tensor[] out_linear_bias, Tensor[] out_linear_scales, Tensor[] ffn_ln_scale, Tensor[] ffn_ln_bias, Tensor[] ffn1_in_max, Tensor[] ffn1_weight, Tensor[] ffn1_bias, Tensor[] ffn1_scales, Tensor[] ffn2_in_max, Tensor[] ffn2_weight, Tensor[] ffn2_bias, Tensor[] ffn2_scales, Tensor[] cache_kv, Tensor[] pre_caches, Tensor rotary_pos_emb, Tensor time_step, Tensor seq_lengths, Tensor src_mask, Tensor gather_index, Tensor max_buffer, bool pre_layer_norm, int rotary_emb_dims, float epsilon, float dropout_rate, bool is_test, str dropout_implementation, str act_method, bool trans_qkvw, int ring_id, int gather_axis)
@@ -438,6 +463,37 @@
     func : fused_scale_bias_relu_conv_bn
     data_type : x
 
+- op : fused_seqpool_cvm
+  args: (Tensor[] x, Tensor cvm, str pooltype = "SUM", float pad_value = 0.0, bool
+    use_cvm = true, int cvm_offset = 2)
+  output: Tensor[] (out){x.size()}
+  infer_meta:
+    func: FusedSeqpoolCvmInferMeta
+  kernel:
+    func: fused_seqpool_cvm
+    data_type: x
+  backward: fused_seqpool_cvm_grad
+
+- op : fused_stack_quant
+  args : (Tensor[] x)
+  output : Tensor(out), Tensor(scale)
+  infer_meta :
+    func : FusedStackQuantInferMeta
+  kernel :
+    func : fused_stack_quant
+    data_type : x
+  support_dygraph_mode : true
+
+- op : fused_stack_transpose_quant
+  args : (Tensor[] x)
+  output : Tensor(out), Tensor(scale)
+  infer_meta :
+    func : FusedStackTransposeQuantInferMeta
+  kernel :
+    func : fused_stack_transpose_quant
+    data_type : x
+  support_dygraph_mode : true
+
 - op : fused_token_prune
   args: (Tensor attn, Tensor x, Tensor mask, Tensor new_mask, bool keep_first_token
     = true, bool keep_order = false)
@@ -446,6 +502,15 @@
     func: FusedTokenPruneInferMeta
   kernel:
     func: fused_token_prune
+  support_dygraph_mode : true
+
+- op : fused_transpose_wlch_split_quant
+  args: (Tensor x, IntArray tokens_per_expert, bool pow_2_scales=false)
+  output: Tensor[](out){tokens_per_expert.size()}, Tensor[](scales){tokens_per_expert.size()}
+  infer_meta:
+    func: FusedTransposeWLCHSplitQuantInferMeta
+  kernel:
+    func: fused_transpose_wlch_split_quant
   support_dygraph_mode : true
 
 - op : fusion_group
@@ -500,17 +565,6 @@
     data_type : x
   intermediate : col_mat
 
-- op : fusion_seqexpand_concat_fc
-  args : (Tensor[] x, Tensor fc_weight, Tensor fc_bias, str fc_activation="identity")
-  output : Tensor(out), Tensor(fc_out)
-  infer_meta :
-    func : FusionSeqExpandConcatFCInferMeta
-  kernel :
-    func : fusion_seqexpand_concat_fc
-    data_type : x
-  optional : fc_bias
-  intermediate : fc_out
-
 - op : fusion_seqpool_concat
   args: (Tensor[] x, str pooltype = "SUM", int axis = 1)
   output: Tensor (out)
@@ -559,6 +613,7 @@
     func : gemm_epilogue
     data_type : input
   optional : bias
+  support_dygraph_mode : true
 
 - op : generate_sequence_xpu
   args : (Tensor x, DataType dtype)
@@ -586,6 +641,16 @@
   kernel :
     func : layer_norm_act_xpu
     data_type : x
+
+- op : layer_norm_relu_xpu
+  args : (Tensor x, Tensor scale, Tensor bias, int begin_norm_axis, float epsilon = 1e-5)
+  output : Tensor(out)
+  infer_meta :
+    func : LayerNormalizeReluXPUInferMeta
+  kernel :
+    func : layer_norm_relu_xpu
+    data_type : x
+  optional : scale, bias
 
 - op : mask_adaptive_xpu
   args : (Tensor mask)
@@ -793,16 +858,6 @@
   optional : mask
   support_dygraph_mode : true
 
-- op : weight_only_linear_xpu
-  args : (Tensor x, Tensor weight, Tensor bias, Tensor weight_scale, str weight_dtype, int arch = 80, int group_size = -1)
-  output : Tensor(out)
-  infer_meta :
-    func : WeightOnlyLinearInferMeta
-  kernel :
-    func : weight_only_linear_xpu
-    data_type : x
-  optional : bias
-
 - op : yolo_box_xpu
   args : (Tensor x, Tensor x_max, Tensor grid, Tensor stride, Tensor anchor_grid, float offset)
   output : Tensor(out), Tensor(out_max)
@@ -825,6 +880,16 @@
   support_dygraph_mode : true
   interfaces : paddle::dialect::LayoutTransformationInterface
 
+- op: fused_act_dequant
+  args: (Tensor x, Tensor x_scale)
+  output: Tensor(out)
+  infer_meta:
+    func: FusedActDequantInferMeta
+  kernel:
+    func: fused_act_dequant
+    data_type: x
+  support_dygraph_mode: true
+
 - op: fused_embedding_fc_lstm
   args: (Tensor ids, Tensor embeddings, Tensor weight_h, Tensor bias, Tensor h0, Tensor
     c0, bool use_peepholes = true, bool is_reverse = false, bool use_seq = true, str
@@ -839,3 +904,32 @@
     data_type: embeddings
   optional: h0, c0
   intermediate: xx, batched_input, batched_hidden, batched_cell, reordered_h0, reordered_c0
+
+- op: fused_swiglu_weighted_bwd
+  args: (Tensor o1, Tensor do2_s, Tensor unzipped_probs)
+  output: Tensor(do1), Tensor(probs_grad), Tensor(o2_s)
+  infer_meta:
+    func: FusedSwigluWeightedBwdInferMeta
+  kernel:
+    func: fused_swiglu_weighted_bwd
+    data_type: o1
+  support_dygraph_mode : true
+
+- op: fused_transpose_split_quant
+  args: (Tensor x, IntArray tokens_per_expert, bool pow_2_scales=false)
+  output: Tensor[](out){tokens_per_expert.size()}, Tensor[](scales){tokens_per_expert.size()}
+  infer_meta:
+      func: FusedTransposeSplitQuantInferMeta
+  kernel:
+      func: fused_transpose_split_quant
+  support_dygraph_mode : true
+
+- op: fused_weighted_swiglu_act_quant
+  args: (Tensor x, Tensor prob, bool using_pow2_scaling)
+  output: Tensor(out), Tensor(scale)
+  infer_meta:
+    func: FusedWeightedSwigluActQuantInferMeta
+  kernel:
+    func: fused_weighted_swiglu_act_quant
+  optional: prob
+  support_dygraph_mode : true

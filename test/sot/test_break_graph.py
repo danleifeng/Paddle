@@ -18,7 +18,7 @@ import numpy as np
 from test_case_base import TestCaseBase
 
 import paddle
-from paddle.jit.sot.utils.paddle_api_config import add_break_graph_apis
+from paddle.jit.sot.utils.paddle_api_config import add_break_graph_function
 
 
 def ifelse_func(x, y):
@@ -74,7 +74,7 @@ def to_tensor_break_graph(x, y):
 
 class TestToTensor(TestCaseBase):
     def test_simple(self):
-        add_break_graph_apis([paddle.to_tensor])
+        add_break_graph_function(paddle.to_tensor)
         x = paddle.to_tensor(2)
         y = paddle.to_tensor(3)
         self.assert_results(to_tensor_break_graph, x, y)
@@ -198,6 +198,16 @@ class TestBreakGraphCallGeneratorFunction(TestCaseBase):
         x = paddle.rand([1], dtype=paddle.float32)
         y = paddle.rand([1], dtype=paddle.float32)
         self.assert_results(break_graph_call_generator_function, [x, y])
+
+
+def unary_not_break_graph(x):
+    return not x
+
+
+class TestUnaryNot(TestCaseBase):
+    def test_unary_not_break_graph(self):
+        x = paddle.to_tensor(0)
+        self.assert_results(unary_not_break_graph, x)
 
 
 if __name__ == "__main__":

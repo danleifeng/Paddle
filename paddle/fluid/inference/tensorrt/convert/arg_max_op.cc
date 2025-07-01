@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class ArgMaxOpConverter : public OpConverter {
  public:
@@ -32,9 +30,6 @@ class ArgMaxOpConverter : public OpConverter {
     int axis = op_desc.HasAttr("axis")
                    ? PADDLE_GET_CONST(int64_t, op_desc.GetAttr("axis"))
                    : -1;
-    if (axis > 0 && !engine_->with_dynamic_shape()) {
-      axis -= 1;
-    }
     if (axis < 0) axis += rank;
     auto* topk_layer = TRT_ENGINE_ADD_LAYER(
         engine_, TopK, *input, nvinfer1::TopKOperation::kMAX, 1, 1 << axis);
@@ -47,22 +42,27 @@ class ArgMaxOpConverter : public OpConverter {
                               {output_name + "_value", output_name},
                               test_mode);
     } else {
+      int topk_out_shape_size =
+          topk_layer->getOutput(1)->getDimensions().nbDims;
+      std::vector<bool> should_squeeze(topk_out_shape_size, false);
+      should_squeeze[axis] = true;
+      std::vector<int> gather_indices;
+      for (int i = 0; i < topk_out_shape_size; ++i) {
+        if (!should_squeeze[i]) {
+          gather_indices.push_back(i);
+        }
+      }
       auto squeeze_layer =
           TRT_ENGINE_ADD_LAYER(engine_, Shuffle, *topk_layer->getOutput(1));
-      auto dims = input_dims;
-      dims.nbDims -= 1;
-      for (int i = axis; i < dims.nbDims; i++) {
-        dims.d[i] = dims.d[i + 1];
-      }
-      squeeze_layer->setReshapeDimensions(dims);
+      auto shape_tensor = Shape(topk_layer->getOutput(1));
+      auto real_shape_tensor = Gather(shape_tensor, gather_indices);
+      squeeze_layer->setInput(1, *real_shape_tensor);
       ReplenishLayerAndOutput(
           squeeze_layer, "arg_max", {output_name}, test_mode);
     }
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(arg_max, ArgMaxOpConverter);

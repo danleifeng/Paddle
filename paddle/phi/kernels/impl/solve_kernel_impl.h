@@ -64,7 +64,7 @@ static std::vector<int64_t> get_broadcast_batch_portion(
     PADDLE_ENFORCE_EQ(
         (x_size == y_size || x_size == 1 || y_size == 1),
         true,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The size of tensor x (%d) must match the size of tensor y "
             "(%d) at non-singleton dimension %d.",
             x_size,
@@ -74,15 +74,6 @@ static std::vector<int64_t> get_broadcast_batch_portion(
     batchPortion[i] = x_size != 1 ? x_size : y_size;
   }
   return batchPortion;
-}
-
-static inline std::vector<int> convert_to_int_vec(std::vector<int64_t> a) {
-  std::vector<int> ret;
-  for (size_t i = 0; i < a.size(); i++) {
-    ret.emplace_back(static_cast<int>(a[i]));
-  }
-
-  return ret;
 }
 
 // broadcast the batch dimensions of tensor x and tensor y.
@@ -150,11 +141,11 @@ static void linalg_solve(const Context& dev_ctx,
   Tensor tmp_x_bc;
 
   phi::ExpandAsKernel<T, Context>(
-      dev_ctx, tmp_x, nullptr, convert_to_int_vec(x_broadcast_dims), &tmp_x_bc);
+      dev_ctx, tmp_x, nullptr, x_broadcast_dims, &tmp_x_bc);
 
   Tensor tmp_y_bc;
   phi::ExpandAsKernel<T, Context>(
-      dev_ctx, tmp_y, nullptr, convert_to_int_vec(y_broadcast_dims), &tmp_y_bc);
+      dev_ctx, tmp_y, nullptr, y_broadcast_dims, &tmp_y_bc);
 
   auto x_dim = x.dims();
   auto y_dim = y.dims();
@@ -174,7 +165,7 @@ static void linalg_solve(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         x_dim[x_dim_size - 1],
         y_dim[y_dim_size - 2],
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Matrix X1 with dimension greater than 2 and any matrix Y1,"
             "the matrix X1's width must be equal with matrix Y1's "
             "height. But received X's shape = [%s], X1's shape = [%s], X1's "
@@ -195,6 +186,40 @@ void SolveKernel(const Context& dev_ctx,
                  const DenseTensor& x,
                  const DenseTensor& y,
                  DenseTensor* out) {
+  if (x.numel() == 0 || y.numel() == 0) {
+    auto x_dims = x.dims();
+    auto y_dims = y.dims();
+    std::vector<int> out_dims;
+    if (y_dims.size() == 1) {
+      out_dims =
+          std::vector<int>(x_dims.Get(), x_dims.Get() + x_dims.size() - 2);
+      out_dims.push_back(y_dims[y_dims.size() - 1]);
+    } else {
+      // broadcast
+      std::vector<int> x_shape(x_dims.Get(), x_dims.Get() + x_dims.size() - 2);
+      std::vector<int> y_shape(y_dims.Get(), y_dims.Get() + y_dims.size() - 2);
+      auto x_it = x_shape.rbegin();
+      auto y_it = y_shape.rbegin();
+      while (x_it != x_shape.rend() || y_it != y_shape.rend()) {
+        int x_dim = (x_it != x_shape.rend()) ? *x_it : 1;
+        int y_dim = (y_it != y_shape.rend()) ? *y_it : 1;
+        if (x_dim == 0 || y_dim == 0) {
+          out_dims.push_back(0);
+        } else {
+          out_dims.push_back(std::max(x_dim, y_dim));
+        }
+        if (x_it != x_shape.rend()) ++x_it;
+        if (y_it != y_shape.rend()) ++y_it;
+      }
+      std::reverse(out_dims.begin(), out_dims.end());
+      out_dims.insert(out_dims.end(),
+                      y_dims.Get() + y_dims.size() - 2,
+                      y_dims.Get() + y_dims.size());
+    }
+    out->Resize(phi::make_ddim(out_dims));
+    dev_ctx.template Alloc<T>(out);
+    return;
+  }
   linalg_solve<Context, T>(dev_ctx, x, y, out);
 }
 

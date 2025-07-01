@@ -33,7 +33,7 @@ namespace ir {
 Tensor CreateRFTensor(const Tensor& original_tensor,
                       const Expr& rf_loop,
                       int rf_axis) {
-  std::string name = original_tensor->name + "_rf";
+  std::string name = common::UniqName(original_tensor->name + "_rf");
   std::vector<Expr> new_shape = original_tensor->shape;
   new_shape.insert(new_shape.begin() + rf_axis, rf_loop.As<For>()->extent);
   Tensor rf_tensor = _Tensor_::Make(name,
@@ -48,9 +48,9 @@ Tensor CreateRFTensor(const Tensor& original_tensor,
 
 // Base class to create a new reduce block,
 // only used for FactorizeReduction schedule primitive.
-class ReduceBlockCreater {
+class ReduceBlockCreator {
  public:
-  ReduceBlockCreater(const Expr& original_block,
+  ReduceBlockCreator(const Expr& original_block,
                      const std::vector<Expr>& original_loops,
                      const Expr& rf_loop,
                      const Expr& original_update_stmt,
@@ -65,7 +65,7 @@ class ReduceBlockCreater {
     const ScheduleBlockRealize* block_real =
         original_block_.As<ir::ScheduleBlockRealize>();
     PADDLE_ENFORCE_NOT_NULL(block_real,
-                            phi::errors::InvalidArgument(
+                            ::common::errors::InvalidArgument(
                                 "The block is not a ScheduleBlockRealize"));
     num_block_iters_ = block_real->iter_values.size();
   }
@@ -132,14 +132,20 @@ class ReduceBlockCreater {
     std::vector<Expr> new_loops(num_loops);
     Expr body = new_update_block_realize_;
     bool has_add_init_block = false;
+    // `is_inside_rf_loop` is used to skip loop inside rf_loop.
+    bool is_inside_rf_loop = true;
     for (int i = num_loops - 1; i >= 0; --i) {
       bool is_spatial_loop =
           new_spatial_loop_var_names_.count(
               original_loops_[i].As<For>()->loop_var->name) > 0;
       bool is_rf_loop = rf_loop_.As<For>()->loop_var->name ==
                         original_loops_[i].As<For>()->loop_var->name;
+      // Outer loop should not skip.
+      if (is_rf_loop) {
+        is_inside_rf_loop = false;
+      }
       // Skip non rf reduction loops of write back block.
-      if (!is_rf_block_ && !is_spatial_loop && !is_rf_loop) {
+      if (!is_rf_block_ && is_inside_rf_loop && !is_spatial_loop) {
         continue;
       }
       // Add reduce init block.
@@ -239,9 +245,9 @@ class LoadReplacer : public ir::IRMutator<> {
 
 // Implement class for building Reduction-Factorized block,
 // only used for FactorizeReduction schedule primitive.
-class RFBlockCreater : public ReduceBlockCreater {
+class RFBlockCreator : public ReduceBlockCreator {
  public:
-  RFBlockCreater(const Expr& original_block,
+  RFBlockCreator(const Expr& original_block,
                  const std::vector<Expr>& original_loops,
                  const Expr& rf_loop,
                  const Expr& original_update_stmt,
@@ -249,7 +255,7 @@ class RFBlockCreater : public ReduceBlockCreater {
                  const std::map<Var, Expr, CompVar>& var2loops,
                  const Expr& bound_check,
                  int rf_axis)
-      : ReduceBlockCreater(original_block,
+      : ReduceBlockCreator(original_block,
                            original_loops,
                            rf_loop,
                            original_update_stmt,
@@ -262,7 +268,7 @@ class RFBlockCreater : public ReduceBlockCreater {
  private:
   void CreateRFIter() override {
     std::string loop_var_name = rf_loop_.As<ir::For>()->loop_var->name;
-    std::string rf_var_name = "v" + loop_var_name;
+    std::string rf_var_name = common::UniqName("v" + loop_var_name);
     rf_var_ = Var(rf_loop_.As<ir::For>()->min,
                   rf_loop_.As<ir::For>()->extent,
                   rf_var_name,
@@ -310,7 +316,11 @@ class RFBlockCreater : public ReduceBlockCreater {
       new_iter_values_.push_back(original_iter_value);
       return;
     }
-    CHECK(original_iter_var->is_reduce_axis);
+    PADDLE_ENFORCE_EQ(
+        original_iter_var->is_reduce_axis,
+        true,
+        ::common::errors::InvalidArgument(
+            "The original_iter_var is expected to be a reduce axis."));
 
     // This iter is a reduction iter and touches the rfactor loop. So we try to
     // create a new iter for each loop var that appear in the original iter
@@ -331,7 +341,7 @@ class RFBlockCreater : public ReduceBlockCreater {
       if (loop_var2block_iters_.count(loop_var) == 0) {
         Var new_iter_var(loop.As<ir::For>()->min,
                          loop.As<ir::For>()->extent,
-                         "v" + loop_var->name,
+                         common::UniqName("v" + loop_var->name),
                          /* is_reduce = */ true);
         new_iter_vars_.push_back(new_iter_var);
         new_iter_values_.emplace_back(loop_var);
@@ -381,16 +391,16 @@ class RFBlockCreater : public ReduceBlockCreater {
 
 // Implement class for building Writing-Back block,
 // only used for FactorizeReduction schedule primitive.
-class RBBlockCreater : public ReduceBlockCreater {
+class RBBlockCreator : public ReduceBlockCreator {
  public:
-  RBBlockCreater(const Expr& original_block,
+  RBBlockCreator(const Expr& original_block,
                  const std::vector<Expr>& original_loops,
                  const Expr& rf_loop,
                  const Expr& original_update_stmt,
                  const ir::Tensor& rf_tensor,
                  const std::vector<Expr>& rf_tensor_access_indices,
                  const Var& rf_block_rf_iter_var)
-      : ReduceBlockCreater(original_block,
+      : ReduceBlockCreator(original_block,
                            original_loops,
                            rf_loop,
                            original_update_stmt,
@@ -402,7 +412,7 @@ class RBBlockCreater : public ReduceBlockCreater {
  private:
   void CreateRFIter() override {
     std::string loop_var_name = rf_loop_.As<ir::For>()->loop_var->name;
-    std::string rf_var_name = "v" + loop_var_name;
+    std::string rf_var_name = common::UniqName("v" + loop_var_name);
     rf_var_ = Var(rf_loop_.As<ir::For>()->min,
                   rf_loop_.As<ir::For>()->extent,
                   rf_var_name,
@@ -441,13 +451,10 @@ class RBBlockCreater : public ReduceBlockCreater {
   void CreateUpdateStmt() override {
     Expr original_store_body = original_update_stmt_.As<ir::Store>()->value;
     Expr new_store_body = ir_utils::IRCopy(original_store_body);
-    std::string original_store_name =
-        original_update_stmt_.As<ir::Store>()->tensor.as_tensor()->name;
 
 #define REPLACE_RF_TENSOR(Op)                                    \
   if (new_store_body.As<Op>()) {                                 \
     auto* node = new_store_body.As<Op>();                        \
-    CHECK(node);                                                 \
     auto& operand = node->b();                                   \
     operand = Load::Make(rf_tensor_, rf_tensor_access_indices_); \
   }
@@ -458,11 +465,17 @@ class RBBlockCreater : public ReduceBlockCreater {
     REPLACE_RF_TENSOR(Min)
     REPLACE_RF_TENSOR(And)
     REPLACE_RF_TENSOR(Or)
-    REPLACE_RF_TENSOR(LT)
-    REPLACE_RF_TENSOR(LE)
-    REPLACE_RF_TENSOR(GT)
-    REPLACE_RF_TENSOR(GE)
 #undef REPLACE_RF_TENSOR
+
+    if (new_store_body.As<ir::Call>()) {
+      auto* node = new_store_body.As<ir::Call>();
+      PADDLE_ENFORCE_EQ(node->read_args.size(),
+                        2UL,
+                        ::common::errors::InvalidArgument(
+                            "The reduction Call op must have exactly two "
+                            "arguments."));
+      node->read_args[1] = Load::Make(rf_tensor_, rf_tensor_access_indices_);
+    }
 
     Expr original_store_tensor = original_update_stmt_.As<ir::Store>()->tensor;
     std::vector<Expr> original_store_indices =

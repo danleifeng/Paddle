@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/phi/common/data_type.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class CrossMultiheadMatMulOpConverter : public OpConverter {
  public:
@@ -34,7 +32,7 @@ class CrossMultiheadMatMulOpConverter : public OpConverter {
     PADDLE_ENFORCE_EQ(
         with_fp16,
         true,
-        phi::errors::Unimplemented(
+        common::errors::Unimplemented(
             "Trt cross attention oss plugin only support fp16 mode yet."));
     framework::OpDesc op_desc(op, nullptr);
     auto* input_q = engine_->GetITensor(op_desc.Input("Input_q").front());
@@ -292,9 +290,7 @@ class CrossMultiheadMatMulOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(cross_multihead_matmul,
                           CrossMultiheadMatMulOpConverter);

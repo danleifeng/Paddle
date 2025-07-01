@@ -19,7 +19,7 @@ limitations under the License. */
 namespace phi {
 
 /// \brief The TensorArray store a list of tensor and it is designed for
-/// compatible with LodTensorArray in Fluid. It shouldn't be used widely
+/// compatible with DenseTensorArray in Fluid. It shouldn't be used widely
 /// in PHI. If you want to store a list of tensor in PHI, please use std::vector
 /// when ever possible.
 class TensorArray : public TensorBase,
@@ -77,6 +77,10 @@ class TensorArray : public TensorBase,
 
   /// \brief This overridden function is not used in TensorArray.
   TEST_API bool valid() const override;
+
+  /// \brief Test whether the holder is created.
+  /// \return Whether the holder is created.
+  TEST_API bool has_allocation() const override;
 
   /// \brief Test whether the tensor's storage in TensorArray is allocated.
   /// return Whether all tensors in TensorArray is allocated.

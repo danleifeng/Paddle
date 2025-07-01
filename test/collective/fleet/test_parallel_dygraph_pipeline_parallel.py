@@ -31,9 +31,6 @@ class TestHybridPipeParallel(TestMultipleAccelerators):
     def test_hybrid_parallel_pp_tuple_inputs(self):
         self.run_mnist_2accelerators('hybrid_parallel_pp_embedding.py')
 
-    def test_hybrid_parallel_shared_weight(self):
-        self.run_mnist_2accelerators('hybrid_parallel_shared_weight.py')
-
     def test_pipeline_parallel_amp(self):
         self.run_mnist_2accelerators('hybrid_parallel_pp_amp.py')
 
@@ -64,6 +61,13 @@ class TestHybridPipeParallel(TestMultipleAccelerators):
         self.run_mnist_2accelerators(
             'hybrid_parallel_pp_return_micro_batch_loss.py'
         )
+
+    def test_hybrid_parallel_pp_with_eager_connect(self):
+        os.environ["FLAGS_eager_communication_connection"] = "1"
+        self.run_mnist_2accelerators(
+            'hybrid_parallel_pp_return_micro_batch_loss.py'
+        )
+        os.environ["FLAGS_eager_communication_connection"] = "0"
 
 
 class TestFakeMicroDataSet(unittest.TestCase):

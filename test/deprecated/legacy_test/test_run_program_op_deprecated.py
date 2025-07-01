@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import os
 import unittest
 
 import numpy as np
@@ -30,10 +31,12 @@ def program_scope_guard():
     prog = base.Program()
     startup_prog = base.Program()
     scope = base.core.Scope()
-    with base.scope_guard(scope):
-        with base.program_guard(prog, startup_prog):
-            with base.unique_name.guard():
-                yield
+    with (
+        base.scope_guard(scope),
+        base.program_guard(prog, startup_prog),
+        base.unique_name.guard(),
+    ):
+        yield
 
 
 @switch_to_static_graph
@@ -46,8 +49,8 @@ def _add_build_strategy_for(input_program, start_op_index, end_op_index):
         core.Scope(), paddle.framework._current_expected_place()
     )
     ir_graph = paddle.base.framework.IrGraph(compiled_program._graph)
-    builded_program = ir_graph.to_program()
-    return builded_program
+    built_program = ir_graph.to_program()
+    return built_program
 
 
 @switch_to_static_graph
@@ -63,7 +66,7 @@ def _build_program_by_desc(program_desc):
 
 # NOTE: Because RunProgramOp has a special output of type std::vector<Scope *>,
 # the OpTest cannot be used in RunProgramOp. The variable type cannot be specified
-# when creating output variables in OpTest, default type is LoDTensor
+# when creating output variables in OpTest, default type is DenseTensor
 # NOTE: the gradient test method in OpTest also cannot be used for RunProgramOp,
 # because it hold BlockDesc type attr, OperatorFactory can't parse this attr type
 # when create Operator, so here compare gradients with static graph
@@ -75,7 +78,13 @@ class RunProgramOpTest(unittest.TestCase):
         )
 
     def check_output(self):
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for place in places:
@@ -84,7 +93,13 @@ class RunProgramOpTest(unittest.TestCase):
             self.check_output_with_place(place)
 
     def check_grad(self):
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for place in places:
@@ -256,7 +271,7 @@ class RunProgramOpTest(unittest.TestCase):
                 outputs['Out'],
                 outputs['OutScope'],
                 None,
-                *self.attrs
+                *self.attrs,
             )
 
             return outputs['Out']
@@ -308,7 +323,7 @@ class RunProgramOpTest(unittest.TestCase):
                 outputs['Out'],
                 outputs['OutScope'],
                 None,
-                *self.attrs
+                *self.attrs,
             )
 
             for param in input_param_list:
@@ -429,7 +444,13 @@ class TestRunProgramOpWithEmbedding(RunProgramOpTest):
     def test_check_grad(self):
         # NOTE: fetch not support SelectedRows, cannot compare
         # sparse gradients with static mode, only run dygraph
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for place in places:

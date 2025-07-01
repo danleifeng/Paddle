@@ -17,12 +17,10 @@
 #include <string>
 
 #include "paddle/fluid/framework/operator.h"
-#include "paddle/fluid/platform/device/gpu/gpu_dnn.h"
 #include "paddle/fluid/platform/enforce.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_dnn.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void FuseBatchNormAddActPass::ApplyImpl(ir::Graph *graph) const {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
@@ -43,7 +41,7 @@ ir::Graph *FuseBatchNormAddActPass::FuseBatchNormAddAct(
   PADDLE_ENFORCE_NE(
       graph,
       nullptr,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input graph of FuseBatchNormAddAct should not be nullptr."));
   FusePassBase::Init("bn_add_act", graph);
 
@@ -190,7 +188,7 @@ ir::Graph *FuseBatchNormAddActPass::FuseBatchNormAddActGrad(
   PADDLE_ENFORCE_NE(
       graph,
       nullptr,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input graph of FuseBatchNormAddActGrad should not be nullptr."));
   FusePassBase::Init("bn_add_act_grad", graph);
 
@@ -380,14 +378,12 @@ std::vector<Node *> FuseBatchNormAddActPass::ReplaceNode(
       });
   PADDLE_ENFORCE_EQ(has_replaced,
                     true,
-                    phi::errors::NotFound("Not found %s in the node list.",
-                                          cur_node->Name()));
+                    common::errors::NotFound("Not found %s in the node list.",
+                                             cur_node->Name()));
   return new_list;
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fuse_bn_add_act_pass,
               paddle::framework::ir::FuseBatchNormAddActPass);

@@ -27,10 +27,14 @@ template <typename T, typename Context>
 void RealGradStridedKernel(const Context& dev_ctx,
                            const DenseTensor& dout,
                            DenseTensor* dx) {
+  if (dx && dx->numel() == 0) {
+    dev_ctx.template Alloc<T>(dx);
+    return;
+  }
   if (!FLAGS_use_stride_kernel) {
-    PADDLE_THROW(
-        phi::errors::Fatal("FLAGS_use_stride_kernel is closed. Strided kernel "
-                           "be called, something wrong has happened!"));
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
   }
   dev_ctx.Alloc(dx, dx->dtype());
   dx->set_strides(DenseTensorMeta::calc_strides(dx->dims()));
@@ -54,10 +58,14 @@ template <typename T, typename Context>
 void ImagGradStridedKernel(const Context& dev_ctx,
                            const DenseTensor& dout,
                            DenseTensor* dx) {
+  if (dx && dx->numel() == 0) {
+    dev_ctx.template Alloc<T>(dx);
+    return;
+  }
   if (!FLAGS_use_stride_kernel) {
-    PADDLE_THROW(
-        phi::errors::Fatal("FLAGS_use_stride_kernel is closed. Strided kernel "
-                           "be called, something wrong has happened!"));
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
   }
   dev_ctx.Alloc(dx, dx->dtype());
   dx->set_strides(DenseTensorMeta::calc_strides(dx->dims()));

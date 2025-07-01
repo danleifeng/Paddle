@@ -19,8 +19,7 @@
 
 COMMON_DECLARE_bool(use_autotune);
 
-namespace phi {
-namespace autotune {
+namespace phi::autotune {
 
 void AutoTuneStatus::EnableAutoTune() {
   FLAGS_use_autotune = true;
@@ -39,7 +38,7 @@ void AutoTuneStatus::Update() {
     return;
   }
 
-  // This fuction is called when each iter finished.
+  // This function is called when each iter finished.
   if (current_steps_id_ + 1 < start_step_id_) {
     use_autotune_ = false;
   } else if (current_steps_id_ + 1 >= start_step_id_ &&
@@ -71,5 +70,4 @@ void AutoTuneStatus::Update() {
   }
 }
 
-}  // namespace autotune
-}  // namespace phi
+}  // namespace phi::autotune

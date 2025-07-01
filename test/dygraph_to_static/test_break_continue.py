@@ -20,7 +20,6 @@ from dygraph_to_static_utils import (
     enable_to_static_guard,
     exe_sequential_run_guard,
     test_ast_only,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
@@ -38,12 +37,13 @@ class TestDy2staticException(Dy2StTestBase):
         self.error = "Your if/else have different number of return value."
 
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test_error(self):
         if self.dyfunc:
-            with self.assertRaisesRegex(Dygraph2StaticException, self.error):
-                with enable_to_static_guard(True):
-                    self.assertTrue(paddle.jit.to_static(self.dyfunc)(self.x))
+            with (
+                self.assertRaisesRegex(Dygraph2StaticException, self.error),
+                enable_to_static_guard(True),
+            ):
+                self.assertTrue(paddle.jit.to_static(self.dyfunc)(self.x))
 
 
 def test_continue_in_for(x):
@@ -230,7 +230,6 @@ class TestContinueInFor(TestContinueBase):
     def init_dygraph_func(self):
         self.dygraph_func = test_continue_in_for
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
@@ -244,7 +243,6 @@ class TestContinueInFor(TestContinueBase):
 
 
 class TestContinueNotPirBase(TestContinueInFor):
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
@@ -276,7 +274,6 @@ class TestBreakContinueInFor(TestContinueBase):
     def init_dygraph_func(self):
         self.dygraph_func = test_break_continue_in_for
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
@@ -298,7 +295,6 @@ class TestContinueInWhile(TestContinueNotPirBase):
     def init_dygraph_func(self):
         self.dygraph_func = test_continue_in_while
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
@@ -315,7 +311,6 @@ class TestBreakInWhile(TestContinueInWhile):
     def init_dygraph_func(self):
         self.dygraph_func = test_break_in_while
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
@@ -332,7 +327,6 @@ class TestWhileLoopClassVar(TestContinueInWhile):
     def init_dygraph_func(self):
         self.dygraph_func = while_loop_class_var
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
@@ -356,11 +350,10 @@ class TestOptimBreakInWhile(TestContinueInWhile):
     def init_dygraph_func(self):
         self.dygraph_func = test_optim_break_in_while
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         self.init_dygraph_func()
         dygraph_res = self.run_dygraph_mode()
-        # NOTE(SigureMo): Temperary run the test in sequential run mode to avoid dependency
+        # NOTE(SigureMo): Temporarily run the test in sequential run mode to avoid dependency
         # on the execution order of the test cases.
         if use_pir_api():
             with exe_sequential_run_guard(True):

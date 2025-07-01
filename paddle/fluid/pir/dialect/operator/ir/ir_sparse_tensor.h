@@ -75,6 +75,11 @@ class IrSparseCooTensor
 
   bool valid() const noexcept override { return true; }
 
+  bool has_allocation() const override {
+    PADDLE_THROW(::common::errors::Unavailable(
+        "`has_allocation` is only available at runtime"));
+  }
+
   bool initialized() const override { return true; }
 
   void* AllocateFrom(phi::Allocator* allocator,
@@ -151,6 +156,8 @@ class IrSparseCsrTensor
 
   bool valid() const noexcept override { return true; }
 
+  bool has_allocation() const override { return true; }
+
   bool initialized() const override { return true; }
 
   void* AllocateFrom(phi::Allocator* allocator,
@@ -172,7 +179,7 @@ inline SparseCooTensorType CvtToSparseCooTensorType(
   pir::IrContext* ctx = pir::IrContext::Instance();
   pir::Type fp32_dtype = pir::Float32Type::get(ctx);
   phi::DataLayout data_layout = phi::DataLayout::UNDEFINED;
-  phi::LoD lod = {};
+  phi::LegacyLoD lod = {};
   phi::DDim dims = {};
   size_t offset = 0;
   pir::DenseTensorType non_zero_indices = pir::DenseTensorType::get(

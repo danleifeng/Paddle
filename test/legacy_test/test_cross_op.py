@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestCrossOp(OpTest):
@@ -171,8 +170,9 @@ class TestCrossAPI(unittest.TestCase):
         self.data_y = np.array(
             [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
         ).astype('float32')
+        self.data_x_zero = np.array([]).reshape(0, 3).astype('float32')
+        self.data_y_zero = np.array([]).reshape(0, 3).astype('float32')
 
-    @test_with_pir_api
     def test_cross_api(self):
         self.input_data()
 
@@ -214,6 +214,26 @@ class TestCrossAPI(unittest.TestCase):
         )
         np.testing.assert_allclose(expect_out, np.array(res), rtol=1e-05)
 
+        main = paddle.static.Program()
+        startup = paddle.static.Program()
+        # case 3:
+        with paddle.static.program_guard(main, startup):
+            x = paddle.static.data(name='x', shape=[0, 3], dtype="float32")
+            y = paddle.static.data(name='y', shape=[0, 3], dtype="float32")
+            z = paddle.cross(x, y, axis=1)
+            exe = base.Executor(base.CPUPlace())
+            (res,) = exe.run(
+                main,
+                feed={'x': self.data_x_zero, 'y': self.data_y_zero},
+                fetch_list=[z],
+                return_numpy=False,
+            )
+        expect_out = np.empty((0, 3))
+        np.testing.assert_allclose(expect_out, np.array(res), rtol=1e-05)
+
+        main = paddle.static.Program()
+        startup = paddle.static.Program()
+
     def test_cross_api1(self):
         with paddle.pir_utils.OldIrGuard():
             self.input_data()
@@ -227,6 +247,17 @@ class TestCrossAPI(unittest.TestCase):
                 y = paddle.static.data(name='y', shape=[-1, 3], dtype='float32')
 
                 y_1 = paddle.cross(x, y, name='result')
+                self.assertEqual(('result' in y_1.name), True)
+
+            main = paddle.static.Program()
+            startup = paddle.static.Program()
+
+            # case 2:
+            with paddle.static.program_guard(main, startup):
+                x = paddle.static.data(name="x", shape=[0, 3], dtype="float32")
+                y = paddle.static.data(name='y', shape=[0, 3], dtype='float32')
+
+                y_1 = paddle.cross(x, y, axis=1, name='result')
                 self.assertEqual(('result' in y_1.name), True)
 
     def test_dygraph_api(self):
@@ -251,6 +282,101 @@ class TestCrossAPI(unittest.TestCase):
             [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
         )
         np.testing.assert_allclose(expect_out, np_z, rtol=1e-05)
+
+        # case 3:
+        with base.dygraph.guard():
+            x = paddle.to_tensor(self.data_x_zero)
+            y = paddle.to_tensor(self.data_y_zero)
+            z = paddle.cross(x, y, axis=1)
+            np_z = z.numpy()
+        expect_out = np.empty((0, 3))
+        np.testing.assert_allclose(expect_out, np_z, rtol=1e-05)
+
+
+class TestCrossOpZeroSizeTest(TestCrossOp):
+    def initTestCase(self):
+        self.shape = (0, 3, 3)
+        self.dtype = np.float64
+        self.attr = {'dim': -1}
+
+    def init_output(self):
+        z_list = []
+        for i in range(0):
+            z_list.append(np.cross(self.inputs['X'][i], self.inputs['Y'][i]))
+        self.outputs = {'Out': np.array(z_list).reshape(self.shape)}
+
+
+class TestCrossOpZeroSizeTest1(TestCrossOp):
+    def initTestCase(self):
+        self.shape = (3, 0, 3)
+        self.dtype = np.float64
+        self.attr = {'dim': -1}
+
+    def init_output(self):
+        z_list = []
+        for i in range(3):
+            z_list.append(np.cross(self.inputs['X'][i], self.inputs['Y'][i]))
+        self.outputs = {'Out': np.array(z_list).reshape(self.shape)}
+
+
+class TestCrossOpZeroSizeTest2(TestCrossOp):
+    def initTestCase(self):
+        self.shape = (0, 0, 3)
+        self.dtype = np.float64
+        self.attr = {'dim': -1}
+
+    def init_output(self):
+        z_list = []
+        for i in range(0):
+            z_list.append(np.cross(self.inputs['X'][i], self.inputs['Y'][i]))
+        self.outputs = {'Out': np.array(z_list).reshape(self.shape)}
+
+
+class TestCrossOpZeroSizeCPUTest(TestCrossOp):
+    def initTestCase(self):
+        self.shape = (0, 0, 3)
+        self.dtype = np.float64
+        self.attr = {'dim': -1}
+
+    def init_output(self):
+        z_list = []
+        for i in range(0):
+            z_list.append(np.cross(self.inputs['X'][i], self.inputs['Y'][i]))
+        self.outputs = {'Out': np.array(z_list).reshape(self.shape)}
+
+    def test_check_output(self):
+        place = paddle.CPUPlace()
+        self.check_output_with_place(place, check_pir=True)
+
+    def test_check_grad_normal(self):
+        place = paddle.CPUPlace()
+        self.check_grad_with_place(place, ['X', 'Y'], 'Out', check_pir=True)
+
+
+class TestCrossOpZeroSizeCPUTest1(TestCrossOpZeroSizeCPUTest):
+    def initTestCase(self):
+        self.shape = (3, 0, 3)
+        self.dtype = np.float64
+        self.attr = {'dim': -1}
+
+    def init_output(self):
+        z_list = []
+        for i in range(3):
+            z_list.append(np.cross(self.inputs['X'][i], self.inputs['Y'][i]))
+        self.outputs = {'Out': np.array(z_list).reshape(self.shape)}
+
+
+class TestCrossOpZeroSizeCPUTest2(TestCrossOpZeroSizeCPUTest):
+    def initTestCase(self):
+        self.shape = (0, 0, 3)
+        self.dtype = np.float64
+        self.attr = {'dim': -1}
+
+    def init_output(self):
+        z_list = []
+        for i in range(0):
+            z_list.append(np.cross(self.inputs['X'][i], self.inputs['Y'][i]))
+        self.outputs = {'Out': np.array(z_list).reshape(self.shape)}
 
 
 if __name__ == '__main__':

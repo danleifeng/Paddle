@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -135,13 +134,25 @@ class TestDiagonalOpCase5(TestDiagonalOp):
         )
 
 
+class TestDiagonalOp_ZeroSize(TestDiagonalOp):
+    def init_config(self):
+        self.case = np.random.randn(0, 2, 4, 4).astype(self.dtype)
+        self.inputs = {'Input': self.case}
+        self.attrs = {'offset': -2, 'axis1': 0, 'axis2': 3}
+        self.target = np.diagonal(
+            self.inputs['Input'],
+            offset=self.attrs['offset'],
+            axis1=self.attrs['axis1'],
+            axis2=self.attrs['axis2'],
+        )
+
+
 class TestDiagonalAPI(unittest.TestCase):
     def setUp(self):
         self.shape = [10, 3, 4]
         self.x = np.random.random((10, 3, 4)).astype(np.float32)
         self.place = paddle.CPUPlace()
 
-    @test_with_pir_api
     def test_api_static(self):
         paddle.enable_static()
         with paddle.static.program_guard(paddle.static.Program()):

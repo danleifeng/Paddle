@@ -24,19 +24,24 @@
 namespace paddle {
 namespace dialect {
 
-const char *TensorRTEngineOp::attributes_name[13] = {"engine_serialized_data",
-                                                     "workspace_size",
-                                                     "allow_build_at_runtime",
-                                                     "input_names",
-                                                     "output_names",
-                                                     "outputs_rank",
-                                                     "outputs_dtype",
-                                                     "dynamic_shape_names",
-                                                     "dynamic_shape_lens",
-                                                     "min_input_shape_vector",
-                                                     "max_input_shape_vector",
-                                                     "opt_input_shape_vector",
-                                                     "converter_debug_info"};
+const char *TensorRTEngineOp::attributes_name[17] = {
+    "engine_serialized_data",
+    "workspace_size",
+    "allow_build_at_runtime",
+    "input_names",
+    "output_names",
+    "outputs_rank",
+    "outputs_dtype",
+    "dynamic_shape_names",
+    "dynamic_shape_lens",
+    "min_input_shape_vector",
+    "max_input_shape_vector",
+    "opt_input_shape_vector",
+    "converter_debug_info",
+    "refit_params_path",
+    "refit_param_names",
+    "refit_param_names2trt_names",
+    "use_cuda_graph"};
 
 OpInfoTuple TensorRTEngineOp::GetOpInfo() {
   std::vector<paddle::dialect::OpInputInfo> inputs = {
@@ -73,7 +78,16 @@ OpInfoTuple TensorRTEngineOp::GetOpInfo() {
       paddle::dialect::OpAttributeInfo(
           "opt_input_shape_vector", "pir::ArrayAttribute", ""),
       paddle::dialect::OpAttributeInfo(
-          "converter_debug_info", "pir::StrAttribute", "")};
+          "converter_debug_info", "pir::StrAttribute", ""),
+      paddle::dialect::OpAttributeInfo(
+          "use_cuda_graph", "pir::BoolAttribute", ""),
+      paddle::dialect::OpAttributeInfo(
+          "refit_params_path", "pir::StrAttribute", ""),
+      paddle::dialect::OpAttributeInfo(
+          "refit_param_names", "pir::ArrayAttribute", ""),
+      paddle::dialect::OpAttributeInfo(
+          "refit_param_names2trt_names", "pir::ArrayAttribute", ""),
+  };
 
   std::vector<paddle::dialect::OpOutputInfo> outputs = {
       OpOutputInfo("out",
@@ -98,14 +112,15 @@ OpInfoTuple TensorRTEngineOp::GetOpInfo() {
       pir::ArrayAttribute::get(pir::IrContext::Instance(), name##_tmp); \
   argument.AddAttribute(#name, attr_##name)
 
-#define VERIFY_ATTRIBUTE(type, name)                                         \
-  PADDLE_ENFORCE_GT(attributes.count(#name),                                 \
-                    0,                                                       \
-                    phi::errors::InvalidArgument(#name " does not exist.")); \
-  PADDLE_ENFORCE_EQ(attributes.at(#name).isa<type>(),                        \
-                    true,                                                    \
-                    phi::errors::InvalidArgument("Type of attribute: " #name \
-                                                 " is not " #type))
+#define VERIFY_ATTRIBUTE(type, name)                              \
+  PADDLE_ENFORCE_GT(                                              \
+      attributes.count(#name),                                    \
+      0,                                                          \
+      common::errors::InvalidArgument(#name " does not exist.")); \
+  PADDLE_ENFORCE_EQ(attributes.at(#name).isa<type>(),             \
+                    true,                                         \
+                    common::errors::InvalidArgument(              \
+                        "Type of attribute: " #name " is not " #type))
 
 void TensorRTEngineOp::Build(pir::Builder &builder,             // NOLINT
                              pir::OperationArgument &argument,  // NOLINT
@@ -126,12 +141,44 @@ void TensorRTEngineOp::Build(pir::Builder &builder,             // NOLINT
   pir::Attribute attr_engine_serialized_data = pir::StrAttribute::get(
       pir::IrContext::Instance(), trt_params.engine_serialized_data);
   argument.AddAttribute("engine_serialized_data", attr_engine_serialized_data);
+
+  pir::Attribute attr_refit_params_path = pir::StrAttribute::get(
+      pir::IrContext::Instance(), trt_params.refit_params_path);
+  argument.AddAttribute("refit_params_path", attr_refit_params_path);
   pir::Attribute attr_workspace_size = pir::Int64Attribute::get(
       pir::IrContext::Instance(), trt_params.max_workspace_size);
   argument.AddAttribute("workspace_size", attr_workspace_size);
   pir::Attribute attr_allow_build_at_runtime = pir::BoolAttribute::get(
       pir::IrContext::Instance(), trt_params.allow_build_at_runtime);
   argument.AddAttribute("allow_build_at_runtime", attr_allow_build_at_runtime);
+  pir::Attribute attr_use_cuda_graph = pir::BoolAttribute::get(
+      pir::IrContext::Instance(), trt_params.use_cuda_graph);
+  argument.AddAttribute("use_cuda_graph", attr_use_cuda_graph);
+
+  std::vector<pir::Attribute> refit_param_names_attrs;
+  for (const auto &name : trt_params.refit_param_names) {
+    refit_param_names_attrs.push_back(
+        pir::StrAttribute::get(pir::IrContext::Instance(), name));
+  }
+  argument.AddAttribute("refit_param_names",
+                        pir::ArrayAttribute::get(pir::IrContext::Instance(),
+                                                 refit_param_names_attrs));
+
+  std::vector<pir::Attribute> refit_param_names2trt_names_attrs;
+  for (const auto &param_item : trt_params.refit_param_names2trt_names) {
+    const std::string param_name = param_item.first;
+    for (const auto &role_item : param_item.second) {
+      const std::string &role = role_item.first;
+      const std::string &layer_name = role_item.second;
+      std::string mapping_str = param_name + ":" + role + ":" + layer_name;
+      refit_param_names2trt_names_attrs.push_back(
+          pir::StrAttribute::get(pir::IrContext::Instance(), mapping_str));
+    }
+  }
+  pir::Attribute attr_refit_param_names2trt_names = pir::ArrayAttribute::get(
+      pir::IrContext::Instance(), refit_param_names2trt_names_attrs);
+  argument.AddAttribute("refit_param_names2trt_names",
+                        attr_refit_param_names2trt_names);
 
   std::vector<pir::Attribute> outputs_rank_tmp;
   outputs_rank_tmp.reserve(outputs_shape.size());
@@ -184,13 +231,17 @@ void TensorRTEngineOp::Build(pir::Builder &builder,             // NOLINT
   std::vector<pir::Type> argument_outputs;
   std::vector<pir::Type> out_types;
   for (size_t i = 0; i < static_cast<size_t>(outputs_shape.size()); i++) {
-    out_types.push_back(pir::DenseTensorType::get(
-        pir::IrContext::Instance(),
-        TransToIrDataType(outputs_dtype[i]),
-        phi::DDim(outputs_shape[i].data(), outputs_shape[i].size()),
-        phi::DataLayout::ALL_LAYOUT,
-        phi::LoD(),
-        0));
+    if (outputs_dtype[i] == phi::DataType::UNDEFINED) {
+      out_types.push_back(pir::Type());
+    } else {
+      out_types.push_back(pir::DenseTensorType::get(
+          pir::IrContext::Instance(),
+          TransToIrDataType(outputs_dtype[i]),
+          phi::DDim(outputs_shape[i].data(), outputs_shape[i].size()),
+          phi::DataLayout::kNCHW,
+          phi::LegacyLoD(),
+          0));
+    }
   }
   pir::Type out_vector_type =
       pir::VectorType::get(pir::IrContext::Instance(), out_types);
@@ -212,7 +263,7 @@ void TensorRTEngineOp::VerifySig() {
                           "The size of inputs must be equal to 1."));
     PADDLE_ENFORCE_EQ((*this)->operand_source(0).type().isa<pir::VectorType>(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Type validation failed for the 0th input, got %s.",
                           (*this)->operand_source(0).type()));
     if (auto vec_type =
@@ -221,7 +272,7 @@ void TensorRTEngineOp::VerifySig() {
         PADDLE_ENFORCE_EQ(
             vec_type[i].isa<pir::DenseTensorType>(),
             true,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "Type validation failed for the 0th input, got %s.",
                 (*this)->operand_source(0).type()));
       }
@@ -243,6 +294,10 @@ void TensorRTEngineOp::VerifySig() {
     VERIFY_ATTRIBUTE(pir::ArrayAttribute, max_input_shape_vector);
     VERIFY_ATTRIBUTE(pir::ArrayAttribute, opt_input_shape_vector);
     VERIFY_ATTRIBUTE(pir::StrAttribute, converter_debug_info);
+    VERIFY_ATTRIBUTE(pir::BoolAttribute, use_cuda_graph);
+    VERIFY_ATTRIBUTE(pir::StrAttribute, refit_params_path);
+    VERIFY_ATTRIBUTE(pir::ArrayAttribute, refit_param_names);
+    VERIFY_ATTRIBUTE(pir::ArrayAttribute, refit_param_names2trt_names);
   }
 
   VLOG(4) << "Verifying outputs:";
@@ -256,16 +311,8 @@ void TensorRTEngineOp::VerifySig() {
 
     PADDLE_ENFORCE_EQ(output_type.isa<pir::VectorType>(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Type validation failed for the 0th output."));
-    if (auto vec_type = output_type.dyn_cast<pir::VectorType>()) {
-      for (size_t i = 0; i < vec_type.size(); i++) {
-        PADDLE_ENFORCE_EQ(vec_type[i].isa<pir::DenseTensorType>(),
-                          true,
-                          phi::errors::InvalidArgument(
-                              "Type validation failed for the 0th output."));
-      }
-    }
   }
   VLOG(4) << "End Verifying for: TensorRTEngineOp.";
 }

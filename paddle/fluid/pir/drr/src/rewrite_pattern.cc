@@ -16,7 +16,6 @@
 #include <queue>
 #include <utility>
 
-#include "glog/vlog_is_on.h"
 #include "paddle/fluid/pir/drr/include/drr_pattern_base.h"
 #include "paddle/fluid/pir/drr/include/drr_rewrite_pattern.h"
 #include "paddle/fluid/pir/drr/src/ir_operation_factory.h"
@@ -47,7 +46,7 @@ DrrRewritePattern::DrrRewritePattern(
       drr_pattern_owner_(std::move(drr_pattern_owner)) {
   PADDLE_ENFORCE_NE(source_pattern_graph_->owned_op_call().empty(),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Source pattern graph is empty. Suggested fix: please "
                         "check the drr source pattern definition code."));
   if (VLOG_IS_ON(4)) {
@@ -217,6 +216,9 @@ void DrrRewritePattern::DfsVisitor(
       return;
     }
     auto* ir_producer_op = ir_operand_value.defining_op();
+    if (!ir_producer_op) {
+      continue;
+    }
     drr_visited_ops->insert(drr_producer_op);
     DfsVisitor(drr_producer_op,
                ir_producer_op,
@@ -315,7 +317,7 @@ bool DrrRewritePattern::MatchFromOutputToInput(
     return source_pattern_match_ctx->tensor_map().count(tensor_name) != 0 &&
            ir_value != source_pattern_match_ctx->tensor_map().at(tensor_name);
   };
-  // Update drr_q et.al information. Return false if faild.
+  // Update drr_q et.al information. Return false if failed.
   const auto& TryUpdateDrrQueue = [&](const OpCall* drr_producer_op,
                                       pir::Operation* ir_producer_op) -> bool {
     // still return true if both visited.
@@ -369,7 +371,7 @@ bool DrrRewritePattern::MatchFromOutputToInput(
           continue;
         } else {
           VLOG(8) << drr_node->name() << "Match failed:drr_input[" << i
-                  << "] !=  pir_intput[" << i << "] , drr_input_tensor[" << i
+                  << "] !=  pir_input[" << i << "] , drr_input_tensor[" << i
                   << "] is None.";
           matched = false;
           break;
@@ -392,15 +394,15 @@ bool DrrRewritePattern::MatchFromOutputToInput(
       if (drr_input_tensors[i]->consumers().size() !=
           ir_input_values[i].use_count()) {
         matched = false;
-        VLOG(8) << drr_node->name() << " Match failed: consumers of drr intput["
+        VLOG(8) << drr_node->name() << " Match failed: consumers of drr input["
                 << i << "] { " << drr_input_tensors[i]->consumers().size()
-                << " } != consumers of pir intput[" << i << "] { "
+                << " } != consumers of pir input[" << i << "] { "
                 << ir_input_values[i].use_count() << " }.";
         break;
       }
 
       auto* ir_producer_op = ir_input_values[i].defining_op();
-      // Tigger early stop while operand is BlockArgument with
+      // Trigger early stop while operand is BlockArgument with
       // producer_op==nullptr.
       if (drr_producer_op && ir_producer_op == nullptr) {
         matched = false;
@@ -427,7 +429,7 @@ bool DrrRewritePattern::MatchFromOutputToInput(
     PADDLE_ENFORCE_EQ(
         step,
         source_pattern_graph.CountOfOpCalls(),
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "Pattern matching failed. The number of successful matches and the "
             "number of OpCalls in the source pattern graph are not equal."));
   } else {
@@ -477,7 +479,7 @@ MatchContextImpl DrrRewritePattern::CreateOperations(
     PADDLE_ENFORCE_NE(
         result_pattern_graph.id2owned_tensor().count(in_tensor),
         0,
-        phi::errors::NotFound(
+        common::errors::NotFound(
             "Not found the input tensor. Drr input tensor [%s] must exist in "
             "the result pattern graph to be obtained.",
             in_tensor));
@@ -545,7 +547,7 @@ MatchContextImpl DrrRewritePattern::CreateOperations(
     }
 
     // 3. insert new op at point max(max_res_idx+1, min_src_idx)
-    if (min_src_idx > max_res_idx) {
+    if (min_src_idx > max_res_idx || max_res_idx_op == nullptr) {
       rewriter.set_insertion_point(min_src_idx_op);
     } else {
       rewriter.SetInsertionPointAfter(max_res_idx_op);

@@ -26,8 +26,7 @@ PHI_DECLARE_bool(use_stride_kernel);
 #include "paddle/phi/core/distributed/auto_parallel/dist_tensor.h"
 #include "paddle/phi/core/kernel_factory.h"
 
-namespace paddle {
-namespace experimental {
+namespace paddle::experimental {
 
 /* ------------------ for input ----------------------- */
 
@@ -630,7 +629,8 @@ phi::distributed::DistTensor* SetKernelDistOutput(
   PADDLE_ENFORCE_EQ(
       paddle::holds_alternative<phi::distributed::TensorDistAttr>(dist_attr),
       true,
-      phi::errors::PreconditionNotMet("Arg must be a single TensorDistAttr"));
+      common::errors::PreconditionNotMet(
+          "Arg must be a single TensorDistAttr"));
   if (out) {
     if (out->impl() == nullptr) {
       auto dist_t = std::make_shared<phi::distributed::DistTensor>(
@@ -667,7 +667,7 @@ std::vector<phi::distributed::DistTensor*> SetKernelDistOutput(
       paddle::holds_alternative<std::vector<phi::distributed::TensorDistAttr>>(
           dist_attr),
       true,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Arg must be a vector of TensorDistAttr"));
   const std::vector<phi::distributed::TensorDistAttr>& dist_attrs =
       PADDLE_GET_CONST(std::vector<phi::distributed::TensorDistAttr>,
@@ -773,7 +773,7 @@ CreateKernelDistOutput(std::vector<Tensor*> out,
   PADDLE_ENFORCE_EQ(
       out.size(),
       tensor_dist_attrs.size(),
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "out.size() [%d] and tensor_dist_attrs.size() [%d] not match",
           out.size(),
           tensor_dist_attrs.size()));
@@ -804,6 +804,13 @@ void SetReplicatedDistAttrForOutput(
     phi::distributed::DistTensor* out,
     const phi::distributed::ProcessMesh& process_mesh) {
   if (out) {
+    if (out->dims().size() == -1 || out->dims().size() == 0) {
+      if (out->local_dims().size() != -1 && out->local_dims().size() != 0) {
+        out->unsafe_set_dims(out->local_dims());
+        VLOG(3)
+            << "DistTensor out has empty shape, use its local value's shape";
+      }
+    }
     // For inplace output, we also need to set replicated dist attr
     auto dist_attr =
         phi::distributed::TensorDistAttr(common::vectorize(out->dims()));
@@ -812,5 +819,4 @@ void SetReplicatedDistAttrForOutput(
   }
 }
 
-}  // namespace experimental
-}  // namespace paddle
+}  // namespace paddle::experimental

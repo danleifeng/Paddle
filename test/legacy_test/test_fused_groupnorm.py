@@ -164,7 +164,10 @@ class TestGroupNormNHWC_StaticOp(unittest.TestCase):
         navie_residual_out = naive_residual_add(x_np, residual_np)
         paddle.enable_static()
 
-        with paddle.static.program_guard(paddle.static.Program()):
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            paddle.static.program_guard(paddle.static.Program()),
+        ):
             x_static = paddle.static.data(
                 name="x_static", shape=self.shape, dtype=dtype
             )

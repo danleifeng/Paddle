@@ -32,12 +32,15 @@ void DiagonalGradStridedKernel(const Context& dev_ctx,
                                int axis2,
                                DenseTensor* in_grad) {
   if (!FLAGS_use_stride_kernel) {
-    PADDLE_THROW(
-        phi::errors::Fatal("FLAGS_use_stride_kernel is closed. Strided kernel "
-                           "be called, something wrong has happened!"));
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
   }
   dev_ctx.Alloc(in_grad, in_grad->dtype());
   in_grad->set_strides(DenseTensorMeta::calc_strides(in_grad->dims()));
+  if (in_grad->numel() == 0) {
+    return;
+  }
   PD_VISIT_ALL_TYPES(in_grad->dtype(), "DiagonalGradStridedKernel", ([&] {
                        phi::StridedTensorFill<data_t>(*in_grad, 0, in_grad);
                      }));

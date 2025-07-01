@@ -59,7 +59,7 @@ class PyArgsort:
 
 
 def create_tensor(np_data, place):
-    tensor = core.LoDTensor()
+    tensor = core.DenseTensor()
     tensor.set(np_data, place)
     return tensor
 
@@ -87,13 +87,13 @@ class TestArgsortOpCPU(unittest.TestCase):
 
         with base.program_guard(self.main_program, self.startup_program):
             x = paddle.static.data(
-                name="x", shape=[-1] + list(self.input_shape), dtype=self.dtype
+                name="x", shape=[-1, *self.input_shape], dtype=self.dtype
             )
             x.stop_gradient = False
             x.desc.set_need_check_feed(False)
             label = paddle.static.data(
                 name="label",
-                shape=[-1] + list(self.input_shape),
+                shape=[-1, *list(self.input_shape)],
                 dtype=self.dtype,
             )
             label.desc.set_need_check_feed(False)
@@ -202,17 +202,8 @@ class TestArgsortOpCPU(unittest.TestCase):
             def err_msg():
                 offset = np.argmax(diff_mat > max_relative_error)
                 return (
-                    "%s error, %s variable %s max gradient diff %f over limit %f, "
-                    "the first error element is %d, expected %f, but got %f."
-                ) % (
-                    'argsort',
-                    msg_prefix,
-                    name,
-                    max_diff,
-                    max_relative_error,
-                    offset,
-                    a.flatten()[offset],
-                    b.flatten()[offset],
+                    f"argsort error, {msg_prefix} variable {name} max gradient diff {max_diff:f} over limit {max_relative_error:f}, "
+                    f"the first error element is {a.flatten()[offset]}, expected {b.flatten()[offset]:f}, but got {a.flatten()[offset]:f}."
                 )
 
             self.assertLessEqual(max_diff, max_relative_error, err_msg())

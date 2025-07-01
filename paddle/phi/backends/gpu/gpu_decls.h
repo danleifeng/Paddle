@@ -32,6 +32,7 @@ namespace phi {
 DECLARE_TYPE_FOR_GPU(gpuStream_t, cudaStream_t, hipStream_t);
 DECLARE_TYPE_FOR_GPU(gpuEvent_t, cudaEvent_t, hipEvent_t);
 
+#ifndef PADDLE_WITH_CUSTOM_DEVICE
 DECLARE_TYPE_FOR_GPU(dnnActivationDescriptor,
                      cudnnActivationStruct,
                      miopenActivationDescriptor);
@@ -60,9 +61,7 @@ DECLARE_TYPE_FOR_GPU(dnnHandle_t, cudnnHandle_t, miopenHandle_t);
 
 DECLARE_TYPE_FOR_GPU(blasHandle_t, cublasHandle_t, rocblas_handle);
 
-// TODO(Ming Huang): Since there is no blasLt handler,
-// use rocblas_handle for workround.
-DECLARE_TYPE_FOR_GPU(blasLtHandle_t, cublasLtHandle_t, rocblas_handle);
+DECLARE_TYPE_FOR_GPU(blasLtHandle_t, cublasLtHandle_t, hipblasLtHandle_t);
 
 DECLARE_TYPE_FOR_GPU(solverHandle_t, cusolverDnHandle_t, rocsolver_handle);
 
@@ -71,5 +70,6 @@ DECLARE_TYPE_FOR_GPU(sparseHandle_t, cusparseHandle_t, rocsparse_handle);
 #undef DECLARE_TYPE_FOR_GPU
 
 using CUDAGraphID = unsigned long long;  // NOLINT
+#endif
 
 }  // namespace phi

@@ -10,17 +10,11 @@
 - any
 - assign_out_
 - assign_value_
-- c_allgather
-- c_allreduce_max
-- c_allreduce_min
-- c_allreduce_prod
 - c_allreduce_sum
-- c_broadcast
 - c_concat
 - c_identity
-- c_reduce_sum
-- c_sync_calc_stream
-- c_sync_comm_stream
+- c_softmax_with_cross_entropy
+- c_split
 - cast
 - conv2d_transpose
 - conv2d_transpose_bias
@@ -34,8 +28,12 @@
 - empty
 - empty_like
 - enable_check_model_nan_inf
+- expand_as
 - exponential_
 - eye
+# FIXME(dev): Remove flatten after deprecate flatten_contiguous_range in old IR system.
+# flatten is alias name of flatten_contiguous_range.
+- flatten
 - frobenius_norm
 - full
 - full_
@@ -44,7 +42,6 @@
 - full_with_tensor
 - fused_batch_norm_act
 - fused_bn_add_activation
-- fused_multi_transformer
 - fused_softmax_mask
 - fused_softmax_mask_upper_triangle
 - gaussian
@@ -52,6 +49,7 @@
 - increment
 - linspace
 - logspace
+- lp_pool2d
 - matrix_rank
 - matrix_rank_tol
 - max
@@ -59,6 +57,7 @@
 - memcpy_d2h
 - memcpy_h2d
 - mish
+- mp_allreduce_sum
 - norm
 - one_hot
 - ones
@@ -72,12 +71,14 @@
 - read_file
 - repeat_interleave
 - repeat_interleave_with_tensor_index
+- reshape
 - rnn
 - sequence_mask
 - set_value_with_tensor
 - slice
 - split
 - split_with_num
+- squeeze
 - strided_slice
 - sum
 - swish
@@ -91,5 +92,6 @@
 - truncated_gaussian_random
 - uniform
 - unpool
+- unsqueeze
 - zeros
 - zeros_like

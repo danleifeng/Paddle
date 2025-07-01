@@ -39,7 +39,7 @@ class LRNOneDNNHandler
     // http://caffe.berkeleyvision.org/tutorial/layers/lrn.html
     // Where sum of squares is divided by size of normalization window
     // this is not the case for PaddlePaddle LRN.
-    // Hence we need to compensate for this diffrence by
+    // Hence we need to compensate for this difference by
     // multipliing alpha by size of window(n)
     const float alpha = static_cast<float>(alpha_in) * static_cast<float>(n);
     const float beta = static_cast<float>(beta_in);
@@ -73,7 +73,7 @@ class LRNOneDNNHandler
     PADDLE_ENFORCE_EQ(
         is_test,
         false,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "is_test attribute should be set to False in training phase."));
 
     const float alpha = static_cast<float>(alpha_in) * static_cast<float>(n);
@@ -135,12 +135,7 @@ void LRNMKLDNNOpKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       is_float_type,
       true,
-      phi::errors::PreconditionNotMet("DNNL LRN must use float data."));
-  bool eq_place = dev_ctx.GetPlace().GetType() == phi::AllocationType::CPU;
-  PADDLE_ENFORCE_EQ(
-      eq_place,
-      true,
-      phi::errors::PreconditionNotMet("Operator DNNL LRN must use CPUPlace"));
+      common::errors::PreconditionNotMet("DNNL LRN must use float data."));
   const auto& onednn_engine = dev_ctx.GetEngine();
 
   auto x = &x_in;
@@ -191,12 +186,8 @@ void LRNMKLDNNGradOpKernel(const Context& dev_ctx,
   const bool is_float_type = std::is_same<T, float>::value;
   PADDLE_ENFORCE_EQ(is_float_type,
                     true,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "DNNL LRN GradOpKernel must use float data."));
-  PADDLE_ENFORCE_EQ(dev_ctx.GetPlace().GetType() == phi::AllocationType::CPU,
-                    true,
-                    phi::errors::PreconditionNotMet(
-                        "Operator DNNL LRNGrad must use CPUPlace"));
 
   auto in_x = &x;
   auto mid = &mid_out;

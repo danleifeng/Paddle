@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -24,7 +25,13 @@ paddle.enable_static()
 
 class TestExponentialMovingAverage(unittest.TestCase):
     def setUp(self):
-        self._places = [base.CPUPlace()]
+        self._places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            self._places.append(base.CPUPlace())
         if base.core.is_compiled_with_cuda():
             self._places.append(base.CUDAPlace(0))
         self._ema_decay = 0.999
@@ -32,27 +39,25 @@ class TestExponentialMovingAverage(unittest.TestCase):
 
         self._train_program = base.Program()
         self._startup_prog = base.Program()
-        with base.program_guard(self._train_program, self._startup_prog):
-            with base.unique_name.guard():
-                data = paddle.static.data(
-                    name='x', shape=[-1, 5], dtype='float32'
-                )
-                hidden = paddle.static.nn.fc(
-                    x=data, size=10, weight_attr=self._param_name
-                )
-                cost = paddle.mean(hidden)
+        with (
+            base.program_guard(self._train_program, self._startup_prog),
+            base.unique_name.guard(),
+        ):
+            data = paddle.static.data(name='x', shape=[-1, 5], dtype='float32')
+            hidden = paddle.static.nn.fc(
+                x=data, size=10, weight_attr=self._param_name
+            )
+            cost = paddle.mean(hidden)
 
-                self._test_program = base.default_main_program().clone(
-                    for_test=True
-                )
+            self._test_program = base.default_main_program().clone(
+                for_test=True
+            )
 
-                optimizer = paddle.optimizer.Adam(learning_rate=0.001)
-                optimizer.minimize(cost)
+            optimizer = paddle.optimizer.Adam(learning_rate=0.001)
+            optimizer.minimize(cost)
 
-                self._ema = paddle.static.ExponentialMovingAverage(
-                    self._ema_decay
-                )
-                self._ema.update()
+            self._ema = paddle.static.ExponentialMovingAverage(self._ema_decay)
+            self._ema.update()
 
     def train(self, place):
         exe = base.Executor(place)

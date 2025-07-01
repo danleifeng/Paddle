@@ -38,14 +38,14 @@ class ParamsSyncAmongDevicesPass : public pir::Pass {
     PADDLE_ENFORCE_EQ(
         Has(pir::Pass::kPlaceAttr),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Pass initialize failed."
             "When using ConstantFoldingPass, place attribute is required!"
             "Use Set method to set the place attribute."));
     PADDLE_ENFORCE_EQ(
         Has(pir::Pass::kParamScopeAttr),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Pass initialize failed."
             "When using ConstantFoldingPass, scope attribute is required!"
             "Use Set method to set the scope attribute."));
@@ -60,53 +60,90 @@ class ParamsSyncAmongDevicesPass : public pir::Pass {
     auto module_op = op->dyn_cast<pir::ModuleOp>();
     PADDLE_ENFORCE_NOT_NULL(
         module_op,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "params_sync_among_devices_pass should run on module op."));
     auto& block = module_op.block();
     int64_t num_rewrites_{0};
+
+    std::vector<phi::DenseTensor*> dense_tensors;
     for (auto& inner_op : block) {
-      if (inner_op.isa<pir::ParameterOp>()) {
+      if (inner_op.template isa<pir::ParameterOp>() &&
+          inner_op.num_results() > 0) {
+        auto var = inner_op.result(0);
+        auto bool_attr =
+            var.template attribute<::pir::BoolAttribute>(kAttrIsPersistable);
+        if (!bool_attr || !bool_attr.data()) {
+          continue;
+        }
         std::string param_name = inner_op.attributes()
                                      .at("parameter_name")
-                                     .dyn_cast<pir::StrAttribute>()
+                                     .template dyn_cast<pir::StrAttribute>()
                                      .AsString();
         auto* param_var = scope_->FindVar(param_name);
         PADDLE_ENFORCE_NOT_NULL(
             param_var,
-            phi::errors::InvalidArgument("Parameter var [%s] not in scope.",
-                                         param_name));
+            common::errors::InvalidArgument("Parameter var [%s] not in scope.",
+                                            param_name));
+
         if (param_var->IsType<phi::DenseTensor>()) {
-          auto* param_tensor = param_var->GetMutable<phi::DenseTensor>();
-          phi::CPUPlace cpu_place;
-          phi::DenseTensor temp_tensor;
-          temp_tensor.Resize(param_tensor->dims());
-          paddle::framework::TensorCopySync(
-              *param_tensor, cpu_place, &temp_tensor);
-          param_tensor->clear();
-          paddle::framework::TensorCopySync(temp_tensor, place_, param_tensor);
-          num_rewrites_++;
+          dense_tensors.push_back(param_var->GetMutable<phi::DenseTensor>());
         } else {
-          PADDLE_THROW(phi::errors::Unimplemented(
+          PADDLE_THROW(common::errors::Unimplemented(
               "params_sync_among_devices_pass only support DenseTensor type of "
               "parameter var."));
         }
       }
+    }
+    num_rewrites_ = dense_tensors.size();
+
+    size_t num_threads = 8;
+    const size_t chunk_size =
+        std::max(static_cast<size_t>(1), dense_tensors.size() / num_threads);
+    num_threads = std::min(num_threads, dense_tensors.size() / chunk_size);
+    size_t remain_size = dense_tensors.size() % num_threads;
+
+    auto sync_handler = [&](const std::vector<phi::DenseTensor*>& tensors) {
+      for (auto* tensor : tensors) {
+        paddle::framework::TensorCopySync(*tensor, place_, tensor);
+      }
+    };
+
+    std::vector<std::future<void>> futures;
+    for (size_t i = 0; i < num_threads; ++i) {
+      auto start_it = dense_tensors.begin() + i * chunk_size;
+      auto end_it = start_it + chunk_size;
+
+      futures.push_back(
+          std::async(std::launch::async,
+                     sync_handler,
+                     std::vector<phi::DenseTensor*>(start_it, end_it)));
+    }
+    if (remain_size > 0) {
+      futures.push_back(std::async(
+          std::launch::async,
+          sync_handler,
+          std::vector<phi::DenseTensor*>(
+              dense_tensors.rbegin(), dense_tensors.rbegin() + remain_size)));
+    }
+
+    for (auto& future : futures) {
+      future.wait();
     }
     AddStatistics(num_rewrites_);
   }
 
   bool CanApplyOn(pir::Operation* op) const override {
     PADDLE_ENFORCE_NOT_NULL(
-        scope_, phi::errors::InvalidArgument("scope can not be nullptr"));
+        scope_, common::errors::InvalidArgument("scope can not be nullptr"));
 #ifdef PADDLE_WITH_XPU
     PADDLE_ENFORCE(phi::is_xpu_place(place_) || phi::is_cpu_place(place_),
-                   phi::errors::PreconditionNotMet(
+                   common::errors::PreconditionNotMet(
                        "The Place attr in params_sync_among_devices_pass "
                        "should be cpu or xpu."));
 #endif
 #ifdef PADDLE_WITH_CUDA
     PADDLE_ENFORCE(phi::is_gpu_place(place_) || phi::is_cpu_place(place_),
-                   phi::errors::PreconditionNotMet(
+                   common::errors::PreconditionNotMet(
                        "The Place attr in params_sync_among_devices_pass "
                        "should be cpu or gpu."));
 #endif

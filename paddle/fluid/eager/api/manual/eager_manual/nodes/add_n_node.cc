@@ -21,11 +21,12 @@
 #include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/imperative/tracer.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/phi/api/all.h"
 #include "paddle/phi/api/lib/api_custom_impl.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 COMMON_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(check_cuda_error);
 
 paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
 AddNGradNodeFinal::operator()(
@@ -33,6 +34,11 @@ AddNGradNodeFinal::operator()(
         &grads,
     bool create_graph,
     bool is_new_grad) {
+  VLOG(3) << "Running AD API GRAD: "
+          << "add_n_grad";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("AddNGradNodeFinal begin");
+  }
   // Fill Zero For GradIn Tensors
 
   // This 'Local_XXXGradNode' record event is different with
@@ -43,10 +49,8 @@ AddNGradNodeFinal::operator()(
   //    accumulation when the output(s) of corresponding forward OP are shared
   //    by other OP(s), which may have extra accumulation overhead than
   //    'Local_XXXGradNode'.
-  paddle::platform::RecordEvent node_execution_inner(
-      "Local_AddNGradNodeFinal",
-      paddle::platform::TracerEventType::OperatorInner,
-      1);
+  phi::RecordEvent node_execution_inner(
+      "Local_AddNGradNodeFinal", phi::TracerEventType::OperatorInner, 1);
 
   // Apply Gradient Hooks
   auto hooked_grads = ApplyGradientHooks(grads);
@@ -111,6 +115,13 @@ AddNGradNodeFinal::operator()(
         INPUT_PRINT_TEMPLATE, input_str, output_str);
   }
 
+  if (HasNodePostHook()) {
+    returns = ApplyNodePostHooks(returns, hooked_grads);
+  }
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("AddNGradNodeFinal finish");
+  }
   if (NeedComplexToRealConversion()) HandleComplexGradToRealGrad(&returns);
   return returns;
 }

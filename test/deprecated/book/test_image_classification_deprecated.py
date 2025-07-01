@@ -109,7 +109,7 @@ def train(net_type, use_cuda, save_dirname, is_local):
     data_shape = [3, 32, 32]
 
     images = paddle.static.data(
-        name='pixel', shape=[-1] + data_shape, dtype='float32'
+        name='pixel', shape=[-1, *data_shape], dtype='float32'
     )
     label = paddle.static.data(name='label', shape=[-1, 1], dtype='int64')
 
@@ -297,9 +297,11 @@ class TestImageClassification(unittest.TestCase):
         prog = base.Program()
         startup_prog = base.Program()
         scope = base.core.Scope()
-        with base.scope_guard(scope):
-            with base.program_guard(prog, startup_prog):
-                yield
+        with (
+            base.scope_guard(scope),
+            base.program_guard(prog, startup_prog),
+        ):
+            yield
 
 
 if __name__ == '__main__':

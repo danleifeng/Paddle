@@ -28,7 +28,7 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
     def __init__(self):
         self.global_ring_id = 0
 
-    def get_model(self, main_prog, startup_program):
+    def get_model(self, main_prog, startup_program, dtype="float32"):
         ring_id = 0
         with base.program_guard(main_prog, startup_program):
             tindata = paddle.static.data(
@@ -38,7 +38,7 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
             toutdata = main_prog.current_block().create_var(
                 name="outofallreduce",
                 dtype='float32',
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
                 stop_gradient=False,
             )
@@ -70,11 +70,13 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
             )
 
             main_prog.global_block().append_op(
-                type="c_allreduce_sum",
-                inputs={'X': toutdata},
-                attrs={'ring_id': ring_id},
-                outputs={'Out': toutdata},
-                attr={'use_calc_stream': False},
+                type="all_reduce",
+                inputs={'x': toutdata},
+                attrs={
+                    'ring_id': ring_id,
+                    'reduce_type': paddle.distributed.ReduceOp.SUM,
+                },
+                outputs={'out': toutdata},
             )
 
             main_prog.global_block().append_op(
@@ -104,9 +106,6 @@ class TestCollectiveAllreduce(TestCollectiveRunnerBase):
                 )
 
             return toutdata
-
-    def get_model_new_comm(self, main_prog, startup_program, dtype="float32"):
-        return self.get_model(main_prog, startup_program)
 
 
 if __name__ == "__main__":

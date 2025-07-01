@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import paddle
 from paddle.base.data_feeder import check_variable_and_dtype
@@ -24,6 +24,8 @@ from paddle.distribution import exponential_family
 from paddle.framework import in_dynamic_or_pir_mode
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
 
 
@@ -109,11 +111,11 @@ class Dirichlet(exponential_family.ExponentialFamily):
             concentration0.pow(2) * (concentration0 + 1)
         )
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Sample from dirichlet distribution.
 
         Args:
-            shape (Sequence[int], optional): Sample shape. Defaults to empty tuple.
+            shape (Sequence[int], optional): Sample shape. Defaults to empty list.
         """
         shape = shape if isinstance(shape, tuple) else tuple(shape)
         return _dirichlet(self.concentration.expand(self._extend_shape(shape)))

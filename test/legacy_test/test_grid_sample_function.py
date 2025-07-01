@@ -20,7 +20,6 @@ import paddle
 import paddle.base.dygraph as dg
 import paddle.nn.functional as F
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 class GridSampleTestCase(unittest.TestCase):
@@ -49,19 +48,19 @@ class GridSampleTestCase(unittest.TestCase):
     def static_functional(self, place):
         main = base.Program()
         start = base.Program()
-        with base.unique_name.guard():
-            with base.program_guard(main, start):
-                x = paddle.static.data("x", self.x_shape, dtype=self.dtype)
-                grid = paddle.static.data(
-                    "grid", self.grid_shape, dtype=self.dtype
-                )
-                y_var = F.grid_sample(
-                    x,
-                    grid,
-                    mode=self.mode,
-                    padding_mode=self.padding_mode,
-                    align_corners=self.align_corners,
-                )
+        with (
+            base.unique_name.guard(),
+            base.program_guard(main, start),
+        ):
+            x = paddle.static.data("x", self.x_shape, dtype=self.dtype)
+            grid = paddle.static.data("grid", self.grid_shape, dtype=self.dtype)
+            y_var = F.grid_sample(
+                x,
+                grid,
+                mode=self.mode,
+                padding_mode=self.padding_mode,
+                align_corners=self.align_corners,
+            )
         feed_dict = {"x": self.x, "grid": self.grid}
         exe = base.Executor(place)
         exe.run(start)
@@ -81,7 +80,6 @@ class GridSampleTestCase(unittest.TestCase):
         y_np = y_t.numpy()
         return y_np
 
-    @test_with_pir_api
     def _test_equivalence(self, place):
         result1 = self.static_functional(place)
         with dg.guard(place):
@@ -142,7 +140,7 @@ def load_tests(loader, standard_tests, pattern):
 
 
 class TestGridSampleAPI(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         with self.assertRaises(ValueError):
             x = paddle.randn([1, 1, 3, 3])

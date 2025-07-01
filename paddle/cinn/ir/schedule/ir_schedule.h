@@ -90,6 +90,9 @@ class IRSchedule {
   //! Get all blocks stored in this ModuleExpr.
   std::vector<Expr> GetAllBlocks() const;
 
+  //! Get all schedules stored in this ModuleExpr.
+  std::vector<stmt::StmtRef> GetAllSchedules() const;
+
   //! Get a block with the specific name.
   Expr GetBlock(const std::string& block_name) const;
 
@@ -102,18 +105,18 @@ class IRSchedule {
 
   /**
    * \brief Split a for loop into multiple loops, based on the factors.
-   * @param loop The loop to be splited.
+   * @param loop The loop to be split.
    * @param factors The factors we used to split the loop.
-   * @return The splited loops.
+   * @return The split loops.
    */
   std::vector<Expr> Split(const Expr& loop, const std::vector<int>& factors);
 
   /**
    * \brief Split a for loop into multiple loops, based on the factors.
    * @param block_name Name of the block we want to modify.
-   * @param loop_index Index of the loop to be splited.
+   * @param loop_index Index of the loop to be split.
    * @param factors The factors we used to split the loop.
-   * @return The splited loops.
+   * @return The split loops.
    */
   std::vector<Expr> Split(const std::string& block_name,
                           int loop_index,
@@ -122,9 +125,9 @@ class IRSchedule {
   /**
    * \brief Split a for loop into multiple loops, based on the factors, only
    * used for deserialization of trace.
-   * @param loop The loop to be splited.
+   * @param loop The loop to be split.
    * @param factors The factors we used to split the loop.
-   * @return The splited loops.
+   * @return The split loops.
    */
   std::vector<Expr> Split(const Expr& loop, const std::vector<Expr>& factors);
 
@@ -330,43 +333,6 @@ class IRSchedule {
 
   /**
    * \brief Factorize the reduction block by the given loop. The block will be
-   * split into two blocks: rfactor block and final write-back block.
-   * @param rf_loop the reduce loop to do rfactor transformation.
-   * @param rf_axis the axis where the new generated loop is placed in the
-   * rfactor block.
-   * @return The new created rfactor tensor.
-   *
-   * For example, input the block:
-   * \code
-   * for (i, 0, 10)      // serial loop
-   *   B_init[i] = 0
-   *   for (j, 0, 20)    // reduce loop
-   *      for (k, 0, 30) // reduce loop
-   *         B[i] = B[i] + A[i, j, k]
-   * \endcode
-   *
-   * If the rfactor loop is k and rf_axis is 0, the rfactor transformation is
-   * divided into 2 steps:
-   * 1. get the rfactor block where the reduce loop k is transformed to the
-   * serial loop with no accumulation and a new rfactor tensor is created. The
-   * axis k will be placed in the rf_axis of the new rf_tensor. The rf_block is
-   * as follows: \code for (rf_k, 0, 30)      // rfactor loop k is transformed
-   * to the serial loop. for (i, 0, 10)       // serial loop for (j, 0, 20) //
-   * reduce loop rf_B_init[rf_k, i] = 0 for (j, 0, 20)     // reduce loop
-   *       rf_B[rf_k, i] = rf_B[rf_k, i] + A[i, j, rf_k]
-   * \endcode
-   * 2. do reduction of the rfactor loop k to get the final result block:
-   * \code
-   *   for (i, 0, 10)    // serial loop
-   *      B_init[i] = 0
-   *      for (k, 0, 30)
-   *        B[i] = B[i] + rf_B[k, i]
-   * \endcode
-   */
-  Expr Rfactor(const Expr& rf_loop, int rf_axis);
-
-  /**
-   * \brief Factorize the reduction block by the given loop. The block will be
    * split into two blocks: reduction-factorized block and write-back block.
    * @param rf_loop the reduce loop to be factorized.
    * @param rf_axis The position where the new dimension is placed in the new rf
@@ -501,9 +467,8 @@ class BaseInliner : public ir::IRMutator<> {
   void Visit(const ir::Block* expr, Expr* op) override;
 
  protected:
-  //! Check if indices are validate. If so, set idx_vars_ properly.
-  bool UpdateAndCheckIndexVars(const std::vector<Expr>& indices,
-                               int expected_ndim);
+  //! Check if indices are validate. If so, set idx_expr_ properly.
+  bool UpdateAndCheckIndexVars(const std::vector<Expr>& indices);
 
   void SetIndexSubstitution(const std::vector<Expr>& indices);
 
@@ -513,7 +478,7 @@ class BaseInliner : public ir::IRMutator<> {
   //! The body of the block to be inlined
   Expr inlined_store_{nullptr};
   //! The indices used for indexing the buffer to be inlined
-  std::vector<Var> idx_vars_;
+  std::vector<Expr> idx_expr_;
   //! Replacing vars(idx_sub_var_) in indices to corresponding
   //! expr(idx_sub_expr_)
   std::vector<Var> idx_sub_var_;

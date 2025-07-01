@@ -96,9 +96,13 @@ class PackedStepContext {
   Expr InputAt(size_t idx) const {
     PADDLE_ENFORCE_LT(idx,
                       input_range_.size(),
-                      phi::errors::InvalidArgument("idx overranges"));
+                      ::common::errors::InvalidArgument("idx overranges"));
     const auto& range = input_range_.at(idx);
-    CHECK(range.second - range.first == 1) << "not single param";
+
+    PADDLE_ENFORCE_EQ(range.second - range.first,
+                      1,
+                      ::common::errors::InvalidArgument(
+                          "Input is not single param, idx: %d.", idx));
     return inputs_[range.first];
   }
 
@@ -106,7 +110,7 @@ class PackedStepContext {
   std::vector<Expr> InputsAt(size_t idx) const {
     PADDLE_ENFORCE_LT(idx,
                       input_range_.size(),
-                      phi::errors::InvalidArgument("idx overranges"));
+                      ::common::errors::InvalidArgument("idx overranges"));
     const auto& range = input_range_.at(idx);
     std::vector<Expr> results;
     for (size_t s = range.first; s < range.second; ++s) {
@@ -119,13 +123,13 @@ class PackedStepContext {
   template <typename AttrType>
   const AttrType& AttrAt(size_t idx) const {
     try {
-      return absl::get<AttrType>(attrs_.at(idx));
-    } catch (absl::bad_variant_access& ex) {
+      return std::get<AttrType>(attrs_.at(idx));
+    } catch (std::bad_variant_access& ex) {
       std::stringstream ss;
       ss << "Attribute cast error, idx:" << idx
          << ", get type:" << typeid(AttrType).name()
          << ", real index:" << attrs_.at(idx).index();
-      PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
       throw ex;
     }
   }
@@ -136,7 +140,11 @@ class PackedStepContext {
     size_t input_idx = 0;
     for (auto&& param_name : step_kind->inputs_) {
       auto arg_it = desc.inputs.find(param_name);
-      CHECK(arg_it != desc.inputs.end()) << "Can't find param:" << param_name;
+      PADDLE_ENFORCE_NE(
+          arg_it,
+          desc.inputs.end(),
+          ::common::errors::InvalidArgument(
+              "Can't find param: %s while building inputs", param_name));
       auto&& args = arg_it->second;
       inputs_.insert(inputs_.end(),
                      std::make_move_iterator(args.begin()),
@@ -149,8 +157,10 @@ class PackedStepContext {
     size_t attr_idx = 0;
     for (auto&& attr_name : step_kind->attrs_) {
       auto attr_it = desc.attrs.find(attr_name);
-      CHECK(attr_it != desc.attrs.end())
-          << "Can't find attribute:" << attr_name;
+      PADDLE_ENFORCE_NE(attr_it,
+                        desc.attrs.end(),
+                        ::common::errors::InvalidArgument(
+                            "Can't find attribute: %s", attr_name));
       attrs_.emplace_back(attr_it->second);
       ++attr_idx;
     }
@@ -480,12 +490,6 @@ CINN_BUILD_STEP_KIND(Bind)
     .Attrs({"thread_axis"})
     .SetApplyFn(APPLY_FUNC_UNIFORM(FREE_FUNCTION_CONVERTER(&IRSchedule::Bind)));
 
-CINN_BUILD_STEP_KIND(Rfactor)
-    .Inputs({"rf_loop"})
-    .Attrs({"rf_axis"})
-    .SetApplyFn(
-        APPLY_FUNC_UNIFORM(FREE_FUNCTION_CONVERTER(&IRSchedule::Rfactor)));
-
 CINN_BUILD_STEP_KIND(FactorizeReduction)
     .Inputs({"rf_loop"})
     .Attrs({"rf_axis"})
@@ -581,13 +585,13 @@ void AttrVariantToProto(const utils::Attribute& attr,
 #define SET_DESC_SINGLE_ITEM(index, built_type, proto_type, proto_field)   \
   case index:                                                              \
     attr_proto->set_dtype(proto::ScheduleDesc_Attr_DataType_##proto_type); \
-    attr_proto->set_##proto_field(absl::get<built_type>(attr));            \
+    attr_proto->set_##proto_field(std::get<built_type>(attr));             \
     break;
 
 #define SET_DESC_REPEATED_ITEM(index, built_type, proto_type, proto_field) \
   case index: {                                                            \
     attr_proto->set_dtype(proto::ScheduleDesc_Attr_DataType_##proto_type); \
-    const auto& values = absl::get<built_type>(attr);                      \
+    const auto& values = std::get<built_type>(attr);                       \
     attr_proto->mutable_##proto_field()->Reserve(values.size());           \
     *attr_proto->mutable_##proto_field() = {values.begin(), values.end()}; \
     break;                                                                 \
@@ -609,7 +613,7 @@ void AttrVariantToProto(const utils::Attribute& attr,
     default:
       std::stringstream ss;
       ss << "Invalid index:" << attr.index();
-      PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
 
 #undef SET_DESC_SINGLE_ITEM
@@ -645,7 +649,7 @@ utils::Attribute AttrProtoToVariant(const proto::ScheduleDesc_Attr& attr) {
     default:
       std::stringstream ss;
       ss << "Invalid type:" << attr.DebugString();
-      PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
 
 #undef PARSE_DESC_SINGLE_ITEM
@@ -681,7 +685,7 @@ void ScheduleDesc::Replay(IRSchedule* schedule,
 
 proto::ScheduleDesc ScheduleDesc::ToProto() const {
   // map each Expr to a formatted name (e1, e2, ...)
-  absl::flat_hash_map<Expr, std::string, ExprHash, ExprEqual> expr2name;
+  paddle::flat_hash_map<Expr, std::string, ExprHash, ExprEqual> expr2name;
   proto::ScheduleDesc desc_proto;
 
   for (auto&& step : steps_) {
@@ -694,8 +698,10 @@ proto::ScheduleDesc ScheduleDesc::ToProto() const {
       expr_desc->set_parameter(param_name);
       for (auto&& expr : param2exprs.second) {
         auto expr_it = expr2name.find(expr);
-        CHECK(expr_it != expr2name.end())
-            << "Can't find expr of param_name: " << param_name;
+        PADDLE_ENFORCE_NE(expr_it,
+                          expr2name.end(),
+                          ::common::errors::InvalidArgument(
+                              "Can't find expr of param_name: %s", param_name));
         expr_desc->add_arguments(expr_it->second);
       }
     }
@@ -730,7 +736,7 @@ std::vector<Expr> ScheduleDesc::ReplayWithProto(
   }
 
   // map a formatted name (e1, e2, ...) to an Expr
-  absl::flat_hash_map<std::string, Expr> name2expr;
+  paddle::flat_hash_map<std::string, Expr> name2expr;
   std::vector<Expr> last_outputs;
 
   // restore each scheduling step and apply to the new IRSchedule object
@@ -738,17 +744,26 @@ std::vector<Expr> ScheduleDesc::ReplayWithProto(
     VLOG(4) << "Replay step:\n" << step_proto.DebugString();
     ScheduleDesc::Step step;
     step.type = step_proto.type();
-    CHECK(!step.type.empty()) << "Name of StepKind is empty";
+    PADDLE_ENFORCE_NE(
+        step.type.empty(),
+        true,
+        ::common::errors::InvalidArgument("Name of StepKind is empty"));
     if (without_post_schedule && step.type == "TagPostSchedule") {
       break;
     }
     const StepKindInfo* step_kind = StepKindRegistry::Global()->Find(step.type);
-    CHECK(step_kind) << "Can't find StepKind:" << step.type;
+    PADDLE_ENFORCE_NE(step_kind,
+                      nullptr,
+                      ::common::errors::InvalidArgument(
+                          "Can't find StepKind: %s", step.type));
 
     for (auto&& param2args : step_proto.inputs()) {
       for (auto&& arg : param2args.arguments()) {
         auto arg_it = name2expr.find(arg);
-        CHECK(arg_it != name2expr.end()) << "Cant't find argument:" << arg;
+        PADDLE_ENFORCE_NE(
+            arg_it,
+            name2expr.end(),
+            ::common::errors::InvalidArgument("Can't find argument: %s", arg));
         step.inputs[param2args.parameter()].emplace_back(arg_it->second);
       }
     }
@@ -758,9 +773,10 @@ std::vector<Expr> ScheduleDesc::ReplayWithProto(
 
     PackedStepContext context(step, step_kind, sch);
     step.outputs = step_kind->Apply(&context);
-    PADDLE_ENFORCE_EQ(step_proto.outputs().size(),
-                      step.outputs.size(),
-                      phi::errors::InvalidArgument("Output size not matched"));
+    PADDLE_ENFORCE_EQ(
+        step_proto.outputs().size(),
+        step.outputs.size(),
+        ::common::errors::InvalidArgument("Output size not matched"));
     for (size_t i = 0; i < step.outputs.size(); ++i) {
       name2expr[step_proto.outputs(i)] = step.outputs.at(i);
     }

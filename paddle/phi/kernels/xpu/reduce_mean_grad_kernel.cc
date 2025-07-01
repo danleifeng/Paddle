@@ -26,27 +26,32 @@ template <typename T, typename Context>
 void ReduceMeanGradKernel(const Context& dev_ctx,
                           const DenseTensor& x,
                           const DenseTensor& out_grad,
-                          const IntArray& dims_arr,
+                          const IntArray& dims,
                           bool keep_dim,
                           bool reduce_all,
                           DenseTensor* x_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    return;
+  }
+
   using XPUType = typename XPUTypeTrait<T>::Type;
-  reduce_all = recompute_reduce_all(x, dims_arr, reduce_all);
+  reduce_all = recompute_reduce_all(x, dims, reduce_all);
   dev_ctx.template Alloc<T>(x_grad);
   const XPUType* dy_data = reinterpret_cast<const XPUType*>(out_grad.data<T>());
 
   XPUType* x_data = reinterpret_cast<XPUType*>(x_grad->data<T>());
 
-  auto reduce_dims = dims_arr.GetData();
+  auto reduce_dims = dims.GetData();
 
-  std::vector<int> xdims = common::vectorize<int>(x.dims());
-  std::vector<int> ydims = common::vectorize<int>(out_grad.dims());
+  std::vector<int64_t> xdims = common::vectorize<int64_t>(x.dims());
+  std::vector<int64_t> ydims = common::vectorize<int64_t>(out_grad.dims());
 
-  int reduce_numel = 1;
+  int64_t reduce_numel = 1;
   if (reduce_all) {
     reduce_dims.clear();
     for (size_t d = 0; d < xdims.size(); ++d) {
-      reduce_dims.push_back(static_cast<int>(d));
+      reduce_dims.push_back(d);
     }
   }
   for (auto& d : reduce_dims) {
@@ -71,10 +76,10 @@ void ReduceMeanGradKernel(const Context& dev_ctx,
 
   // use [1] to replace [], because xpu not support []
   if (xdims.size() == 0) {
-    xdims = std::vector<int>({1});
+    xdims = std::vector<int64_t>({1});
   }
   if (ydims.size() == 0) {
-    ydims = std::vector<int>({1});
+    ydims = std::vector<int64_t>({1});
   }
 
   r = xpu::broadcast_mul(

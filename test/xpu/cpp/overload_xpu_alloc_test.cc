@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "paddle/fluid/memory/allocation/allocator.h"
-#include "paddle/fluid/memory/stats.h"
 #include "paddle/phi/backends/xpu/enforce_xpu.h"
 #include "paddle/phi/backends/xpu/xpu_context.h"
+#include "paddle/phi/core/memory/allocation/allocator.h"
+#include "paddle/phi/core/memory/stats.h"
 
 #include "gtest/gtest.h"
 
@@ -64,11 +64,11 @@ TEST(XPUOverloadAllocTest, NestedScopeTest) {
   xpu::ctx_guard RAII_GUARD1(dev_ctx.x_context());
   int pre_alloc_value = DEVICE_MEMORY_STAT_CURRENT_VALUE(
       Allocated, dev_ctx.GetPlace().GetDeviceId());
-  int* buffer_outter = RAII_GUARD1.alloc<int>(64);
-  EXPECT_NE(buffer_outter, nullptr);
+  int* buffer_outer = RAII_GUARD1.alloc<int>(64);
+  EXPECT_NE(buffer_outer, nullptr);
   {
     // The destruction of inner guard should not free the memory allocated from
-    // outter guard.
+    // outer guard.
     xpu::ctx_guard RAII_GUARD2(dev_ctx.x_context());
     int* buffer_inner = RAII_GUARD2.alloc<int>(64);
     EXPECT_NE(buffer_inner, nullptr);

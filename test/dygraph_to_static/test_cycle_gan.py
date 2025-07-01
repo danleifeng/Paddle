@@ -23,13 +23,12 @@ from PIL import Image, ImageOps
 
 from paddle import base
 
-# Use GPU:0 to elimate the influence of other tasks.
+# Use GPU:0 to eliminate the influence of other tasks.
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
@@ -208,7 +207,7 @@ class build_generator_resnet_9blocks(paddle.nn.Layer):
         dim = 128
         for i in range(9):
             Build_Resnet_Block = self.add_sublayer(
-                "generator_%d" % (i + 1), build_resnet_block(dim)
+                f"generator_{i + 1}", build_resnet_block(dim)
             )
             self.build_resnet_block_list.append(Build_Resnet_Block)
         self.deconv0 = DeConv2D(
@@ -481,7 +480,7 @@ class ImagePool:
                 return image
 
 
-def reader_creater():
+def reader_creator():
     def reader():
         while True:
             fake_image = np.uint8(
@@ -544,7 +543,7 @@ def train(args):
 
     with base.dygraph.guard(place):
         max_images_num = args.max_images_num
-        data_shape = [-1] + args.image_shape
+        data_shape = [-1, *args.image_shape]
 
         random.seed(SEED)
         np.random.seed(SEED)
@@ -552,8 +551,8 @@ def train(args):
 
         A_pool = ImagePool()
         B_pool = ImagePool()
-        A_reader = paddle.batch(reader_creater(), args.batch_size)()
-        B_reader = paddle.batch(reader_creater(), args.batch_size)()
+        A_reader = paddle.batch(reader_creator(), args.batch_size)()
+        B_reader = paddle.batch(reader_creator(), args.batch_size)()
         cycle_gan = paddle.jit.to_static(
             Cycle_Gan(input_channel=data_shape[1], istrain=True)
         )
@@ -689,7 +688,6 @@ class TestCycleGANModel(Dy2StTestBase):
             out = train(self.args)
         return out
 
-    @test_legacy_and_pt_and_pir
     def test_train(self):
         st_out = self.train(to_static=True)
         dy_out = self.train(to_static=False)

@@ -109,9 +109,10 @@ class HybridParallelNet(nn.Layer):
 
 
 def get_hybrid_parallel_model(train_program, start_program):
-    with static.program_guard(
-        train_program, start_program
-    ), utils.unique_name.guard():
+    with (
+        static.program_guard(train_program, start_program),
+        utils.unique_name.guard(),
+    ):
         batch_size = BATCH_SIZE
         hidden_size = HIDDEN_SIZE
         sequence_len = SEQ_LEN
@@ -174,7 +175,7 @@ class TestGradSync(unittest.TestCase):
 
         for op in ops:
             # check sequence parallel allgather
-            if op.type == "c_allgather":
+            if op.type == "all_gather":
                 assert (
                     int(op.attr("nranks")) == 4
                 ), "sequence parallel allgather error with nranks [{}]".format(
@@ -191,7 +192,7 @@ class TestGradSync(unittest.TestCase):
                 allgather_count += 1
 
             # check sequence parallel reducescatter
-            elif op.type == "c_reducescatter":
+            elif op.type == "reduce_scatter":
                 assert (
                     int(op.attr("nranks")) == 4
                 ), "sequence parallel reducescatter error with nranks [{}]".format(

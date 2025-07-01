@@ -29,13 +29,13 @@ void ClipByNormKernel(const Context& dev_ctx,
   dev_ctx.template Alloc<T>(output);
 
   PADDLE_ENFORCE_NOT_NULL(input,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Input(X) of ClipByNormOp should not be null. "
                               "Please check if it is created correctly."));
 
   const auto& x_dims = input->dims();
-  std::vector<int> xshape(x_dims.size());
-  std::vector<int> rdims(x_dims.size());
+  std::vector<int64_t> xshape(x_dims.size());
+  std::vector<int64_t> rdims(x_dims.size());
   for (int i = 0; i < x_dims.size(); i++) {
     xshape[i] = x_dims[i];
     rdims[i] = i;

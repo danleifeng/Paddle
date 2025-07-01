@@ -19,6 +19,7 @@
 
 #include "paddle/phi/core/tensor_utils.h"
 #include "paddle/phi/kernels/cast_kernel.h"
+#include "paddle/phi/kernels/complex_kernel.h"
 #include "paddle/phi/kernels/determinant_grad_kernel.h"
 #include "paddle/phi/kernels/elementwise_multiply_kernel.h"
 #include "paddle/phi/kernels/empty_kernel.h"
@@ -81,12 +82,16 @@ void DeterminantGradKernel(const Context& dev_ctx,
                            const DenseTensor& out,
                            const DenseTensor& out_grad,
                            DenseTensor* x_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    return;
+  }
   auto input_dims_size = x.dims().size();
   if (input_dims_size > 2) {
     PADDLE_ENFORCE_EQ(
         out_grad.dims().size() + 2,
         input_dims_size,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The grad tensor of det dims size should be 2 less than"
             " input tensor's, but here differ %d",
             input_dims_size - out_grad.dims().size()));
@@ -95,7 +100,7 @@ void DeterminantGradKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         out_grad.dims().size(),
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The grad tensor of det dims size should be 2 less than"
             " input tensor's, but here differ %d",
             input_dims_size - out_grad.dims().size()));
@@ -122,8 +127,8 @@ void DeterminantGradKernel(const Context& dev_ctx,
   // The matrix is invertible
   // let |A| = Determinant(A)
   // Ref to https://people.maths.ox.ac.uk/gilesm/files/NA-08-01.pdf
-  // we set d|A| = unsqueeze(dA * |A|, [-1, -2]) * inverse(A).transpose(-2,
-  // -1)
+  // we set d|A| = unsqueeze(dA * |A|.conj(), [-1, -2]) *
+  // inverse(A).conj().transpose(-2, -1)
 
   // First: inverse(A)
   DenseTensor inverse_A;
@@ -140,17 +145,19 @@ void DeterminantGradKernel(const Context& dev_ctx,
     mat_inv(dev_ctx, x, &inverse_A);
   }
 
-  VLOG(3) << "inverse(A) dims: " << inverse_A.dims();
+  auto conj_inverse_A = phi::Conj<MPType>(dev_ctx, inverse_A);
+  VLOG(3) << "inverse(A).conj() dims: " << conj_inverse_A.dims();
 
-  // Second: inverse(A).transpose(-2, -1)
+  // Second: inverse(A).conj().transpose(-2, -1)
   DenseTensor transpose_inverse_A =
-      phi::TransposeLast2Dim<MPType>(dev_ctx, inverse_A);
+      phi::TransposeLast2Dim<MPType>(dev_ctx, conj_inverse_A);
 
   VLOG(3) << "(dA * |A|).transpose(-2, -1) dims: "
           << transpose_inverse_A.dims();
 
-  // Third: dA * |A|
-  auto mul_dA_detA = phi::Multiply<T>(dev_ctx, out_grad, out);
+  // Third: dA * |A|.conj()
+  auto conj_out = phi::Conj<MPType>(dev_ctx, out);
+  auto mul_dA_detA = phi::Multiply<T>(dev_ctx, out_grad, conj_out);
   VLOG(3) << "dA * |A| dims: " << mul_dA_detA.dims();
 
   // Fourth: unsqueeze(dA * |A|, [-1, -2])

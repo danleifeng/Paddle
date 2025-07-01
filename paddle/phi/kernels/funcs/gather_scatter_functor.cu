@@ -94,7 +94,7 @@ class ReduceMin {
 static ReduceMin reduce_min;
 
 __global__ void CudaMemsetAsync(int* dest, int value, size_t size) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid * sizeof(int) >= size) return;
   dest[tid] = value;
 }
@@ -107,9 +107,9 @@ __global__ void ScatterAssignGPUKernel(tensor_t* self_data,
                                        int dim,
                                        const index_t* index_data,
                                        tensor_t* src_data,
-                                       int select_dim_size,
-                                       int self_select_dim_size,
-                                       int src_select_dim_size,
+                                       int64_t select_dim_size,
+                                       int64_t self_select_dim_size,
+                                       int64_t src_select_dim_size,
                                        int64_t outer_dim_size,
                                        int64_t outer_dim_size_self,
                                        int64_t outer_dim_size_src,
@@ -117,7 +117,7 @@ __global__ void ScatterAssignGPUKernel(tensor_t* self_data,
                                        int64_t numel_data,
                                        const func_t& reduce_op,
                                        int* thread_ids) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + static_cast<int64_t>(blockIdx.x) * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;  // The i, j, k here is the index of the 3 layers loop
                     // squeezed from the N layers loop.
@@ -144,12 +144,38 @@ __global__ void ScatterAssignGPUKernel(tensor_t* self_data,
   // index matrix has different shape with self matrix or src matrix.
   int64_t replace_index_self, replace_index_src;
   if (is_scatter_like) {
+    // scatter
+    PADDLE_ENFORCE(
+        index >= -self_select_dim_size && index < self_select_dim_size,
+        "The index is out of bounds, "
+        "please check whether the index and "
+        "input's shape meet the requirements. It should "
+        "be greater or equal to [%d] and less than [%d], but received [%ld]",
+        -self_select_dim_size,
+        self_select_dim_size,
+        (int64_t)index);
+    if (index < 0) {
+      index += self_select_dim_size;
+    }
     replace_index_self = k + index * outer_dim_size_self +
                          i * outer_dim_size_self * self_select_dim_size;
 
     replace_index_src = k + j * outer_dim_size_src +
                         i * outer_dim_size_src * src_select_dim_size;
   } else {
+    // gather
+    PADDLE_ENFORCE(
+        index >= -src_select_dim_size && index < src_select_dim_size,
+        "The index is out of bounds, "
+        "please check whether the index and "
+        "input's shape meet the requirements. It should "
+        "be greater or equal to [%d] and less than [%d], but received [%d]",
+        -src_select_dim_size,
+        src_select_dim_size,
+        (int32_t)index);
+    if (index < 0) {
+      index += src_select_dim_size;
+    }
     replace_index_self = tid;
 
     replace_index_src = k + index * outer_dim_size_src +
@@ -173,9 +199,9 @@ __global__ void GatherScatterGPUKernel(tensor_t* self_data,
                                        int dim,
                                        const index_t* index_data,
                                        tensor_t* src_data,
-                                       int select_dim_size,
-                                       int self_select_dim_size,
-                                       int src_select_dim_size,
+                                       int64_t select_dim_size,
+                                       int64_t self_select_dim_size,
+                                       int64_t src_select_dim_size,
                                        int64_t outer_dim_size,
                                        int64_t outer_dim_size_self,
                                        int64_t outer_dim_size_src,
@@ -184,7 +210,7 @@ __global__ void GatherScatterGPUKernel(tensor_t* self_data,
                                        bool include_self,
                                        const func_t& reduce_op,
                                        int* shared_mem) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + static_cast<int64_t>(blockIdx.x) * blockDim.x;
   if (tid >= numel) return;
   if (include_self == false) {
     if (tid == 0) {
@@ -219,12 +245,38 @@ __global__ void GatherScatterGPUKernel(tensor_t* self_data,
   // index matrix has different shape with self matrix or src matrix.
   int64_t replace_index_self, replace_index_src;
   if (is_scatter_like) {
+    // scatter
+    PADDLE_ENFORCE(
+        index >= -self_select_dim_size && index < self_select_dim_size,
+        "The index is out of bounds, "
+        "please check whether the index and "
+        "input's shape meet the requirements. It should "
+        "be greater or equal to [%d] and less than [%d], but received [%ld]",
+        -self_select_dim_size,
+        self_select_dim_size,
+        (int64_t)index);
+    if (index < 0) {
+      index += self_select_dim_size;
+    }
     replace_index_self = k + index * outer_dim_size_self +
                          i * outer_dim_size_self * self_select_dim_size;
 
     replace_index_src = k + j * outer_dim_size_src +
                         i * outer_dim_size_src * src_select_dim_size;
   } else {
+    // gather
+    PADDLE_ENFORCE(
+        index >= -src_select_dim_size && index < src_select_dim_size,
+        "The index is out of bounds, "
+        "please check whether the index and "
+        "input's shape meet the requirements. It should "
+        "be greater or equal to [%d] and less than [%d], but received [%d]",
+        -src_select_dim_size,
+        src_select_dim_size,
+        (int32_t)index);
+    if (index < 0) {
+      index += src_select_dim_size;
+    }
     replace_index_self = tid;
 
     replace_index_src = k + index * outer_dim_size_src +
@@ -253,9 +305,9 @@ __global__ void ScatterMeanGPUKernel(tensor_t* self_data,
                                      int dim,
                                      const index_t* index_data,
                                      tensor_t* src_data,
-                                     int select_dim_size,
-                                     int self_select_dim_size,
-                                     int src_select_dim_size,
+                                     int64_t select_dim_size,
+                                     int64_t self_select_dim_size,
+                                     int64_t src_select_dim_size,
                                      int64_t outer_dim_size,
                                      int64_t outer_dim_size_self,
                                      int64_t outer_dim_size_src,
@@ -264,7 +316,7 @@ __global__ void ScatterMeanGPUKernel(tensor_t* self_data,
                                      bool include_self,
                                      const func_t& reduce_op,
                                      int* shared_mem) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + static_cast<int64_t>(blockIdx.x) * blockDim.x;
   if (tid >= numel) return;
 
   int64_t i, j, k;  // The i, j, k here is the index of the 3 layers loop
@@ -292,12 +344,38 @@ __global__ void ScatterMeanGPUKernel(tensor_t* self_data,
   // index matrix has different shape with self matrix or src matrix.
   int64_t replace_index_self, replace_index_src;
   if (is_scatter_like) {
+    // scatter
+    PADDLE_ENFORCE(
+        index >= -self_select_dim_size && index < self_select_dim_size,
+        "The index is out of bounds, "
+        "please check whether the index and "
+        "input's shape meet the requirements. It should "
+        "be greater or equal to [%d] and less than [%d], but received [%ld]",
+        -self_select_dim_size,
+        self_select_dim_size,
+        (int64_t)index);
+    if (index < 0) {
+      index += self_select_dim_size;
+    }
     replace_index_self = k + index * outer_dim_size_self +
                          i * outer_dim_size_self * self_select_dim_size;
 
     replace_index_src = k + j * outer_dim_size_src +
                         i * outer_dim_size_src * src_select_dim_size;
   } else {
+    // gather
+    PADDLE_ENFORCE(
+        index >= -src_select_dim_size && index < src_select_dim_size,
+        "The index is out of bounds, "
+        "please check whether the index and "
+        "input's shape meet the requirements. It should "
+        "be greater or equal to [%d] and less than [%d], but received [%d]",
+        -src_select_dim_size,
+        src_select_dim_size,
+        (int32_t)index);
+    if (index < 0) {
+      index += src_select_dim_size;
+    }
     replace_index_self = tid;
 
     replace_index_src = k + index * outer_dim_size_src +
@@ -347,10 +425,10 @@ struct gpu_gather_scatter_functor {
     auto index_dims = index.dims();
     auto src_dims = src.dims();
     if (self_size == 0 || src_size == 0 || index_size == 0) return;
-    int select_dim_size = index_dims[dim];
+    int64_t select_dim_size = index_dims[dim];
     // index matrix has different shape with self matrix or src matrix.
-    int self_select_dim_size = self_dims[dim];
-    int src_select_dim_size = src_dims[dim];
+    int64_t self_select_dim_size = self_dims[dim];
+    int64_t src_select_dim_size = src_dims[dim];
     int64_t outer_dim_size_self = 1;
     int64_t outer_dim_size_src = 1;
     int64_t inner_dim_size = 1;
@@ -561,7 +639,7 @@ __global__ void ScatterInputGradGPUKernel(tensor_t* grad_data,
                                           int64_t outer_dim_size_data,
                                           int64_t numel,
                                           int64_t numel_data) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -632,7 +710,7 @@ __global__ void ScatterMulInputGradGPUKernel(tensor_t* grad_data,
                                              int64_t numel,
                                              int64_t numel_grad,
                                              int* thread_ids) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -668,7 +746,7 @@ __global__ void ScatterMinMaxInputGradGPUKernel(tensor_t* grad_data,
                                                 int64_t numel_grad,
                                                 const std::string& reduce,
                                                 int* shared_mem) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -791,7 +869,7 @@ __global__ void ScatterMeanInputGradGPUKernel(tensor_t* grad_data,
                                               int64_t numel,
                                               int64_t numel_grad,
                                               int* shared_mem) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -882,7 +960,7 @@ __global__ void ScatterValueGradGPUKernel(tensor_t* grad_data,
                                           int64_t numel,
                                           int64_t numel_data,
                                           int* thread_ids) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
 
   int64_t i, j, k;
@@ -976,7 +1054,7 @@ __global__ void ScatterMeanValueGradGPUKernel(tensor_t* grad_data,
                                               int64_t numel,
                                               int64_t numel_self,
                                               int* shared_mem) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
 
   int64_t i, j, k;
@@ -1010,7 +1088,7 @@ __global__ void ScatterAddValueGradGPUKernel(tensor_t* grad_data,
                                              int64_t outer_dim_size_self,
                                              int64_t outer_dim_size_grad,
                                              int64_t numel) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -1123,7 +1201,7 @@ __global__ void ScatterMulValueGradGPUKernel(tensor_t* grad_data,
                                              int64_t outer_dim_size_self,
                                              int64_t outer_dim_size_grad,
                                              int64_t numel) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -1158,7 +1236,7 @@ __global__ void ScatterMinMaxValueGradGPUKernel(tensor_t* grad_data,
                                                 int64_t numel_self,
                                                 bool include_self,
                                                 int* shared_mem) {
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t tid = threadIdx.x + blockIdx.x * blockDim.x;
   if (tid >= numel) return;
   int64_t i, j, k;
   i = tid / (select_dim_size * outer_dim_size);
@@ -1170,15 +1248,10 @@ __global__ void ScatterMinMaxValueGradGPUKernel(tensor_t* grad_data,
                                i * outer_dim_size_self * self_select_dim_size;
   int64_t replace_index_grad = k + j * outer_dim_size_grad +
                                i * outer_dim_size_grad * grad_select_dim_size;
-  if (tid == 0) {
-    for (int i = 0; i < numel_self; i++) {
-      if (include_self &&
-          x_data[replace_index_self] == out_data[replace_index_self])
-        shared_mem[i] = 1;
-      else
-        shared_mem[i] = 0;  // number of elements
-    }
-  }
+
+  if (include_self &&
+      x_data[replace_index_self] == out_data[replace_index_self])
+    phi::CudaAtomicAdd(shared_mem + replace_index_self, 1);
   __syncthreads();
   grad_data[replace_index_grad] = 0;
   if (value_data[replace_index_grad] == out_data[replace_index_self])
@@ -1254,6 +1327,7 @@ void gpu_scatter_mul_min_max_value_grad_kernel(phi::DenseTensor self,
     DenseTensor shared_mem_tensor;
     shared_mem_tensor.Resize({self_size});
     ctx.Alloc<int>(&shared_mem_tensor);
+    phi::funcs::set_constant(ctx, &shared_mem_tensor, 0);
 
     int* shared_mem = shared_mem_tensor.data<int>();
     ScatterMinMaxValueGradGPUKernel<tensor_t, index_t>

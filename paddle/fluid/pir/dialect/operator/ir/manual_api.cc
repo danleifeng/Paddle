@@ -13,20 +13,35 @@
 // limitations under the License.
 
 #include "paddle/fluid/pir/dialect/operator/ir/manual_api.h"
+#include "paddle/fluid/imperative/amp_auto_cast.h"
+#include "paddle/fluid/imperative/amp_utils.h"
+#include "paddle/fluid/pir/dialect/distributed/ir/dist_tools.h"
 #include "paddle/fluid/pir/dialect/distributed/ir/dist_type.h"
 #include "paddle/fluid/pir/dialect/operator/ir/api_builder.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_api.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
 #include "paddle/fluid/pir/dialect/operator/ir/tensorrt_op.h"
+#include "paddle/phi/common/complex.h"
 #include "paddle/pir/include/core/builtin_op.h"
 #include "paddle/pir/include/core/parameter.h"
+
 namespace paddle::dialect {
 
 pir::Value builtin_combine(const std::vector<pir::Value>& x) {
+  // Auto Parallel condition
+  ProcessMeshAttribute op_mesh;
+  if (HasDistInput(x, &op_mesh)) {
+    CvtAllInputsToDist(x, op_mesh);
+  }
   auto combine_op =
       ApiBuilder::Instance().GetBuilder()->Build<pir::CombineOp>(x);
   return combine_op.out();
+}
+
+std::vector<pir::Value> builtin_split(const pir::Value& x) {
+  auto split_op = ApiBuilder::Instance().GetBuilder()->Build<pir::SplitOp>(x);
+  return split_op.outputs();
 }
 
 std::vector<pir::Value> add_n_grad(const std::vector<pir::Value>& inputs,
@@ -39,6 +54,22 @@ std::vector<pir::Value> add_n_grad(const std::vector<pir::Value>& inputs,
     inputs_grad.push_back(scale_op.result(0));
   }
   return inputs_grad;
+}
+
+pir::Value full(const std::vector<int64_t>& shape,
+                double real,
+                double imag,
+                phi::DataType dtype,
+                const phi::Place& place) {
+  CheckDataType(dtype, "dtype", "full");
+  if (dtype == phi::DataType::COMPLEX64) {
+    dtype = phi::DataType::FLOAT32;
+  } else {
+    dtype = phi::DataType::FLOAT64;
+  }
+  pir::Value real_tmp = full(shape, real, dtype, place);
+  pir::Value imag_tmp = full(shape, imag, dtype, place);
+  return paddle::dialect::complex(real_tmp, imag_tmp);
 }
 
 pir::Value zeros_like(const pir::Value& x,
@@ -60,7 +91,7 @@ void set_parameter(const pir::Value& parameter, const std::string& name) {
   if (param) {
     PADDLE_ENFORCE_EQ(param->type(),
                       parameter.type(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Duplicate parameter %s with different type.", name));
   } else {
     std::unique_ptr<pir::Parameter> param_new(
@@ -74,7 +105,7 @@ void set_parameter(const pir::Value& parameter, const std::string& name) {
 void update_parameter(const pir::Value& parameter, const std::string& name) {
   pir::Parameter* param = ApiBuilder::Instance().GetParameter(name);
   PADDLE_ENFORCE_NOT_NULL(param,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Parameter %s not exist, can not update.", name));
   std::unique_ptr<pir::Parameter> param_new(
       new pir::Parameter(nullptr, 0, parameter.type()));
@@ -118,7 +149,7 @@ pir::Value embedding_grad(const pir::Value& x,
       return embedding_grad_op.weight_grad();
     }
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Now we do not support sparse weight embedding_grad."));
   }
 }
@@ -261,7 +292,7 @@ pir::Value assign(const pir::Value& x) {
             ->Build<paddle::dialect::AssignArrayOp>(x);
     return assign_array_op.result(0);
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Currently, assign only supports DenseTensorType and "
         "DenseTensorArrayType."));
   }
@@ -273,6 +304,33 @@ std::tuple<pir::Value, pir::Value> fused_gemm_epilogue(pir::Value x,
                                                        bool trans_x,
                                                        bool trans_y,
                                                        std::string activation) {
+  // AMP Logic
+  if (egr::Controller::Instance().GetCurrentAmpAttrs()->GetAmpLevel() !=
+      paddle::imperative::AmpLevel::O0) {
+    VLOG(5) << "Check and Prepare For AMP: fused_gemm_epilogue";
+    auto op_name = phi::TransToFluidOpName("fused_gemm_epilogue");
+    paddle::small_vector<std::vector<pir::Value>, egr::kSlotSmallVectorSize>
+        amp_values_vector = {{x}, {y}, {bias}};
+    auto amp_dst_dtype =
+        paddle::imperative::GetAmpDestDtype(op_name, amp_values_vector);
+    auto new_x =
+        paddle::imperative::AmpAutoCast("x", x, amp_dst_dtype, op_name);
+    auto new_y =
+        paddle::imperative::AmpAutoCast("y", y, amp_dst_dtype, op_name);
+    auto new_bias =
+        paddle::imperative::AmpAutoCast("bias", bias, amp_dst_dtype, op_name);
+
+    {
+      paddle::imperative::AutoCastGuard guard(
+          egr::Controller::Instance().GetCurrentAmpAttrs(),
+          paddle::imperative::AmpLevel::O0);
+      return paddle::dialect::fused_gemm_epilogue(
+          new_x, new_y, new_bias, trans_x, trans_y, activation);
+    }
+  }
+
+  // Type Promotion Logic
+  VLOG(5) << " No Type Promotion for fused_gemm_epilogue api. ";
   pir::IrContext* ctx = pir::IrContext::Instance();
   pir::AttributeMap attribute_map = {
       {"trans_x", pir::BoolAttribute::get(ctx, trans_x)},
@@ -283,8 +341,84 @@ std::tuple<pir::Value, pir::Value> fused_gemm_epilogue(pir::Value x,
           .GetBuilder()
           ->Build<paddle::dialect::FusedGemmEpilogueOp>(
               x, y, bias, attribute_map);
+  if (!egr::Controller::Instance().HasGrad()) {
+    SetStopGradient(fused_gemm_epilogue_op.result(0),
+                    fused_gemm_epilogue_op.result(1));
+  }
   return std::make_tuple(fused_gemm_epilogue_op.result(0),
                          fused_gemm_epilogue_op.result(1));
+}
+
+std::tuple<pir::Value, pir::Value, pir::Value> fused_gemm_epilogue_grad(
+    pir::Value x,
+    pir::Value y,
+    paddle::optional<pir::Value> reserve_space,
+    pir::Value out_grad,
+    bool trans_x,
+    bool trans_y,
+    std::string activation_grad) {
+  // AMP Logic
+  if (egr::Controller::Instance().GetCurrentAmpAttrs()->GetAmpLevel() !=
+      paddle::imperative::AmpLevel::O0) {
+    VLOG(5) << "Check and Prepare For AMP: fused_gemm_epilogue_grad";
+    auto op_name = phi::TransToFluidOpName("fused_gemm_epilogue_grad");
+    paddle::small_vector<std::vector<pir::Value>, egr::kSlotSmallVectorSize>
+        amp_values_vector = {{x}, {y}};
+    if (reserve_space) {
+      amp_values_vector.push_back({*reserve_space});
+    }
+
+    auto amp_dst_dtype =
+        paddle::imperative::GetAmpDestDtype(op_name, amp_values_vector);
+    auto new_x =
+        paddle::imperative::AmpAutoCast("x", x, amp_dst_dtype, op_name);
+    auto new_y =
+        paddle::imperative::AmpAutoCast("y", y, amp_dst_dtype, op_name);
+    auto new_reserve_space = paddle::imperative::AmpAutoCast(
+        "reserve_space", reserve_space, amp_dst_dtype, op_name);
+    auto new_out_grad = paddle::imperative::AmpAutoCast(
+        "out_grad", out_grad, amp_dst_dtype, op_name);
+
+    {
+      paddle::imperative::AutoCastGuard guard(
+          egr::Controller::Instance().GetCurrentAmpAttrs(),
+          paddle::imperative::AmpLevel::O0);
+      return paddle::dialect::fused_gemm_epilogue_grad(new_x,
+                                                       new_y,
+                                                       new_reserve_space,
+                                                       new_out_grad,
+                                                       trans_x,
+                                                       trans_y,
+                                                       activation_grad);
+    }
+  }
+
+  // Type Promotion Logic
+  VLOG(5) << " No Type Promotion for fused_gemm_epilogue api. ";
+  pir::IrContext* ctx = pir::IrContext::Instance();
+  pir::AttributeMap attribute_map = {
+      {"trans_x", pir::BoolAttribute::get(ctx, trans_x)},
+      {"trans_y", pir::BoolAttribute::get(ctx, trans_y)},
+      {"activation_grad", pir::StrAttribute::get(ctx, activation_grad)}};
+  paddle::optional<pir::Value> optional_reserve_space;
+  if (!reserve_space) {
+    optional_reserve_space = paddle::make_optional<pir::Value>(pir::Value());
+  } else {
+    optional_reserve_space = reserve_space;
+  }
+  auto fused_gemm_epilogue_grad_op =
+      ApiBuilder::Instance()
+          .GetBuilder()
+          ->Build<paddle::dialect::FusedGemmEpilogueGradOp>(
+              x, y, optional_reserve_space.get(), out_grad, attribute_map);
+  if (!egr::Controller::Instance().HasGrad()) {
+    SetStopGradient(fused_gemm_epilogue_grad_op.result(0),
+                    fused_gemm_epilogue_grad_op.result(1),
+                    fused_gemm_epilogue_grad_op.result(2));
+  }
+  return std::make_tuple(fused_gemm_epilogue_grad_op.result(0),
+                         fused_gemm_epilogue_grad_op.result(1),
+                         fused_gemm_epilogue_grad_op.result(2));
 }
 
 pir::Value array_pop(pir::Value input, int index) {
@@ -294,7 +428,7 @@ pir::Value array_pop(pir::Value input, int index) {
             input, index);
     return array_pop_op.result(1);
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "pop only supports DenseTensorArrayType."));
   }
 }
@@ -322,6 +456,10 @@ std::vector<pir::Value> tensorrt_engine(
   auto out_split_op = ApiBuilder::Instance().GetBuilder()->Build<pir::SplitOp>(
       tensorrt_engine_op.result(0));
   return out_split_op.outputs();
+}
+
+pir::Operation* share_var(const std::vector<pir::Value>& x) {
+  return ApiBuilder::Instance().GetBuilder()->Build<ShareVarOp>(x);
 }
 
 }  // namespace paddle::dialect

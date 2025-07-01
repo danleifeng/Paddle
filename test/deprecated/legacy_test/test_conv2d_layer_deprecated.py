@@ -71,13 +71,16 @@ class Conv2DTestCase(unittest.TestCase):
         self.channel_last = self.data_format == "NHWC"
         if self.channel_last:
             input_shape = (
-                (self.batch_size,) + self.spartial_shape + (self.num_channels,)
+                self.batch_size,
+                *self.spartial_shape,
+                self.num_channels,
             )
         else:
             input_shape = (
                 self.batch_size,
                 self.num_channels,
-            ) + self.spartial_shape
+                *self.spartial_shape,
+            )
         self.input = np.random.randn(*input_shape).astype(self.dtype)
 
         if isinstance(self.filter_size, int):
@@ -87,7 +90,8 @@ class Conv2DTestCase(unittest.TestCase):
         self.weight_shape = weight_shape = (
             self.num_filters,
             self.num_channels // self.groups,
-        ) + tuple(filter_size)
+            *filter_size,
+        )
         self.weight = np.random.uniform(-1, 1, size=weight_shape).astype(
             self.dtype
         )
@@ -101,44 +105,44 @@ class Conv2DTestCase(unittest.TestCase):
     def base_layer(self, place):
         main = base.Program()
         start = base.Program()
-        with base.unique_name.guard():
-            with base.program_guard(main, start):
-                input_shape = (
-                    (-1, -1, -1, self.num_channels)
-                    if self.channel_last
-                    else (-1, self.num_channels, -1, -1)
-                )
-                x_var = paddle.static.data(
-                    "input", input_shape, dtype=self.dtype
-                )
-                weight_attr = paddle.nn.initializer.Assign(self.weight)
-                if self.bias is None:
-                    bias_attr = False
-                else:
-                    bias_attr = paddle.nn.initializer.Assign(self.bias)
-                if self.padding_mode != 'zeros':
-                    x_var = F.pad(
-                        x_var,
-                        self._reversed_padding_repeated_twice,
-                        mode=self.padding_mode,
-                        data_format=self.data_format,
-                    )
-                    padding = 0
-                else:
-                    padding = self.padding
-
-                y_var = paddle.static.nn.conv2d(
+        with (
+            base.unique_name.guard(),
+            base.program_guard(main, start),
+        ):
+            input_shape = (
+                (-1, -1, -1, self.num_channels)
+                if self.channel_last
+                else (-1, self.num_channels, -1, -1)
+            )
+            x_var = paddle.static.data("input", input_shape, dtype=self.dtype)
+            weight_attr = paddle.nn.initializer.Assign(self.weight)
+            if self.bias is None:
+                bias_attr = False
+            else:
+                bias_attr = paddle.nn.initializer.Assign(self.bias)
+            if self.padding_mode != 'zeros':
+                x_var = F.pad(
                     x_var,
-                    self.num_filters,
-                    self.filter_size,
-                    padding=padding,
-                    stride=self.stride,
-                    dilation=self.dilation,
-                    groups=self.groups,
-                    param_attr=weight_attr,
-                    bias_attr=bias_attr,
+                    self._reversed_padding_repeated_twice,
+                    mode=self.padding_mode,
                     data_format=self.data_format,
                 )
+                padding = 0
+            else:
+                padding = self.padding
+
+            y_var = paddle.static.nn.conv2d(
+                x_var,
+                self.num_filters,
+                self.filter_size,
+                padding=padding,
+                stride=self.stride,
+                dilation=self.dilation,
+                groups=self.groups,
+                param_attr=weight_attr,
+                bias_attr=bias_attr,
+                data_format=self.data_format,
+            )
 
         feed_dict = {"input": self.input}
         exe = base.Executor(place)
@@ -149,44 +153,44 @@ class Conv2DTestCase(unittest.TestCase):
     def functional(self, place):
         main = base.Program()
         start = base.Program()
-        with base.unique_name.guard():
-            with base.program_guard(main, start):
-                input_shape = (
-                    (-1, -1, -1, self.num_channels)
-                    if self.channel_last
-                    else (-1, self.num_channels, -1, -1)
-                )
-                x_var = paddle.static.data(
-                    "input", input_shape, dtype=self.dtype
-                )
-                w_var = paddle.static.data(
-                    "weight", self.weight_shape, dtype=self.dtype
-                )
-                b_var = paddle.static.data(
-                    "bias", (self.num_filters,), dtype=self.dtype
-                )
+        with (
+            base.unique_name.guard(),
+            base.program_guard(main, start),
+        ):
+            input_shape = (
+                (-1, -1, -1, self.num_channels)
+                if self.channel_last
+                else (-1, self.num_channels, -1, -1)
+            )
+            x_var = paddle.static.data("input", input_shape, dtype=self.dtype)
+            w_var = paddle.static.data(
+                "weight", self.weight_shape, dtype=self.dtype
+            )
+            b_var = paddle.static.data(
+                "bias", (self.num_filters,), dtype=self.dtype
+            )
 
-                if self.padding_mode != 'zeros':
-                    x_var = F.pad(
-                        x_var,
-                        self._reversed_padding_repeated_twice,
-                        mode=self.padding_mode,
-                        data_format=self.data_format,
-                    )
-                    padding = 0
-                else:
-                    padding = self.padding
-
-                y_var = F.conv2d(
+            if self.padding_mode != 'zeros':
+                x_var = F.pad(
                     x_var,
-                    w_var,
-                    b_var if not self.no_bias else None,
-                    padding=padding,
-                    stride=self.stride,
-                    dilation=self.dilation,
-                    groups=self.groups,
+                    self._reversed_padding_repeated_twice,
+                    mode=self.padding_mode,
                     data_format=self.data_format,
                 )
+                padding = 0
+            else:
+                padding = self.padding
+
+            y_var = F.conv2d(
+                x_var,
+                w_var,
+                b_var if not self.no_bias else None,
+                padding=padding,
+                stride=self.stride,
+                dilation=self.dilation,
+                groups=self.groups,
+                data_format=self.data_format,
+            )
         feed_dict = {"input": self.input, "weight": self.weight}
         if self.bias is not None:
             feed_dict["bias"] = self.bias
@@ -239,9 +243,8 @@ class Conv2DTestCase(unittest.TestCase):
 class Conv2DErrorTestCase(Conv2DTestCase):
     def runTest(self):
         place = base.CPUPlace()
-        with dg.guard(place):
-            with self.assertRaises(ValueError):
-                self.paddle_nn_layer()
+        with dg.guard(place), self.assertRaises(ValueError):
+            self.paddle_nn_layer()
 
 
 def add_cases(suite):

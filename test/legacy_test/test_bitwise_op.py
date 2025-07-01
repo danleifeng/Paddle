@@ -43,7 +43,9 @@ class TestBitwiseAnd(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         pass
@@ -150,7 +152,9 @@ class TestBitwiseOr(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         pass
@@ -258,7 +262,9 @@ class TestBitwiseXor(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         pass
@@ -363,7 +369,9 @@ class TestBitwiseNot(OpTest):
         self.outputs = {'Out': out}
 
     def test_check_output(self):
-        self.check_output(check_cinn=True, check_pir=True)
+        self.check_output(
+            check_cinn=True, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         pass
@@ -382,6 +390,11 @@ class TestBitwiseNot(OpTest):
 class TestBitwiseNot_ZeroDim(TestBitwiseNot):
     def init_shape(self):
         self.x_shape = []
+
+
+class TestBitwiseNot_ZeroSize(TestBitwiseNot):
+    def init_shape(self):
+        self.x_shape = [0, 3, 4, 5]
 
 
 class TestBitwiseNotUInt8(TestBitwiseNot):
@@ -428,6 +441,28 @@ class TestBitwiseNotBool(TestBitwiseNot):
 
         self.inputs = {'X': x}
         self.outputs = {'Out': out}
+
+
+class TestBitwiseInvertApi(unittest.TestCase):
+    def setUp(self):
+        paddle.disable_static()
+
+        self.dtype = np.int32
+        self.shape = [2, 3, 4, 5]
+        self.low = -100
+        self.high = 100
+        x = np.random.randint(self.low, self.high, self.shape, dtype=self.dtype)
+        self.x = paddle.to_tensor(x)
+        self.expected_out = np.bitwise_not(x)
+
+    def test_bitwise_invert_out_of_place(self):
+        result = paddle.bitwise_invert(self.x)
+        np.testing.assert_array_equal(result.numpy(), self.expected_out)
+
+    def test_bitwise_invert_in_place(self):
+        x_copy = self.x.clone()
+        x_copy.bitwise_invert_()
+        np.testing.assert_array_equal(x_copy.numpy(), self.expected_out)
 
 
 if __name__ == "__main__":

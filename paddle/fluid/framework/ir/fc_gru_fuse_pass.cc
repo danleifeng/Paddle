@@ -18,15 +18,11 @@
 
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/utils/string/pretty_log.h"
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Node;
 
@@ -222,18 +218,18 @@ int FCGRUFusePass::BuildFusion(Graph* graph,
       PADDLE_ENFORCE_NE(
           gru_bias_var,
           nullptr,
-          phi::errors::NotFound("GRU bias var has not been found."));
+          common::errors::NotFound("GRU bias var has not been found."));
       PADDLE_ENFORCE_NE(
           fc_bias_var,
           nullptr,
-          phi::errors::NotFound("FC bias var has not been found."));
+          common::errors::NotFound("FC bias var has not been found."));
 
       auto* gru_bias_tensor = gru_bias_var->GetMutable<phi::DenseTensor>();
       auto* fc_bias_tensor = fc_bias_var->GetMutable<phi::DenseTensor>();
       PADDLE_ENFORCE_EQ(
           gru_bias_tensor->numel(),
           fc_bias_tensor->numel(),
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "GRU and FC biases have to have equal number of elements."));
 
       auto gru_bias_data =
@@ -247,18 +243,18 @@ int FCGRUFusePass::BuildFusion(Graph* graph,
     }
 #undef GET_NODE
 
-#define NEW_IMTERMEDIATE_OUT(key)                \
+#define NEW_INTERMEDIATE_OUT(key)                \
   VarDesc key(NEW_NAME(key));                    \
   key.SetPersistable(false);                     \
   auto* key##_node = graph->CreateVarNode(&key); \
   IR_NODE_LINK_TO(op, key##_node);
 
-    NEW_IMTERMEDIATE_OUT(ReorderedH0);
-    NEW_IMTERMEDIATE_OUT(XX);
-    NEW_IMTERMEDIATE_OUT(BatchedInput);
-    NEW_IMTERMEDIATE_OUT(BatchedOut);
+    NEW_INTERMEDIATE_OUT(ReorderedH0);
+    NEW_INTERMEDIATE_OUT(XX);
+    NEW_INTERMEDIATE_OUT(BatchedInput);
+    NEW_INTERMEDIATE_OUT(BatchedOut);
 #undef NEW_NAME
-#undef NEW_IMTERMEDIATE_OUT
+#undef NEW_INTERMEDIATE_OUT
 
     IR_NODE_LINK_TO(x, op);
     IR_NODE_LINK_TO(weight_x, op);
@@ -356,9 +352,7 @@ void FCGRUFusePass::ApplyImpl(ir::Graph* graph) const {
                             fusion_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(mul_gru_fuse_pass, paddle::framework::ir::MulGRUFusePass);
 REGISTER_PASS(fc_gru_fuse_pass, paddle::framework::ir::FCGRUFusePass);

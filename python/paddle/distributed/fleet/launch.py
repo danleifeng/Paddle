@@ -141,7 +141,7 @@ see: http://www.paddlepaddle.org/documentation/docs/zh/1.6/user_guides/howto/tra
             default=None,
             help="It's for gpu training."
             "For example:"
-            "--gpus=\"0,1,2,3\" will launch four training processes each bound to one gpu.",
+            '--gpus="0,1,2,3" will launch four training processes each bound to one gpu.',
         )
         base_group.add_argument("--selected_gpus", dest="gpus")
 
@@ -151,7 +151,7 @@ see: http://www.paddlepaddle.org/documentation/docs/zh/1.6/user_guides/howto/tra
             type=str,
             default=None,
             help="It's for xpu training. For example: "
-            "--xpus=\"0,1,2,3\" will launch four training processes each bound to one xpu.",
+            '--xpus="0,1,2,3" will launch four training processes each bound to one xpu.',
         )
         base_group.add_argument("--selected_xpus", dest="xpus")
 
@@ -296,7 +296,7 @@ def get_cluster_from_args(args, device_mode, devices_per_proc):
 
     trainer_endpoints = []
     for ip in node_ips:
-        trainer_endpoints.append(["%s:%d" % (ip, port) for port in free_ports])
+        trainer_endpoints.append([f"{ip}:{port}" for port in free_ports])
     return get_cluster(
         node_ips, node_ip, trainer_endpoints, device_mode, devices_per_proc
     )
@@ -352,7 +352,7 @@ def get_cluster_info(args):
             os.environ["PADDLE_ENABLE_ELASTIC"] = str(
                 enable_elastic(args, device_mode)
             )
-            cwd = pathlib.Path().resolve()
+            cwd = pathlib.Path().cwd()
             rank_mapping_path = os.path.join(
                 cwd, "auto_parallel_rank_mapping.json"
             )

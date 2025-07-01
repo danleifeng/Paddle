@@ -31,7 +31,7 @@ list(
   fused_token_prune_op_plugin.cu
   layernorm_shift_partition_op.cu
   reverse_roll_op_plugin.cu
-  prelnlayernorm_shift_partition_op.cu
+  preln_layernorm_shift_partition_op.cu
   trans_layernorm_op_plugin.cu
   merge_layernorm_op_plugin.cu
   skip_merge_layernorm_op_plugin.cu
@@ -58,7 +58,7 @@ endif()
 nv_library(
   tensorrt_plugin
   SRCS ${TRT_FILES}
-  DEPS enforce tensorrt_engine tensor common
+  DEPS phi tensorrt_engine tensor common
        tensorrt_dynamic_shape_infermeta_factory
        tensorrt_plugin_arg_mapping_context)
 

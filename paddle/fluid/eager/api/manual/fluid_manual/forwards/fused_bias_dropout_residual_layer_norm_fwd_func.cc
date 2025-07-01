@@ -18,7 +18,7 @@
 #include "paddle/fluid/eager/api/manual/fluid_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
 #include "paddle/fluid/imperative/amp_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 std::tuple<paddle::Tensor,
            paddle::Tensor,
@@ -32,9 +32,9 @@ fused_bias_dropout_residual_layer_norm_dygraph_function(
     const paddle::Tensor& LnScale,
     const paddle::Tensor& LnBias,
     const paddle::framework::AttributeMap& attr_map) {
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
+  phi::RecordEvent dygraph_entrance_record_event(
       "fused_bias_dropout_residual_layer_norm dygraph",
-      paddle::platform::TracerEventType::Operator,
+      phi::TracerEventType::Operator,
       1);
   VLOG(3) << "Running Eager Forward Op: fused_bias_dropout_residual_layer_norm";
   // Dygraph Forward Pass
@@ -45,9 +45,9 @@ fused_bias_dropout_residual_layer_norm_dygraph_function(
 
     paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
         amp_tensors_vector = {{X}, {Residual}};
-    if (Bias.initialized()) amp_tensors_vector.push_back({Bias});
-    if (LnScale.initialized()) amp_tensors_vector.push_back({LnScale});
-    if (LnBias.initialized()) amp_tensors_vector.push_back({LnBias});
+    if (Bias.has_allocation()) amp_tensors_vector.push_back({Bias});
+    if (LnScale.has_allocation()) amp_tensors_vector.push_back({LnScale});
+    if (LnBias.has_allocation()) amp_tensors_vector.push_back({LnBias});
 
     auto amp_dst_dtype = paddle::imperative::GetAmpDestDtype(
         "fused_bias_dropout_residual_layer_norm", amp_tensors_vector);
@@ -60,21 +60,21 @@ fused_bias_dropout_residual_layer_norm_dygraph_function(
                          amp_dst_dtype,
                          "fused_bias_dropout_residual_layer_norm");
     auto NEW_Bias =
-        ((Bias.initialized())
+        ((Bias.has_allocation())
              ? egr::AmpAutoCast("Bias",
                                 Bias,
                                 amp_dst_dtype,
                                 "fused_bias_dropout_residual_layer_norm")
              : Bias);
     auto NEW_LnScale =
-        ((LnScale.initialized())
+        ((LnScale.has_allocation())
              ? egr::AmpAutoCast("LnScale",
                                 LnScale,
                                 amp_dst_dtype,
                                 "fused_bias_dropout_residual_layer_norm")
              : LnScale);
     auto NEW_LnBias =
-        ((LnBias.initialized())
+        ((LnBias.has_allocation())
              ? egr::AmpAutoCast("LnBias",
                                 LnBias,
                                 amp_dst_dtype,
@@ -93,10 +93,10 @@ fused_bias_dropout_residual_layer_norm_dygraph_function(
   std::map<std::string, std::vector<std::shared_ptr<egr::EagerVariable>>> ins =
       {{"X", egr::EagerUtils::TrySyncToVars(X)},
        {"Residual", egr::EagerUtils::TrySyncToVars(Residual)}};
-  if (Bias.initialized()) ins["Bias"] = egr::EagerUtils::TrySyncToVars(Bias);
-  if (LnScale.initialized())
+  if (Bias.has_allocation()) ins["Bias"] = egr::EagerUtils::TrySyncToVars(Bias);
+  if (LnScale.has_allocation())
     ins["LnScale"] = egr::EagerUtils::TrySyncToVars(LnScale);
-  if (LnBias.initialized())
+  if (LnBias.has_allocation())
     ins["LnBias"] = egr::EagerUtils::TrySyncToVars(LnBias);
 
   std::map<std::string, std::vector<std::shared_ptr<egr::EagerVariable>>> outs =
@@ -162,9 +162,9 @@ fused_bias_dropout_residual_layer_norm_dygraph_function(
   egr::EagerUtils::GetOutput(outs["Y"][0], &Y);
 
   {
-    paddle::platform::RecordEvent node_creation_record_event(
+    phi::RecordEvent node_creation_record_event(
         "fused_bias_dropout_residual_layer_norm node_creation",
-        paddle::platform::TracerEventType::OperatorInner,
+        phi::TracerEventType::OperatorInner,
         1);
     egr::AutogradMeta* p_autograd_BiasDropoutResidualOut =
         egr::EagerUtils::autograd_meta(&BiasDropoutResidualOut);

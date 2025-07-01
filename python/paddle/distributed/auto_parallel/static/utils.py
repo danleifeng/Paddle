@@ -22,12 +22,16 @@ from functools import reduce
 import numpy as np
 
 import paddle
-from paddle.base.wrapped_decorator import wrap_decorator
+from paddle.base.framework import use_pir_api
+from paddle.base.libpaddle import pir
+from paddle.base.wrapped_decorator import (
+    wrap_decorator,
+)
 from paddle.framework import core
 from paddle.framework.io_utils import is_belong_to_optimizer, is_parameter
 from paddle.static import Variable
 
-from ..process_mesh import ProcessMesh
+from ..process_mesh import ProcessMesh, merge_process_meshes
 from .dist_attribute import DistTensorSpec, OperatorDistAttr, TensorDistAttr
 
 OpRole = core.op_proto_and_checker_maker.OpRole
@@ -36,7 +40,7 @@ OP_ROLE_KEY = core.op_proto_and_checker_maker.kOpRoleAttrName()
 __no_shape_var_type__ = [
     core.VarDesc.VarType.READER,
     core.VarDesc.VarType.STEP_SCOPES,
-    core.VarDesc.VarType.LOD_TENSOR_ARRAY,
+    core.VarDesc.VarType.DENSE_TENSOR_ARRAY,
     core.VarDesc.VarType.FEED_MINIBATCH,
     core.VarDesc.VarType.FETCH_LIST,
 ]
@@ -50,6 +54,17 @@ _g_gradient_clip_ops = [
     "elementwise_div",
     "stack",
     "reduce_sum",
+]
+
+partition_skip_op_list = [
+    "builtin.combine",
+    "builtin.split",
+    "pd_op.pylayer",
+    "cf.yield",
+    "cf.tuple_push",
+    "cf.tuple_pop",
+    "cf.stack_create",
+    "cf.has_elements",
 ]
 
 
@@ -541,9 +556,9 @@ def _check_param_dict(param_dict):
                     "The type of key of 'param_dict' should be 'str', "
                     f"but got '{type(name)}'."
                 )
-            if not isinstance(value, paddle.base.LoDTensor):
+            if not isinstance(value, paddle.base.DenseTensor):
                 raise TypeError(
-                    "The type of value of 'param_dict' should be 'LoDTensor', "
+                    "The type of value of 'param_dict' should be 'DenseTensor', "
                     f"but got '{type(value)}'."
                 )
         return param_dict
@@ -569,7 +584,12 @@ def _check_dist_attr(dist_attr):
                     "The type of distributed attribute should be 'dict', "
                     f"but got '{type(value)}'"
                 )
-            attr = ['process_shape', 'process_group', 'dims_mapping']
+            attr = [
+                'process_shape',
+                'process_group',
+                'dims_mapping',
+                'dim_names',
+            ]
             if list(value.keys()) != attr:
                 raise ValueError(
                     "The key of distributed attribute should be "
@@ -830,24 +850,49 @@ def get_dist_attr(program, dist_context=None):
     Args:
         program(Program): main program for training
     """
-    from .dist_context import get_default_distributed_context
-
-    assert isinstance(program, paddle.static.Program)
-    if dist_context is None:
-        dist_context = get_default_distributed_context()
     dist_attr = {}
-    for var in program.list_vars():
-        if is_parameter(var) or is_belong_to_optimizer(var):
-            tensor_dist_attr = dist_context.get_tensor_dist_attr_for_program(
-                var
-            )
-            process_mesh = tensor_dist_attr.process_mesh
-            dims_mapping = tensor_dist_attr.dims_mapping
-            dist_attr[var.name] = {
-                "process_shape": process_mesh.shape,
-                "process_group": process_mesh.process_ids,
-                "dims_mapping": dims_mapping,
-            }
+    if use_pir_api():
+        ops = program.global_block().ops
+        for op in ops:
+            if op.name() == "builtin.parameter" or (
+                op.name() == "pd_op.data"
+                and op.has_attr("persistable")
+                and op.attrs()["persistable"]
+            ):
+                op_dist_attr = op.dist_attr
+                var_dist_attr = op_dist_attr.result(0).as_tensor_dist_attr()
+                var_name = (
+                    op.str_attr("parameter_name")
+                    if op.name() == "builtin.parameter"
+                    else op.str_attr("name")
+                )
+                process_mesh = var_dist_attr.process_mesh
+                dist_attr[var_name] = {
+                    "process_shape": process_mesh.shape,
+                    "process_group": process_mesh.process_ids,
+                    "dims_mapping": var_dist_attr.dims_mapping,
+                    "dim_names": process_mesh.dim_names,
+                }
+    else:
+        from .dist_context import get_default_distributed_context
+
+        assert isinstance(program, paddle.static.Program)
+        if dist_context is None:
+            dist_context = get_default_distributed_context()
+        for var in program.list_vars():
+            if is_parameter(var) or is_belong_to_optimizer(var):
+                tensor_dist_attr = (
+                    dist_context.get_tensor_dist_attr_for_program(var)
+                )
+                process_mesh = tensor_dist_attr.process_mesh
+                dims_mapping = tensor_dist_attr.dims_mapping
+                dim_names = tensor_dist_attr.process_mesh.dim_names
+                dist_attr[var.name] = {
+                    "process_shape": process_mesh.shape,
+                    "process_group": process_mesh.process_ids,
+                    "dims_mapping": dims_mapping,
+                    "dim_names": dim_names,
+                }
     return dist_attr
 
 
@@ -975,7 +1020,7 @@ def _merge_parameter_with_dist_attr(param_list, dist_attr):
 def _slice_parameter_with_dist_attr(param, dist_attr):
     """Slice parameter with distributed attribute"""
     param = (
-        np.array(param) if isinstance(param, paddle.base.LoDTensor) else param
+        np.array(param) if isinstance(param, paddle.base.DenseTensor) else param
     )
     dims_mapping = dist_attr["dims_mapping"]
     process_shape = dist_attr["process_shape"]
@@ -1063,6 +1108,53 @@ def _merge_parameter(
                 )
                 break
             i += 1
+
+
+def _complete_op_dist_attr(program, block=None):
+    if block is None:
+        block = program.global_block()
+    for op in block.ops:
+        for sub_block in op.blocks():
+            _complete_op_dist_attr(program, block=sub_block)
+        if op.name() in partition_skip_op_list:
+            continue
+
+        if op.dist_attr is None:
+            meshes = []
+            operand_attrs = []
+            result_attrs = []
+            for operand in op.operands_source():
+                tmp_attr = operand.dist_attr()
+                if tmp_attr is None:
+                    operand_attrs.append(pir.Attribute())
+                    value_mesh = None
+                    tmp_op_dist_attr = operand.get_defining_op().dist_attr
+                    if tmp_op_dist_attr is not None:
+                        value_mesh = tmp_op_dist_attr.process_mesh
+                else:
+                    operand_attrs.append(tmp_attr)
+                    value_mesh = tmp_attr.process_mesh
+                if value_mesh is not None and value_mesh not in meshes:
+                    meshes.append(value_mesh)
+
+            for result in op.results():
+                tmp_attr = result.dist_attr()
+                if tmp_attr is None:
+                    result_attrs.append(pir.Attribute())
+                else:
+                    result_attrs.append(tmp_attr)
+                    if tmp_attr.process_mesh not in meshes:
+                        meshes.append(tmp_attr.process_mesh)
+            if len(meshes) > 0:
+                if len(meshes) == 1:
+                    mesh = meshes[0]
+                else:
+                    mesh = merge_process_meshes(meshes)
+                op.dist_attr = pir.create_op_dist_attribute(
+                    mesh,
+                    operand_attrs,
+                    result_attrs,
+                )
 
 
 def _slice_parameter(complete_param, partition_index_list, length):
@@ -1285,10 +1377,10 @@ def set_var_dist_attr(dist_context, var, dims_mapping, process_mesh, **kwargs):
         raise ValueError(
             f"{process_mesh} must be a instance of ProcessMesh or list, but receive {type(process_mesh)}"
         )
-    if "mark_annotated" in kwargs and kwargs["mark_annotated"]:
+    if kwargs.get("mark_annotated"):
         tensor_dist_attr.mark_annotated("dims_mapping")
         tensor_dist_attr.mark_annotated("process_mesh")
-    if "chunk_id" in kwargs and kwargs["chunk_id"]:
+    if kwargs.get("chunk_id"):
         tensor_dist_attr.chunk_id = kwargs["chunk_id"]
     dist_context.set_tensor_dist_attr_for_program(var, tensor_dist_attr)
     return tensor_dist_attr
@@ -1308,7 +1400,7 @@ def naive_set_dist_op_attr_for_program_by_mesh_and_mapping(
         new_op_dist_attr.set_output_dims_mapping(output_varname, ref_mapping)
 
     new_op_dist_attr.process_mesh = process_mesh
-    if "chunk_id" in kwargs and kwargs["chunk_id"]:
+    if kwargs.get("chunk_id"):
         new_op_dist_attr.chunk_id = kwargs["chunk_id"]
     ctx.set_op_dist_attr_for_program(new_op, new_op_dist_attr)
 
@@ -1695,7 +1787,7 @@ def to_list(value):
 
 def debug_program(program, path, name):
     filename = os.path.join(
-        path, name + '_program' + ".%d" % (paddle.distributed.get_rank())
+        path, f"{name}_program.{paddle.distributed.get_rank()}"
     )
     with open(filename, 'w') as f:
         f.write(str(program))
@@ -2262,20 +2354,6 @@ def _dygraph_guard_(func):
 dygraph_guard = wrap_decorator(_dygraph_guard_)
 
 
-def use_new_executor():
-    new_executor_micro_batching = os.environ.get(
-        'FLAGS_new_executor_micro_batching', None
-    )
-    return new_executor_micro_batching in [
-        None,
-        1,
-        '1',
-        True,
-        'True',
-        'true',
-    ]
-
-
 def is_sequential_run():
     return bool(
         paddle.get_flags("FLAGS_new_executor_sequential_run")[
@@ -2288,15 +2366,38 @@ def get_pp_degree(dist_context):
     if len(dist_context.process_meshes) < 2:
         return 0, []
 
-    process_ids = set()
-    process_meshes = copy.deepcopy(dist_context.process_meshes)
+    sub_process_meshes = get_sub_process_mesh(dist_context.process_meshes)
+    return len(sub_process_meshes), sub_process_meshes
 
-    for pm in process_meshes:
+
+def get_sub_process_mesh_by_program(dist_program):
+    all_ops = dist_program.global_block().ops
+    process_meshes = []
+
+    for idx, op in enumerate(all_ops):
+        if "pd_op" in op.name() and op.dist_attr:
+            process_mesh = op.dist_attr.process_mesh
+            if process_mesh not in process_meshes:
+                process_meshes.append(process_mesh)
+
+    sub_process_meshes = get_sub_process_mesh(process_meshes)
+    sub_process_meshes = sorted(
+        sub_process_meshes, key=lambda x: x.process_ids[0]
+    )
+
+    return sub_process_meshes
+
+
+def get_sub_process_mesh(process_meshes):
+    process_ids = set()
+    sub_process_meshes = copy.deepcopy(process_meshes)
+
+    for pm in sub_process_meshes:
         process_ids |= set(pm.process_ids)
 
     global_pm_idx = []
     has_sub_pm = False
-    for idx, pm in enumerate(process_meshes):
+    for idx, pm in enumerate(sub_process_meshes):
         if len(set(pm.process_ids)) == len(process_ids):
             global_pm_idx.append(idx)
         elif set(pm.process_ids) < process_ids:
@@ -2304,9 +2405,9 @@ def get_pp_degree(dist_context):
 
     if has_sub_pm:
         for idx in reversed(global_pm_idx):
-            process_meshes.pop(idx)
+            sub_process_meshes.pop(idx)
 
-    return len(process_meshes), process_meshes
+    return sub_process_meshes
 
 
 def get_pp_stage(dist_context, rank):
@@ -2316,6 +2417,33 @@ def get_pp_stage(dist_context, rank):
             pp_idx = idx
             break
     return pp_idx
+
+
+def get_pp_stage_by_pp_degree(pp_degree):
+    cur_rank = paddle.distributed.get_rank()
+    return get_pp_stage_by_rank(cur_rank, pp_degree)
+
+
+def get_pp_stage_by_process_mesh(process_mesh, pp_degree):
+    pp_stage_for_process_mesh = None
+    for rank in process_mesh.process_ids:
+        pp_stage = get_pp_stage_by_rank(rank, pp_degree)
+        if pp_stage_for_process_mesh is not None:
+            if pp_stage != pp_stage_for_process_mesh:
+                return None
+            assert (
+                pp_stage == pp_stage_for_process_mesh
+            ), f"Can't get pp_stage by process_mesh with different pp_stage {pp_stage} and {pp_stage_for_process_mesh}"
+        pp_stage_for_process_mesh = pp_stage
+
+    return pp_stage_for_process_mesh
+
+
+def get_pp_stage_by_rank(rank, pp_degree):
+    word_size = paddle.distributed.get_world_size()
+    pp_group_size = word_size // pp_degree
+    pp_stage = rank // pp_group_size
+    return pp_stage
 
 
 def wrap_data_for_completion(
@@ -2428,19 +2556,32 @@ def update_grad_var_to_var(program, strategy, grad_var_to_var):
                 "cast",
                 "c_concat",
                 "concat",
-                "c_allgather",
                 "slice",
+                "all_gather",
             ]
             if op.desc.type() in reshard_op_types:
                 input_names = op.desc.input_names()
-                if "X" in input_names or "Input" in input_names:
+                if (
+                    "X" in input_names
+                    or "Input" in input_names
+                    or "x" in input_names
+                ):
                     inputs = (
                         op.desc.input("X")
                         if "X" in input_names
-                        else op.desc.input("Input")
+                        else (
+                            op.desc.input("Input")
+                            if "Input" in input_names
+                            else op.desc.input("x")
+                        )
                     )
-                if "Out" in op.desc.output_names():
-                    outputs = op.desc.output("Out")
+                output_names = op.desc.output_names()
+                if "Out" in output_names or "out" in output_names:
+                    outputs = (
+                        op.desc.output("Out")
+                        if "Out" in output_names
+                        else op.desc.output("out")
+                    )
                 if inputs[0] in grad_var_to_var.keys():
                     for output in outputs:
                         grad_var_to_var[output] = grad_var_to_var[inputs[0]]
@@ -2462,3 +2603,196 @@ def update_grad_var_to_var(program, strategy, grad_var_to_var):
         scale_loss_grad_var_name = first_backward_op.desc.output("Out")[0]
         if scale_loss_grad_var_name not in grad_var_to_var.keys():
             grad_var_to_var[scale_loss_grad_var_name] = scale_loss_var_name
+
+
+def set_all_ops_op_role(block, op_role):
+    all_ops = block.ops
+    for op in all_ops:
+        if op.op_role == -1:
+            op.op_role = op_role
+        for sub_block in op.blocks():
+            set_all_ops_op_role(sub_block, op_role)
+
+
+def fuse_param_func(
+    fuse_params, is_qkv=False, num_heads=None, num_key_value_heads=None
+):
+    """fuse function for fusing weights
+
+    (1) fuse_attention_qkv
+        q => [q1,q2,q3,q4]
+        k => [k1,k2,k3,k4] or [k1,k2] for GQA
+        v => [v1,v2,v3,v4] or [v1,v2] for GQA
+        fused weight => [q1,k1,v1,q2,k2,v2,q3,k3,v3,q4,k4,v4]
+                or for GQA [q1,q2,k1,v1,q3,q4,k2,v2]
+    (2) fuse_attention_ffn
+        directly fuse weights to 1 parts
+        [gate_weight], [up_weight] => [gate_weight, up_weight]
+
+    Args:
+        fuse_params (_type_): to be fused weights
+        is_qkv (bool, optional): for attention qkv weights. Defaults to False.
+        num_heads (_type_, optional): query heads. Defaults to None.
+        num_key_value_heads (_type_, optional): key and value heads. Defaults to None.
+
+    Returns:
+        _type_: fused weights
+    """
+    concat_fn = paddle.concat
+    split_fn = paddle.split
+
+    if is_qkv:
+        # fuse_attention_qkv
+        assert (
+            num_heads
+        ), f"num_heads should be number of heads for Q, but got {num_heads}"
+        assert (
+            num_key_value_heads
+        ), f"num_key_value_heads should be number of key_value_heads for K and V, but got {num_key_value_heads}"
+        assert (
+            len(fuse_params) == 3
+        ), f"fuse_params length is not equal 3, it should be Q K V list. but got length {len(fuse_params)}"
+        num_query_groups = num_heads // num_key_value_heads
+        q_list = split_fn(fuse_params[0], num_heads, axis=-1)
+        k_list = split_fn(fuse_params[1], num_key_value_heads, axis=-1)
+        v_list = split_fn(fuse_params[2], num_key_value_heads, axis=-1)
+
+        qkv_pairs = []
+        for i in range(num_key_value_heads):
+            qkv_pairs += q_list[
+                i * num_query_groups : (i + 1) * num_query_groups
+            ]
+            qkv_pairs.append(k_list[i])
+            qkv_pairs.append(v_list[i])
+        return concat_fn(qkv_pairs, axis=-1)
+    else:
+        # fuse_attention_ffn
+        return concat_fn(fuse_params, axis=-1)
+
+
+def split_param_func(
+    fused_param,
+    split_nums=2,
+    is_qkv=False,
+    num_heads=None,
+    num_key_value_heads=None,
+):
+    """split function for splitting weights
+
+    (1) fuse_attention_qkv
+        fused weight => [q1,k1,v1,q2,k2,v2,q3,k3,v3,q4,k4,v4]
+                or for GQA [q1,q2,k1,v1,q3,q4,k2,v2]
+        after split
+        q => [q1,q2,q3,q4]
+        k => [k1,k2,k3,k4] or [k1,k2] for GQA
+        v => [v1,v2,v3,v4] or [v1,v2] for GQA
+    (2) fuse_attention_ffn
+        directly split weight to 2 parts
+        [gate_weight, up_weight] => [gate_weight], [up_weight]
+
+    Args:
+        fused_param (_type_): len(fused_param)=1, only one weight to be split
+        split_nums (int, optional): split_nums. Defaults to 2.
+        is_qkv (bool, optional): for attention qkv weights. Defaults to False.
+        num_heads (_type_, optional): query heads. Defaults to None.
+        num_key_value_heads (_type_, optional): key and value heads. Defaults to None.
+
+    Returns:
+        _type_: split weights
+    """
+    concat_fn = paddle.concat
+    split_fn = paddle.split
+
+    if is_qkv:
+        # fuse_attention_qkv
+        assert (
+            num_heads
+        ), f"num_heads should be number of heads for Q, but got {num_heads}"
+        assert (
+            num_key_value_heads
+        ), f"num_key_value_heads should be number of key_value_heads for K and V, but got {num_key_value_heads}"
+        num_query_groups = num_heads // num_key_value_heads
+        q_list, k_list, v_list = [], [], []
+        split_heads = split_fn(
+            fused_param, num_heads + 2 * num_key_value_heads, axis=-1
+        )
+        for i in range(num_key_value_heads):
+            q_list += split_heads[
+                i * (num_query_groups + 2) : (i + 1) * (num_query_groups + 2)
+                - 2
+            ]
+            k_list.append(split_heads[(i + 1) * (num_query_groups + 2) - 2])
+            v_list.append(split_heads[(i + 1) * (num_query_groups + 2) - 1])
+        return (
+            concat_fn(q_list, axis=-1),
+            concat_fn(k_list, axis=-1),
+            concat_fn(v_list, axis=-1),
+        )
+    else:
+        # fuse_attention_ffn
+        return split_fn(fused_param, split_nums, axis=-1)
+
+
+def split_mesh(global_mesh: ProcessMesh, sub_mesh_dim: int):
+    mesh_shape = global_mesh.shape
+    mesh_ndim = len(mesh_shape)
+    if sub_mesh_dim >= mesh_ndim or (
+        sub_mesh_dim < 0 and -sub_mesh_dim > mesh_ndim
+    ):
+        raise ValueError(
+            f"The sub_mesh_dim should between (-{mesh_ndim}, {mesh_ndim}]"
+        )
+    if sub_mesh_dim < 0:
+        sub_mesh_dim += mesh_ndim
+
+    process_ids = np.array(global_mesh.process_ids).reshape(mesh_shape)
+    split_process_ids = np.split(
+        process_ids, mesh_shape[sub_mesh_dim], axis=sub_mesh_dim
+    )
+    sub_mesh_list = []
+    for sub_process_ids in split_process_ids:
+        sub_mesh_list.append(
+            ProcessMesh(sub_process_ids, global_mesh.dim_names)
+        )
+
+    return sub_mesh_list
+
+
+# Note: This function is intended for internal use within the PaddlePaddle framework for optimizing computational graphs.
+def update_pylayer_output(trivial_value):
+    """
+    Update the subblock within a pylayer operation by modifying its output argument.
+
+    This function optimizes a pylayer operation by removing unnecessary outputs from the 'cf.yield' step.
+
+    Args:
+        trivale_value (pir::Value): The output argument of the pylayer operation to be modified.
+
+    Example:
+        (1) Original pylayer operation:
+            (%1, %2) = "pd_op.pylayer" (%0) {
+                () = "cf.tuple_pop" [id:1]
+                (%3, %4) = "dist_op.xxx" [id:2]
+                () = "cf.yield" [id:3] (%3, %4)
+            }
+        (2) After calling `update_pylayer_output(%4)`, the updated pylayer operation removes the unused output:
+            (%1) = "pd_op.pylayer" (%0) {
+                () = "cf.tuple_pop" [id:1]
+                (%3) = "dist_op.xxx" [id:2]
+                () = "cf.yield" [id:3] (%3)
+            }
+
+    Args:
+        trivale_value(pir::Value): The output argument of the pylayer op to be updated.
+    """
+    define_op = trivial_value.get_defining_op()
+    if define_op.get_parent_block().parent_op.name() != "pd_op.pylayer":
+        return
+    paddle.pir.set_insertion_point(define_op)
+    fake_value = paddle.static.data(
+        name="_fake_pylayer_out",
+        shape=trivial_value.shape,
+        dtype=trivial_value.dtype,
+    )
+    fake_value.set_type(trivial_value.type())
+    trivial_value.replace_all_uses_with(fake_value)

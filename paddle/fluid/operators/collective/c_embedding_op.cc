@@ -14,8 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/collective/c_embedding_op.h"
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class CEmbeddingOp : public framework::OperatorWithKernel {
  public:
@@ -33,7 +32,7 @@ class CEmbeddingOp : public framework::OperatorWithKernel {
     VLOG(5) << "ids rank is " << ids_rank << std::endl;
     PADDLE_ENFORCE_EQ(table_dims.size(),
                       2,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The dimensions of the 'c_embedding' must be 2. "
                           "But received c_embedding's dimensions = %d, "
                           "c_embedding's shape = [%s].",
@@ -45,7 +44,7 @@ class CEmbeddingOp : public framework::OperatorWithKernel {
     ctx->SetOutputDim("Out", common::make_ddim(output_dims));
 
     if (ctx->GetOutputsVarType("Out")[0] ==
-        framework::proto::VarType::LOD_TENSOR) {
+        framework::proto::VarType::DENSE_TENSOR) {
       ctx->ShareLoD("Ids", /*->*/ "Out");
     }
 
@@ -57,7 +56,7 @@ class CEmbeddingOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_EQ(
         (height > 0 && width > 0 && start_idx >= 0),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "height:%ld width:%ld start_idx:%ld must not have negative values",
             height,
             width,
@@ -133,10 +132,10 @@ class CEmbeddingOpGrad : public framework::OperatorWithKernel {
     ctx->SetOutputDim(framework::GradVarName("W"), table_dims);
 
     // check valid
-    PADDLE_ENFORCE_EQ(
-        table_dims.size(),
-        2,
-        phi::errors::InvalidArgument("Only accept the dims of table_t == 2"));
+    PADDLE_ENFORCE_EQ(table_dims.size(),
+                      2,
+                      common::errors::InvalidArgument(
+                          "Only accept the dims of table_t == 2"));
 
     const int64_t start_idx = ctx->Attrs().Get<int64_t>("start_index");
     const int64_t height = table_dims[0];
@@ -145,7 +144,7 @@ class CEmbeddingOpGrad : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_EQ(
         (height > 0 && width > 0 && start_idx >= 0),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "height:%ld width:%ld start_idx:%ld must not have negative values",
             height,
             width,
@@ -167,13 +166,12 @@ class CEmbeddingOpGradVarTypeInference : public framework::VarTypeInference {
     auto out_var_name = framework::GradVarName("W");
     VLOG(3) << "c_embedding_grad op " << framework::GradVarName("W")
             << " is set to phi::DenseTensor";
-    ctx->SetOutputType(out_var_name, framework::proto::VarType::LOD_TENSOR);
+    ctx->SetOutputType(out_var_name, framework::proto::VarType::DENSE_TENSOR);
     ctx->SetOutputDataType(out_var_name, ctx->GetInputDataType("W"));
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

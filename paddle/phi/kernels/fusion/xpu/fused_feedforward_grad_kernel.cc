@@ -190,8 +190,11 @@ void FFNGrad(const phi::XPUContext& dev_ctx,
                    dropout_param2,
                    bsz_seq * d_model);
   // linear_grad2
-  r = xpu::reduce_sum(
-      xpu_ctx, d_dropout2_out_ptr, d_linear2_bias_ptr, {bsz_seq, d_model}, {0});
+  r = xpu::reduce_sum(xpu_ctx,
+                      d_dropout2_out_ptr,
+                      d_linear2_bias_ptr,
+                      {(int64_t)bsz_seq, (int64_t)d_model},
+                      {0LL});
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "reduce_sum");
 
   phi::XpuFcInfo linear2_fc_info;
@@ -246,10 +249,10 @@ void FFNGrad(const phi::XPUContext& dev_ctx,
   }
 
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_1, b_1, c_1, info_d_dropout1, 1.0f, true);
+      xpu_ctx, a_1, b_1, c_1, info_d_dropout1, 1.0f, 0.f, true);
 
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_2, b_2, c_2, info_dw2, 1.0f, true);
+      xpu_ctx, a_2, b_2, c_2, info_dw2, 1.0f, 0.f, true);
 
   // dropout_grad1
   DropoutGrad(xpu_ctx,
@@ -277,7 +280,7 @@ void FFNGrad(const phi::XPUContext& dev_ctx,
                        bsz_seq * dim_feedforward);
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "relu_grad");
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Currently only supports gelu or relu activation functions!"));
   }
 
@@ -285,8 +288,8 @@ void FFNGrad(const phi::XPUContext& dev_ctx,
   r = xpu::reduce_sum(xpu_ctx,
                       d_act_out_ptr,
                       d_linear1_bias_ptr,
-                      {bsz_seq, dim_feedforward},
-                      {0});
+                      {(int64_t)bsz_seq, (int64_t)dim_feedforward},
+                      {0LL});
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "reduce_sum");
 
   phi::XpuFcInfo linear1_fc_info;
@@ -335,10 +338,11 @@ void FFNGrad(const phi::XPUContext& dev_ctx,
 
   std::tie(info_dx, info_dw1, a_1, b_1, a_2, b_2) = fc_info;
 
-  phi::MatMulXPUFunction<XPUTypeT>(xpu_ctx, a_1, b_1, c_1, info_dx, 1.0f, true);
+  phi::MatMulXPUFunction<XPUTypeT>(
+      xpu_ctx, a_1, b_1, c_1, info_dx, 1.0f, 0.f, true);
 
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_2, b_2, c_2, info_dw1, 1.0f, true);
+      xpu_ctx, a_2, b_2, c_2, info_dw1, 1.0f, 0.f, true);
 
   if (pre_layer_norm) {
     r = xpu::layer_norm_grad(xpu_ctx,

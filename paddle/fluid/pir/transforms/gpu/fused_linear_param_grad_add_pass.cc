@@ -23,7 +23,7 @@
 
 namespace {
 
-// add_grad + matmul_grad + add_ -> matmul + fused_liner_param_gard_add
+// add_grad + matmul_grad + add_ -> matmul + fused_linear_param_grad_add
 class FusedMatmulAddGradAddPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override { return "FusedMatmulAddGradAddPattern"; }
@@ -91,7 +91,7 @@ class FusedMatmulAddGradAddPattern : public paddle::drr::DrrPatternBase {
   }
 };
 
-// matmul_grad + add_ -> matmul + fused_liner_param_gard_add
+// matmul_grad + add_ -> matmul + fused_linear_param_grad_add
 class FusedMatmulGradAddPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override { return "FusedMatmulGradAddPattern"; }
@@ -148,7 +148,7 @@ class FusedMatmulGradAddPattern : public paddle::drr::DrrPatternBase {
 };
 
 // matmul + reshape + reshape + matmul + reshape + add_ -> matmul +
-// fused_liner_param_gard_add
+// fused_linear_param_grad_add
 class FusedMatmulReshapeMatmulAddPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override {
@@ -160,13 +160,13 @@ class FusedMatmulReshapeMatmulAddPattern : public paddle::drr::DrrPatternBase {
         pat.Op(paddle::dialect::FullIntArrayOp::name());
     const auto &reshape1 = pat.Op(paddle::dialect::ReshapeOp::name());
     reshape1({&pat.Tensor("x"), &full_int_array1()},
-             {&pat.Tensor("reshape_x"), &pat.Tensor("reshape_x_xshape")});
+             {&pat.Tensor("reshape_x")});
 
     const auto &full_int_array2 =
         pat.Op(paddle::dialect::FullIntArrayOp::name());
     const auto &reshape2 = pat.Op(paddle::dialect::ReshapeOp::name());
     reshape2({&pat.Tensor("dy"), &full_int_array2()},
-             {&pat.Tensor("reshape_dy"), &pat.Tensor("reshape_dy_xshape")});
+             {&pat.Tensor("reshape_dy")});
 
     const auto &matmul = pat.Op(paddle::dialect::MatmulOp::name(),
                                 {{"transpose_x", pat.Attr("trans_x")},
@@ -178,7 +178,7 @@ class FusedMatmulReshapeMatmulAddPattern : public paddle::drr::DrrPatternBase {
         pat.Op(paddle::dialect::FullIntArrayOp::name());
     const auto &reshape3 = pat.Op(paddle::dialect::ReshapeOp::name());
     reshape3({&pat.Tensor("matmul_out"), &full_int_array3()},
-             {&pat.Tensor("w_grad"), &pat.Tensor("w_grad_xshape")});
+             {&pat.Tensor("w_grad")});
 
     const auto &add_ = pat.Op(paddle::dialect::Add_Op::name());
     pat.Tensor("dweight_inplace") =
@@ -214,7 +214,7 @@ class FusedMatmulReshapeMatmulAddPattern : public paddle::drr::DrrPatternBase {
   }
 };
 
-// matmul + 0 = add_(0,1) -> fused_liner_param_gard_add
+// matmul + 0 = add_(0,1) -> fused_linear_param_grad_add
 class FusedMatmulAddaPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override { return "FusedMatmulAddaPattern"; }
@@ -258,7 +258,7 @@ class FusedMatmulAddaPattern : public paddle::drr::DrrPatternBase {
   }
 };
 
-// matmul + 1 = add_(1,0) -> fused_liner_param_gard_add
+// matmul + 1 = add_(1,0) -> fused_linear_param_grad_add
 class FusedMatmulAddbPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override { return "FusedMatmulAddbPattern"; }
@@ -302,7 +302,7 @@ class FusedMatmulAddbPattern : public paddle::drr::DrrPatternBase {
   }
 };
 
-// add_grad + matmul + 0 = add_(0,1) -> fused_liner_param_gard_add
+// add_grad + matmul + 0 = add_(0,1) -> fused_linear_param_grad_add
 class FusedMatmulAddGradAddaPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override { return "FusedMatmulAddGradAddaPattern"; }
@@ -360,7 +360,7 @@ class FusedMatmulAddGradAddaPattern : public paddle::drr::DrrPatternBase {
   }
 };
 
-// add_grad + matmul + 1 = add_(1,0) -> fused_liner_param_gard_add
+// add_grad + matmul + 1 = add_(1,0) -> fused_linear_param_grad_add
 class FusedMatmulAddGradAddbPattern : public paddle::drr::DrrPatternBase {
  public:
   std::string name() const override { return "FusedMatmulAddGradAddbPattern"; }

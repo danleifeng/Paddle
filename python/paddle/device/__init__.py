@@ -20,6 +20,8 @@ import os
 import re
 from typing import TYPE_CHECKING, Union
 
+from typing_extensions import TypeAlias
+
 import paddle
 from paddle.base import core, framework
 from paddle.base.framework import (
@@ -43,6 +45,15 @@ if TYPE_CHECKING:
     _InitStreamBase = Union[core.CUDAStream, core.CustomDeviceStream]
     _InitEventBase = Union[core.CUDAEvent, core.CustomDeviceEvent]
 
+    from paddle import CustomPlace
+    from paddle.base.libpaddle import _customDeviceProperties
+
+    _CustomPlaceLike: TypeAlias = Union[
+        CustomPlace,
+        str,  # some string like "iluvatar_gpu" "metax_gpu:0", etc.
+        int,  # some int like 0, 1, etc.
+    ]
+
 __all__ = [
     'get_cudnn_version',
     'set_device',
@@ -60,6 +71,7 @@ __all__ = [
     'get_all_custom_device_type',
     'get_available_device',
     'get_available_custom_device',
+    'get_device_properties',
     'Stream',
     'Event',
     'current_stream',
@@ -208,7 +220,7 @@ def _convert_to_place(device: str) -> PlaceLike:
         place = core.CustomPlace(device, device_id)
     elif lower_device == 'cpu':
         place = core.CPUPlace()
-    elif lower_device == 'gpu':
+    elif lower_device == 'gpu' or lower_device == 'dcu':
         if not core.is_compiled_with_cuda():
             raise ValueError(
                 "The device should not be 'gpu', "
@@ -232,7 +244,9 @@ def _convert_to_place(device: str) -> PlaceLike:
             )
         place = core.IPUPlace()
     else:
-        available_gpu_device = re.match(r'gpu:\d+', lower_device)
+        available_gpu_device = re.match(r'gpu:\d+', lower_device) or re.match(
+            r'dcu:\d+', lower_device
+        )
         available_xpu_device = re.match(r'xpu:\d+', lower_device)
         if available_gpu_device:
             if not core.is_compiled_with_cuda():
@@ -266,8 +280,13 @@ def _convert_to_place(device: str) -> PlaceLike:
                     "The device must be a string which is like 'cpu', {}".format(
                         ', '.join(
                             f"'{x}', '{x}:x'"
-                            for x in ['gpu', 'xpu', 'npu']
-                            + core.get_all_custom_device_type()
+                            for x in [
+                                'gpu',
+                                'dcu',
+                                'xpu',
+                                'npu',
+                                *core.get_all_custom_device_type(),
+                            ]
                         )
                     )
                 )
@@ -334,7 +353,6 @@ def get_device() -> str:
         device = 'xpu:' + str(device_id)
     elif isinstance(place, core.IPUPlace):
         num_devices = core.get_ipu_device_count()
-        device = f"ipus:{{0-{num_devices - 1}}}"
         device = f"ipus:{{0-{num_devices - 1}}}"
     elif isinstance(place, core.CustomPlace):
         device_id = place.get_device_id()
@@ -454,6 +472,80 @@ def get_available_custom_device() -> list[str] | None:
     return core.get_available_custom_device()
 
 
+def get_device_properties(
+    device: _CustomPlaceLike | None = None,
+) -> _customDeviceProperties:
+    """
+
+    Return the properties of given device.
+
+    Args:
+        device(|paddle.CustomPlace|int|str|None, optional): The device, the id of the device or
+            the string name of device like npu:x' which to get the properties of the
+            device from. If device is None, the device is the current device.
+            Default: None.
+
+    Returns:
+       _customDeviceProperties: The properties of the device which include ASCII string
+        identifying device, major compute capability, minor compute capability, global
+        memory available and the number of multiprocessors on the device.
+
+    Examples:
+        .. code-block:: python
+
+            >>> # import paddle
+            >>> # paddle.device.set_device('npu')
+            >>> # paddle.device.get_device_properties('npu:0')
+            >>> # _customDeviceProperties(name='', major=0, minor=0, total_memory=0MB, multi_processor_count=0)
+
+            >>> # paddle.device.get_device_properties('npu')
+            >>> # _customDeviceProperties(name='', major=0, minor=0, total_memory=0MB, multi_processor_count=0)
+    """
+    device_name = None
+
+    if device is not None:
+        if isinstance(device, str):
+            colon_idx = device.rfind(':')
+            if colon_idx == -1:
+                device_name = device
+                device_id = 0
+            else:
+                device_name = device[:colon_idx]
+                device_id_str = device[colon_idx + 1 :]
+
+                if not device_id_str.isdigit():
+                    raise ValueError(
+                        f"Invalid device ID '{device_id_str}'. "
+                        f"After colon must be digits only. "
+                        "Example: 'metax_gpu:0'"
+                    )
+
+                device_id = int(device_id_str)
+
+        else:
+            raise ValueError(
+                f"The input: {device} is not expected. Because paddle.device."
+                "get_device_properties only support str. "
+                "Please input appropriate device again!"
+                "Example: 'metax_gpu:0'"
+            )
+    else:
+        raise ValueError(
+            f"The input: {device} is not expected. Because paddle.device."
+            "get_device_properties only support str. "
+            "Please input appropriate device again!"
+            "Example: 'metax_gpu:0'"
+        )
+    if not core.is_compiled_with_custom_device(device_name):
+        raise ValueError(
+            f"PaddlePaddle is not compiled with support for '{device_name}' device. "
+            "Please reinstall PaddlePaddle with Custom Device support "
+            "to call this API."
+        )
+
+    return core.get_device_properties(device_name, device_id)
+
+
 class Event:
     '''
 
@@ -496,7 +588,7 @@ class Event:
         interprocess: bool = False,
     ) -> None:
         if device is None:
-            self.device = paddle.framework._current_expected_place()
+            self.device = paddle.framework._current_expected_place_()
         elif isinstance(device, str):
             self.device = paddle.device._convert_to_place(device)
         else:
@@ -600,7 +692,7 @@ class Event:
                 >>> e1.elapsed_time(e2)
 
         '''
-        return 0
+        return self.event_base.elapsed_time(end_event.event_base)
 
     def synchronize(self) -> None:
         '''
@@ -682,7 +774,7 @@ class Stream:
             return
 
         if device is None:
-            self.device = paddle.framework._current_expected_place()
+            self.device = paddle.framework._current_expected_place_()
         elif isinstance(device, str):
             self.device = paddle.device._convert_to_place(device)
         else:
@@ -881,7 +973,7 @@ def current_stream(device: PlaceLike | None = None) -> Stream:
 
     '''
     if device is None:
-        place = paddle.framework._current_expected_place()
+        place = paddle.framework._current_expected_place_()
     elif isinstance(device, str):
         place = paddle.device._convert_to_place(device)
     else:
@@ -975,7 +1067,7 @@ class stream_guard:
             >>> data2 = paddle.ones(shape=[20])
             >>> data3 = data1 + data2
             >>> with paddle.device.stream_guard(s):
-            ...     s.wait_stream(paddle.device.default_stream())
+            ...     s.wait_stream(paddle.device.default_stream()) # type: ignore[attr-defined]
             ...     data4 = data1 + data3
 
     '''
@@ -992,7 +1084,7 @@ class stream_guard:
 
         self.src_prev_stream = current_stream(cur_stream.device)
         if self.src_prev_stream.device != cur_stream.device:
-            self.tmp_place = paddle.base.framework._current_expected_place()
+            self.tmp_place = paddle.base.framework._current_expected_place_()
             paddle.base.framework._set_expected_place(cur_stream.device)
             self.dst_prev_stream = current_stream(cur_stream.device)
             set_stream(cur_stream)
@@ -1042,7 +1134,7 @@ def synchronize(device: PlaceLike | None = None) -> None:
     """
 
     if device is None:
-        place = paddle.framework._current_expected_place()
+        place = paddle.framework._current_expected_place_()
     elif isinstance(device, str):
         place = paddle.device._convert_to_place(device)
     else:

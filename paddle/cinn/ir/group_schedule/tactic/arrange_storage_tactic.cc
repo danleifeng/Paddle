@@ -13,12 +13,12 @@
 // limitations under the License.
 
 #include "paddle/cinn/ir/group_schedule/tactic/arrange_storage_tactic.h"
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/integer_set.h"
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/ir_analyzer/ir_analyzer.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/utils/ir_copy.h"
+#include "paddle/cinn/optim/ir_simplify.h"
 #include "paddle/cinn/optim/replace_var_with_expr.h"
 #include "paddle/common/enforce.h"
 namespace cinn {
@@ -64,7 +64,11 @@ struct FixedCudaIterVarName {
 
 std::optional<bool> IsSubCudaAxisSpace(const CudaAxisSpace& lhs,
                                        const CudaAxisSpace& rhs) {
-  CHECK(lhs.type == rhs.type);
+  PADDLE_ENFORCE_EQ(
+      lhs.type,
+      rhs.type,
+      ::common::errors::InvalidArgument(
+          "The type of 'lhs' must be equal to the type of 'rhs'. "));
   std::optional<bool> prove_sub_x = lhs.x.ProveSubSet(rhs.x);
   std::optional<bool> prove_sub_y = lhs.y.ProveSubSet(rhs.y);
   std::optional<bool> prove_sub_z = lhs.z.ProveSubSet(rhs.z);
@@ -87,15 +91,15 @@ std::tuple<CudaAxisSpace, CudaAxisSpace> GetCudaAxisSpace(
                                   CudaAxisType::kCudaThread};
   PADDLE_ENFORCE_GT(var2for_map.count(block_name),
                     0,
-                    phi::errors::InvalidArgument("block_name not found"));
+                    ::common::errors::InvalidArgument("block_name not found"));
   for (const auto& var2for : var2for_map.at(block_name)) {
     const Expr& for_expr = var2for.second;
     const ir::For* for_node = for_expr.As<ir::For>();
     PADDLE_ENFORCE_NOT_NULL(
-        for_node, phi::errors::InvalidArgument("for_node is nullptr"));
+        for_node, ::common::errors::InvalidArgument("for_node is nullptr"));
     IntSet interval{
         for_node->min,
-        common::AutoSimplify(for_node->min + for_node->extent - Expr(1))};
+        optim::ArithSimplify(for_node->min + for_node->extent - Expr(1))};
     if (for_node->is_gpu_thread_binded()) {
       if (for_node->bind_info().offset == 0) {
         cuda_thread_space.x = interval;
@@ -138,9 +142,9 @@ IntSet Evaluate(Expr expr,
   Expr copy_for_upper_bound = ir::ir_utils::IRCopy(expr);
   Expr copy_for_lower_bound = ir::ir_utils::IRCopy(expr);
   common::cas_intervals_t var_intervals;
-  std::set<ir::Expr> var_set = ir::ir_utils::CollectIRNodesWithoutTensor(
+  std::vector<ir::Expr> var_vec = ir::ir_utils::CollectIRNodesWithoutTensor(
       expr, [](const ir::Expr* x) { return x->as_var(); });
-  for (Expr var_expr : var_set) {
+  for (Expr var_expr : var_vec) {
     ir::Var var = var_expr.as_var_ref();
     if (fixed.count(var) != 0) {
       const ir::Var& fixed_var = fixed.at(var);
@@ -157,16 +161,22 @@ IntSet Evaluate(Expr expr,
     } else if (var->is_symbolic_constant) {
       continue;
     } else {
-      CHECK(var->lower_bound.defined());
-      CHECK(var->upper_bound.defined());
+      PADDLE_ENFORCE_EQ(
+          var->lower_bound.defined(),
+          true,
+          ::common::errors::InvalidArgument(
+              "The 'lower_bound' of the variable must be defined."));
+      PADDLE_ENFORCE_EQ(
+          var->upper_bound.defined(),
+          true,
+          ::common::errors::InvalidArgument(
+              "The 'upper_bound' of the variable must be defined."));
       optim::ReplaceVarWithExpr(&copy_for_lower_bound, var, var->lower_bound);
       optim::ReplaceVarWithExpr(&copy_for_upper_bound, var, var->upper_bound);
     }
   }
-  ir::Expr lower_bound =
-      common::AutoSimplify(copy_for_lower_bound, var_intervals);
-  ir::Expr upper_bound =
-      common::AutoSimplify(copy_for_upper_bound, var_intervals);
+  ir::Expr lower_bound = optim::ArithSimplify(copy_for_lower_bound);
+  ir::Expr upper_bound = optim::ArithSimplify(copy_for_upper_bound);
   lower_bound = common::EnhancedSimplifyModExpr(lower_bound, var_intervals);
   upper_bound = common::EnhancedSimplifyModExpr(upper_bound, var_intervals);
   return IntSet(lower_bound, upper_bound, var_intervals);
@@ -250,7 +260,7 @@ std::unordered_map<ir::Var, IntSet> GetVarDomainOfSBlock(
     var_domains.emplace(
         var2for.first,
         IntSet(for_node->min,
-               common::AutoSimplify(for_node->min + for_node->extent -
+               optim::ArithSimplify(for_node->min + for_node->extent -
                                     ir::Expr(1))));
   }
   return var_domains;
@@ -261,8 +271,14 @@ std::optional<CudaAxisType> AnalyzeCrossType(const VarToForMap& var2for_map,
                                              Expr load,
                                              Expr store_block,
                                              Expr load_block) {
-  CHECK(store_block.As<ir::ScheduleBlockRealize>());
-  CHECK(load_block.As<ir::ScheduleBlockRealize>());
+  PADDLE_ENFORCE_NOT_NULL(
+      store_block.As<ir::ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "The 'store_block' must be of type 'ir::ScheduleBlockRealize'."));
+  PADDLE_ENFORCE_NOT_NULL(
+      load_block.As<ir::ScheduleBlockRealize>(),
+      ::common::errors::InvalidArgument(
+          "The 'load_block' must be of type 'ir::ScheduleBlockRealize'."));
   std::string store_block_name = store_block.As<ir::ScheduleBlockRealize>()
                                      ->schedule_block.As<ir::ScheduleBlock>()
                                      ->name;
@@ -325,7 +341,7 @@ std::optional<CudaAxisType> AnalyzeCrossType(const VarToForMap& var2for_map,
       analyzer::GetIterValuesOfAccess(load, load_block);
   PADDLE_ENFORCE_EQ(iter_values_of_load.size(),
                     iter_values_of_store.size(),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "The number of iter values of store and load should be "
                         "the same"));
 
@@ -404,12 +420,12 @@ void ArrangeStorageTactic::Apply(ir::IRSchedule* sch,
     } else if (cross_type.value() == CudaAxisType::kCudaThread) {
       memory_type = ir::MemoryType::GPUShared;
     } else if (cross_type.value() == CudaAxisType::kCudaBlock) {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(::common::errors::InvalidArgument(
           "Fusion requires synchronization across blocks, but "
           "currently we do not support it."));
       break;
     } else {
-      PADDLE_THROW(phi::errors::Fatal("Dead code"));
+      PADDLE_THROW(::common::errors::Fatal("Dead code"));
     }
   }
 

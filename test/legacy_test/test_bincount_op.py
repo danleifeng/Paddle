@@ -25,7 +25,6 @@ import paddle
 import paddle.inference as paddle_infer
 from paddle import base
 from paddle.base.framework import in_dygraph_mode, in_pir_mode
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -33,7 +32,6 @@ paddle.enable_static()
 class TestBincountOpAPI(unittest.TestCase):
     """Test bincount api."""
 
-    @test_with_pir_api
     def test_static_graph(self):
         startup_program = paddle.static.Program()
         train_program = paddle.static.Program()
@@ -64,6 +62,18 @@ class TestBincountOpAPI(unittest.TestCase):
 
     def test_dygraph(self):
         with base.dygraph.guard():
+            inputs_np = np.array([0, 1, 1, 3, 2, 1, 7]).astype(np.int64)
+            inputs = paddle.to_tensor(inputs_np)
+            actual = paddle.bincount(inputs)
+            expected = np.bincount(inputs)
+            self.assertTrue(
+                (actual.numpy() == expected).all(),
+                msg='bincount output is wrong, out =' + str(actual.numpy()),
+            )
+
+    def test_dygraph_cpu(self):
+        with base.dygraph.guard():
+            paddle.device.set_device('cpu')
             inputs_np = np.array([0, 1, 1, 3, 2, 1, 7]).astype(np.int64)
             inputs = paddle.to_tensor(inputs_np)
             actual = paddle.bincount(inputs)
@@ -156,7 +166,7 @@ class TestBincountOp(OpTest):
         self.Out = np.bincount(self.np_input, minlength=self.minlength)
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
 
 class TestCase1(TestBincountOp):
@@ -257,7 +267,6 @@ class TestTensorMinlength(unittest.TestCase):
         )
         np.testing.assert_allclose(np_out, pd_out.numpy())
 
-    @test_with_pir_api
     def test_static_and_infer(self):
         paddle.enable_static()
         np_x = np.random.randn(100).astype('float32')

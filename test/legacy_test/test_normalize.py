@@ -19,7 +19,6 @@ import numpy as np
 import paddle
 import paddle.nn.functional as F
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 def p_normalize(x, axis=1, p=2, epsilon=1e-12, keepdims=True):
@@ -55,7 +54,6 @@ class TestNNFunctionalNormalize(unittest.TestCase):
 
         self.assertRaises(BaseException, F.normalize, x)
 
-    @test_with_pir_api
     def run_static(self, use_gpu=False):
         x = paddle.static.data(name='input', shape=[10, 10], dtype='float32')
         x2 = paddle.static.data(name='input2', shape=[2], dtype='float32')
@@ -97,18 +95,6 @@ class TestNNFunctionalNormalize(unittest.TestCase):
 
         with paddle.static.program_guard(paddle.static.Program()):
             self.run_static(use_gpu=True)
-
-    def test_errors(self):
-        with base.dygraph.guard():
-            # The size of input in Normalize should not be 0.
-            def test_0_size():
-                array = np.array([], dtype=np.float32)
-                x = paddle.to_tensor(
-                    np.reshape(array, [1, 1, 0]), dtype='float32'
-                )
-                paddle.nn.functional.normalize(x)
-
-            self.assertRaises(ValueError, test_0_size)
 
 
 if __name__ == "__main__":

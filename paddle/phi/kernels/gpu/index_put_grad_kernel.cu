@@ -96,6 +96,7 @@ void LaunchIndexPutGradCudaKernel(
     const bool accumulate,
     DenseTensor* value_grad,
     DenseTensor* x_grad) {
+  phi::Allocator::AllocationPtr indices_holder_1, indices_holder_2;
   if (x_grad) {
     phi::Copy(dev_ctx, out_grad, dev_ctx.GetPlace(), false, x_grad);
     if (!accumulate) {
@@ -112,8 +113,8 @@ void LaunchIndexPutGradCudaKernel(
       }
 
       const int64_t numel = indices[0]->numel();
-      auto pd_indices =
-          funcs::GetDevicePointerArray<int64_t, Context>(dev_ctx, indices);
+      auto pd_indices = funcs::GetDevicePointerArray<int64_t, Context>(
+          dev_ctx, indices, &indices_holder_1);
       auto config = phi::backends::gpu::GetGpuLaunchConfig1D(dev_ctx, numel);
       SetZeroCudaKernel<T><<<config.block_per_grid,
                              config.thread_per_block,
@@ -134,8 +135,8 @@ void LaunchIndexPutGradCudaKernel(
   }
 
   const int64_t numel = indices[0]->numel();
-  auto pd_indices =
-      funcs::GetDevicePointerArray<int64_t, Context>(dev_ctx, indices);
+  auto pd_indices = funcs::GetDevicePointerArray<int64_t, Context>(
+      dev_ctx, indices, &indices_holder_2);
   auto config = phi::backends::gpu::GetGpuLaunchConfig1D(dev_ctx, numel);
 
   if (value_grad) {
@@ -230,10 +231,23 @@ void IndexPutGradKernel(const Context& dev_ctx,
                         bool accumulate,
                         DenseTensor* x_grad,
                         DenseTensor* value_grad) {
+  if (out_grad.numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    // Fill value_grad with 0.
+    if (value_grad) {
+      phi::Full<T, Context>(
+          dev_ctx,
+          phi::IntArray(common::vectorize(value_grad->dims())),
+          0,
+          value_grad);
+    }
+    return;
+  }
+
   PADDLE_ENFORCE_EQ(
       x.dtype(),
       value.dtype(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The data type of tensor value must be same to the data type "
           "of tensor x."));
   std::vector<DenseTensor> tmp_args;

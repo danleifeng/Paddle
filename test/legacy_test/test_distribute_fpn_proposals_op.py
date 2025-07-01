@@ -18,7 +18,6 @@ import numpy as np
 from op_test import OpTest
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def distribute_fpn_proposals_wrapper(
@@ -54,7 +53,7 @@ class TestDistributeFPNProposalsOp(OpTest):
             'pixel_offset': self.pixel_offset,
         }
         output = [
-            ('out%d' % i, self.rois_fpn[i]) for i in range(len(self.rois_fpn))
+            (f'out{i}', self.rois_fpn[i]) for i in range(len(self.rois_fpn))
         ]
 
         self.outputs = {
@@ -163,10 +162,10 @@ class TestDistributeFPNProposalsOpWithRoisNum(TestDistributeFPNProposalsOp):
             'pixel_offset': self.pixel_offset,
         }
         output = [
-            ('out%d' % i, self.rois_fpn[i]) for i in range(len(self.rois_fpn))
+            (f'out{i}', self.rois_fpn[i]) for i in range(len(self.rois_fpn))
         ]
         rois_num_per_level = [
-            ('rois_num%d' % i, np.array(self.rois_fpn[i][1][0]).astype('int32'))
+            (f'rois_num{i}', np.array(self.rois_fpn[i][1][0]).astype('int32'))
             for i in range(len(self.rois_fpn))
         ]
 
@@ -201,7 +200,6 @@ class TestDistributeFpnProposalsAPI(unittest.TestCase):
         self.rois_np = np.random.rand(10, 4).astype('float32')
         self.rois_num_np = np.array([4, 6]).astype('int32')
 
-    @test_with_pir_api
     def test_dygraph_with_static(self):
         paddle.enable_static()
         rois = paddle.static.data(name='rois', shape=[10, 4], dtype='float32')
@@ -220,7 +218,7 @@ class TestDistributeFpnProposalsAPI(unittest.TestCase):
             refer_scale=224,
             rois_num=rois_num,
         )
-        fetch_list = multi_rois + [restore_ind] + rois_num_per_level
+        fetch_list = [*multi_rois, restore_ind, *rois_num_per_level]
 
         exe = paddle.static.Executor()
         output_stat = exe.run(
@@ -250,7 +248,7 @@ class TestDistributeFpnProposalsAPI(unittest.TestCase):
             refer_scale=224,
             rois_num=rois_num_dy,
         )
-        output_dy = multi_rois_dy + [restore_ind_dy] + rois_num_per_level_dy
+        output_dy = [*multi_rois_dy, restore_ind_dy, *rois_num_per_level_dy]
         output_dy_np = []
         for output in output_dy:
             output_np = output.numpy()

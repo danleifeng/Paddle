@@ -12,9 +12,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/common/memory_utils.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device_context.h"
 
 #include "cub/cub.cuh"
 #include "paddle/fluid/inference/tensorrt/plugin/transformer_input_output_convert_plugin.h"
@@ -28,8 +28,8 @@ __global__ void remove_padding_kernel(const half* input0,
                                       const int32_t* input1,
                                       half* output) {
   int word_id = blockIdx.x * gridDim.y + blockIdx.y;
-  int32_t seqence_length = input1[blockIdx.x + 1] - input1[blockIdx.x];
-  if (blockIdx.y < seqence_length) {
+  int32_t sequence_length = input1[blockIdx.x + 1] - input1[blockIdx.x];
+  if (blockIdx.y < sequence_length) {
     output[(input1[blockIdx.x] + blockIdx.y) * gridDim.z * blockDim.x +
            blockIdx.z * blockDim.x + threadIdx.x] =
         input0[word_id * gridDim.z * blockDim.x + blockIdx.z * blockDim.x +
@@ -41,8 +41,8 @@ __global__ void recover_padding_kernel(const half* input0,
                                        const int32_t* input1,
                                        half* output) {
   int word_id = blockIdx.x * gridDim.y + blockIdx.y;
-  int32_t seqence_length = input1[blockIdx.x + 1] - input1[blockIdx.x];
-  if (blockIdx.y < seqence_length) {
+  int32_t sequence_length = input1[blockIdx.x + 1] - input1[blockIdx.x];
+  if (blockIdx.y < sequence_length) {
     output[word_id * gridDim.z * blockDim.x + blockIdx.z * blockDim.x +
            threadIdx.x] =
         input0[(input1[blockIdx.x] + blockIdx.y) * gridDim.z * blockDim.x +
@@ -116,13 +116,13 @@ bool TransformerInputConvertPlugin::supportsFormatCombination(
     int nbOutputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(nbInputs,
                     2,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "TransformerInputConvertPlugin must have 2 inputs, "
                         "but got %d input(s). ",
                         nbInputs));
   PADDLE_ENFORCE_EQ(nbOutputs,
                     4,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "TransformerInputConvertPlugin must have 4 outputs, "
                         "but got %d output(s). ",
                         nbOutputs));
@@ -222,7 +222,7 @@ int TransformerInputConvertPlugin::enqueue(
       B,
       MaxLength,
       vector_length /
-          num_threads);  //  batches, max sequnce length, input0.dims.d[2]/*
+          num_threads);  //  batches, max sequence length, input0.dims.d[2]/*
   remove_padding_kernel<<<num_blocks, num_threads, 0, stream>>>(
       input0, output2, output0);  // input(no_varlen), pos_id, input(varlen)
   return cudaGetLastError() != cudaSuccess;
@@ -256,13 +256,13 @@ bool TransformerOutputConvertPlugin::supportsFormatCombination(
     int nbOutputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(nbInputs,
                     3,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "TransformerOutputConvertPlugin must have 3 inputs, "
                         "but got %d input(s). ",
                         nbInputs));
   PADDLE_ENFORCE_EQ(nbOutputs,
                     1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "TransformerOutputConvertPlugin must have 1 output, "
                         "but got %d output(s). ",
                         nbOutputs));
@@ -345,7 +345,7 @@ int TransformerOutputConvertPlugin::enqueue(
   const dim3 num_blocks(
       B,
       MaxLength,
-      vector_length / num_threads);  //  batches, max sequnce length
+      vector_length / num_threads);  //  batches, max sequence length
                                      //  (mask_id.dims.d[1]),
                                      //  input.dims.d[1]/*
   recover_padding_kernel<<<num_blocks, num_threads, 0, stream>>>(

@@ -19,9 +19,7 @@
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/utils/string/pretty_log.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 using string::PrettyLogDetail;
 
@@ -38,7 +36,7 @@ void MatmulActivationMkldnnFusePass::ApplyImpl(Graph* graph) const {
 void MatmulActivationMkldnnFusePass::FuseMatmulAct(
     Graph* graph, const std::string& matmul_type, std::string& act_type) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   FusePassBase::Init(matmul_type + "_" + act_type + "_onednn_fuse_pass", graph);
 
   GraphPatternDetector gpd;
@@ -284,9 +282,7 @@ MatmulActivationMkldnnFusePass::MatmulActivationMkldnnFusePass() {
       .End();
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(matmul_activation_onednn_fuse_pass,
               paddle::framework::ir::MatmulActivationMkldnnFusePass);

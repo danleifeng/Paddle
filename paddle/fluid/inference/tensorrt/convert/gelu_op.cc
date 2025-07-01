@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/plugin/gelu_op_plugin.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 /*
  * Gelu converter from fluid to tensorRT.
@@ -140,7 +138,7 @@ class GeluOpConverter : public OpConverter {
                                     nvinfer1::ElementWiseOperation::kPROD);
       layer = y;
 #else
-      PADDLE_THROW(phi::errors::Fatal(
+      PADDLE_THROW(common::errors::Fatal(
           "You are running GeLU Op with approximate True, need to confirm that "
           "your TRT version is no less than 7.0"));
 #endif
@@ -215,24 +213,17 @@ class GeluOpConverter : public OpConverter {
       layer = y;
 #else  // if IS_TRT_VERSION_GE(7000)
       int input_num = op_desc.Input("X").size();
-      if (engine_->with_dynamic_shape()) {
 #if IS_TRT_VERSION_GE(6000)
-        bool with_fp16 =
-            engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
-        plugin::GeluPluginDynamic* plugin =
-            new plugin::GeluPluginDynamic(with_fp16);
-        layer = engine_->AddDynamicPlugin(&input, input_num, plugin);
+      bool with_fp16 =
+          engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
+      plugin::GeluPluginDynamic* plugin =
+          new plugin::GeluPluginDynamic(with_fp16);
+      layer = engine_->AddDynamicPlugin(&input, input_num, plugin);
 #else
-        PADDLE_THROW(phi::errors::Fatal(
-            "You are running the TRT Dynamic Shape mode, need to confirm that "
-            "your TRT version is no less than 6.0"));
+      PADDLE_THROW(common::errors::Fatal(
+          "You are running the TRT Dynamic Shape mode, need to confirm that "
+          "your TRT version is no less than 6.0"));
 #endif
-      } else {
-        bool with_fp16 =
-            engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
-        plugin::GeluPlugin* plugin = new plugin::GeluPlugin(with_fp16);
-        layer = engine_->AddPlugin(&input, input_num, plugin);
-      }
 #endif  // if IS_TRT_VERSION_GE(7000)
     }
     auto output_name = op_desc.Output("Out")[0];
@@ -240,8 +231,6 @@ class GeluOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(gelu, GeluOpConverter);

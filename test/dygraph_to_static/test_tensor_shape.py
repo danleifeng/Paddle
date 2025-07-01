@@ -18,8 +18,8 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     test_ast_only,
-    test_legacy_and_pt_and_pir,
     test_pir_only,
+    test_pt_only,
 )
 
 import paddle
@@ -289,7 +289,6 @@ class TestTensorShapeBasic(Dy2StTestBase):
     def get_static_output(self):
         return self._run(to_static=True)
 
-    @test_legacy_and_pt_and_pir
     def test_transformed_static_result(self):
         static_res = self.get_static_output()
         dygraph_res = self.get_dygraph_output()
@@ -312,17 +311,25 @@ class TestTensorShapeBasic(Dy2StTestBase):
         slice_op_num = 0
 
         for block in program.blocks:
-            shape_op_num += len([op for op in block.ops if op.type == "shape"])
+            shape_op_num += len(
+                [
+                    op
+                    for op in block.ops
+                    if (op.type == "shape" or op.type == "shape64")
+                ]
+            )
             slice_op_num += len([op for op in block.ops if op.type == "slice"])
         return op_num, shape_op_num, slice_op_num
 
     def _compute_pir_op_num(self, program):
         op_num = program.global_block().num_ops()
         shape_op_num = get_op_num_in_program(program, "pd_op.shape")
+        shape_op_num += get_op_num_in_program(program, "pd_op.shape64")
         slice_op_num = get_op_num_in_program(program, "pd_op.slice")
         return op_num, shape_op_num, slice_op_num
 
     @test_ast_only
+    @test_pt_only
     def test_op_num(self):
         static_layer = paddle.jit.to_static(self.dygraph_func, self.input_spec)
         program = static_layer.main_program
@@ -421,7 +428,7 @@ class TestTupleShape1(TestTensorShapeBasic):
         self.expected_slice_op_num = 2
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 13
+        self.pir_expected_op_num = 11
         self.pir_expected_shape_op_num = 1
         self.pir_expected_slice_op_num = 2
 
@@ -440,7 +447,7 @@ class TestTupleShape2(TestTensorShapeBasic):
         self.expected_slice_op_num = 1
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 10
+        self.pir_expected_op_num = 9
         self.pir_expected_shape_op_num = 1
         self.pir_expected_slice_op_num = 1
 
@@ -457,7 +464,7 @@ class TestTupleShape3(TestTensorShapeBasic):
         self.expected_slice_op_num = 2
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 13
+        self.pir_expected_op_num = 11
         self.pir_expected_shape_op_num = 1
         self.pir_expected_slice_op_num = 2
 
@@ -474,7 +481,7 @@ class TestPaddleShapeApi(TestTensorShapeBasic):
         self.expected_slice_op_num = 2
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 14
+        self.pir_expected_op_num = 12
         self.pir_expected_shape_op_num = 2
         self.pir_expected_slice_op_num = 2
 
@@ -639,7 +646,7 @@ class TestOpNumBasicWithTensorShape(Dy2StTestBase):
         self.expected_slice_op_num = 1
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 10
+        self.pir_expected_op_num = 9
         self.pir_expected_shape_op_num = 1
         self.pir_expected_slice_op_num = 1
 
@@ -650,7 +657,11 @@ class TestOpNumBasicWithTensorShape(Dy2StTestBase):
 
         for block in program.blocks:
             self.shape_op_num += len(
-                [op for op in block.ops if op.type == "shape"]
+                [
+                    op
+                    for op in block.ops
+                    if (op.type == "shape" or op.type == "shape64")
+                ]
             )
             self.slice_op_num += len(
                 [op for op in block.ops if op.type == "slice"]
@@ -659,10 +670,12 @@ class TestOpNumBasicWithTensorShape(Dy2StTestBase):
     def _compute_pir_op_num(self, program):
         op_num = program.global_block().num_ops()
         shape_op_num = get_op_num_in_program(program, "pd_op.shape")
+        shape_op_num += get_op_num_in_program(program, "pd_op.shape64")
         slice_op_num = get_op_num_in_program(program, "pd_op.slice")
         return op_num, shape_op_num, slice_op_num
 
     @test_ast_only
+    @test_pt_only
     def test_op_num(self):
         static_layer = paddle.jit.to_static(self.dygraph_func, self.input_spec)
         program = static_layer.main_program
@@ -693,7 +706,7 @@ class TestOpNumBasicWithTensorShape4(TestOpNumBasicWithTensorShape):
         self.expected_slice_op_num = 2
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 15
+        self.pir_expected_op_num = 14
         self.pir_expected_shape_op_num = 2
         self.pir_expected_slice_op_num = 2
 
@@ -708,7 +721,7 @@ class TestOpNumWithTensorShapeTuple1(TestOpNumBasicWithTensorShape):
         self.expected_slice_op_num = 1
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 10
+        self.pir_expected_op_num = 9
         self.pir_expected_shape_op_num = 1
         self.pir_expected_slice_op_num = 1
 
@@ -723,7 +736,7 @@ class TestOpNumWithTensorShapeInIf1(TestOpNumBasicWithTensorShape):
         self.expected_slice_op_num = 4
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 41
+        self.pir_expected_op_num = 39
         self.pir_expected_shape_op_num = 4
         self.pir_expected_slice_op_num = 4
 
@@ -738,7 +751,7 @@ class TestOpNumWithTensorShapeInFor1(TestOpNumBasicWithTensorShape):
         self.expected_slice_op_num = 3
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 35
+        self.pir_expected_op_num = 32
         self.pir_expected_shape_op_num = 2
         self.pir_expected_slice_op_num = 3
 
@@ -753,7 +766,7 @@ class TestOpNumWithTensorShapeInWhile1(TestOpNumBasicWithTensorShape):
         self.expected_slice_op_num = 3
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 27
+        self.pir_expected_op_num = 25
         self.pir_expected_shape_op_num = 3
         self.pir_expected_slice_op_num = 3
 
@@ -772,7 +785,7 @@ class TestChangeShapeAfterAssign(TestTensorShapeBasic):
         self.expected_slice_op_num = 1
 
     def _set_pir_expected_op_num(self):
-        self.pir_expected_op_num = 12
+        self.pir_expected_op_num = 11
         self.pir_expected_shape_op_num = 1
         self.pir_expected_slice_op_num = 1
 
@@ -790,9 +803,8 @@ def dyfunc_with_static_convert_var_shape(x):
     return res
 
 
-class TestFindStatiConvertVarShapeSuffixVar(Dy2StTestBase):
+class TestFindStaticConvertVarShapeSuffixVar(Dy2StTestBase):
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test(self):
         x_spec = paddle.static.InputSpec(shape=[None, 10])
         func = paddle.jit.to_static(

@@ -16,9 +16,11 @@
 #include "paddle/fluid/framework/new_executor/instruction/instruction_util.h"
 #include "paddle/fluid/framework/new_executor/new_executor_defs.h"
 #include "paddle/fluid/framework/new_executor/pir_adaptor/pir_adaptor_util.h"
+#include "paddle/fluid/framework/var_type.h"
 
-namespace paddle {
-namespace framework {
+COMMON_DECLARE_bool(check_cuda_error);
+
+namespace paddle::framework {
 
 SelectInputInstruction::SelectInputInstruction(
     size_t id,
@@ -53,11 +55,11 @@ inline int GetBranchNumber(const phi::DenseTensor &mask) {
   PADDLE_ENFORCE_EQ(
       mask.numel(),
       1,
-      phi::errors::Fatal("The numel of Input(Mask) in SelectInputOp or "
-                         "SelectOutputOp must be 1. "
-                         "But received %d, and it's shape is [%s].",
-                         mask.numel(),
-                         mask.dims()));
+      common::errors::Fatal("The numel of Input(Mask) in SelectInputOp or "
+                            "SelectOutputOp must be 1. "
+                            "But received %d, and it's shape is [%s].",
+                            mask.numel(),
+                            mask.dims()));
   if (phi::is_cpu_place(mask.place())) {
     return mask.data<int>()[0];
   }
@@ -67,7 +69,7 @@ inline int GetBranchNumber(const phi::DenseTensor &mask) {
     defined(PADDLE_WITH_CUSTOM_DEVICE) || defined(PADDLE_WITH_XPU)
   framework::TensorCopySync(mask, phi::CPUPlace(), cpu_mask.get());
 #else
-  PADDLE_THROW(phi::errors::Fatal(
+  PADDLE_THROW(common::errors::Fatal(
       "This version of PaddlePaddle does NOT support GPU, "
       "but got GPU tensor 'Mask' in SelectInputOp or SelectOutputOp. "
       "Please compile PaddlePaddle WITH_GPU first."));
@@ -79,9 +81,9 @@ class AssignFunctor {
  public:
   explicit AssignFunctor(Variable *out) : out_(out) {}
 
-  void operator()(const phi::DenseTensor &lod_tensor) const {
+  void operator()(const phi::DenseTensor &dense_tensor) const {
     auto &out_tensor = *out_->GetMutable<phi::DenseTensor>();
-    copy_tensor(lod_tensor, &out_tensor);
+    copy_tensor(dense_tensor, &out_tensor);
   }
 
   void operator()(const phi::TensorArray &array) const {
@@ -106,17 +108,17 @@ class AssignFunctor {
     PADDLE_ENFORCE_EQ(
         true,
         false,
-        phi::errors::PermissionDenied(
+        common::errors::PermissionDenied(
             "Not support type for assign op with type %s", typeid(T).name()));
   }
 
  private:
-  void copy_tensor(const phi::DenseTensor &lod_tensor,
+  void copy_tensor(const phi::DenseTensor &dense_tensor,
                    phi::DenseTensor *out) const {
-    if (!lod_tensor.IsInitialized()) return;
+    if (!dense_tensor.IsInitialized()) return;
     auto &out_tensor = *out;
-    TensorCopy(lod_tensor, lod_tensor.place(), &out_tensor);
-    out_tensor.set_lod(lod_tensor.lod());
+    TensorCopy(dense_tensor, dense_tensor.place(), &out_tensor);
+    out_tensor.set_lod(dense_tensor.lod());
   }
 
   Variable *out_;
@@ -124,12 +126,16 @@ class AssignFunctor {
 
 void SelectInputInstruction::Run() {
   VLOG(6) << "run select_input instruction";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("SelectInputInstruction begin");
+  }
+
   auto &mask = mask_->Get<phi::DenseTensor>();
   size_t output_branch = static_cast<size_t>(GetBranchNumber(mask));
   PADDLE_ENFORCE_LT(
       output_branch,
       inputs_.size(),
-      phi::errors::Fatal(
+      common::errors::Fatal(
           "Input 'Mask' in SelectInputOp is invalid. "
           "'Mask' must be less than the size of input vector 'X'. "
           "But received Mask = %d, X's size = %d.",
@@ -137,7 +143,9 @@ void SelectInputInstruction::Run() {
           inputs_.size()));
   Variable *selected = inputs_[output_branch];
   VisitVarType(*selected, AssignFunctor(out_));
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("SelectInputInstruction finish");
+  }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

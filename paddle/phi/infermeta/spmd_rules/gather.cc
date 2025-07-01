@@ -42,18 +42,18 @@ SpmdInfo GatherInferSpmdBase(const DistMetaTensor& x,
   if (index_ndim == 0) {
     PADDLE_ENFORCE_EQ(index_dims_mapping_src.size(),
                       1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "index is 0-d tensor, it's dims_mapping size "
                           "must be 1, but received [%d]",
                           index_dims_mapping_src.size()));
   } else {
-    PADDLE_ENFORCE_EQ(
-        index_ndim,
-        index_dims_mapping_src.size(),
-        phi::errors::InvalidArgument("Tensor index's rank [%d] and "
-                                     "dims_mapping size [%d] are not matched.",
-                                     index_ndim,
-                                     index_dims_mapping_src.size()));
+    PADDLE_ENFORCE_EQ(index_ndim,
+                      index_dims_mapping_src.size(),
+                      common::errors::InvalidArgument(
+                          "Tensor index's rank [%d] and "
+                          "dims_mapping size [%d] are not matched.",
+                          index_ndim,
+                          index_dims_mapping_src.size()));
   }
 
   // Step1: Build Einsum Notation
@@ -70,7 +70,7 @@ SpmdInfo GatherInferSpmdBase(const DistMetaTensor& x,
     out_axes[axis] = 'k';
   }
 
-  // Step2: Sharding Propogation
+  // Step2: Sharding Propagation
   // Step2.1: Merge input shardings
   std::vector<int64_t> x_dims_mapping(x_dims_mapping_src);
   if (axis < x_ndim) {
@@ -132,7 +132,7 @@ SpmdInfo GatherInferSpmdReverseBase(const DistMetaTensor& x,
     out_axes[axis] = 'k';
   }
 
-  // Step2: Sharding Propogation
+  // Step2: Sharding Propagation
   // Step2.1: Merge output shardings
   std::unordered_map<std::string, int64_t> axis_to_dim_map =
       ShardingMergeForTensors({{out_axes, out_dims_mapping_src}});

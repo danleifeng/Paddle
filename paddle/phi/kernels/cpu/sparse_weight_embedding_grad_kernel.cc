@@ -69,7 +69,7 @@ struct SparseWeightEmbeddingGradCPUFunctor {
           PADDLE_ENFORCE_LT(
               ids_data[i],
               N,
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "Variable value (input) of "
                   "OP(paddle.nn.functional.embedding) "
                   "expected >= 0 and < %ld, but got %ld. Please check input "
@@ -79,7 +79,7 @@ struct SparseWeightEmbeddingGradCPUFunctor {
           PADDLE_ENFORCE_GE(
               ids_data[i],
               0,
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "Variable value (input) of "
                   "OP(paddle.nn.functional.embedding) "
                   "expected >= 0 and < %ld, but got %ld. Please check input "
@@ -146,7 +146,7 @@ struct SparseWeightEmbeddingSparseGradCPUFunctor {
         common::flatten_to_2d(d_output_dims, d_output_dims.size() - 1);
     PADDLE_ENFORCE_EQ(d_table_value->dims(),
                       d_output_dims_2d,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "ShapeError: The shape of lookup_table@Grad and "
                           "output@Grad should be same. "
                           "But received lookup_table@Grad's shape = [%s], "
@@ -166,42 +166,42 @@ struct SparseWeightEmbeddingSparseGradCPUFunctor {
 };
 
 template <typename T, typename Context>
-void SparseWeightEmbeddingGradKernel(const Context& ctx,
+void SparseWeightEmbeddingGradKernel(const Context& dev_ctx,
                                      const DenseTensor& input,
                                      const SelectedRows& weight,
                                      const DenseTensor& out_grad,
                                      int64_t padding_idx,
                                      DenseTensor* weight_grad) {
   SparseWeightEmbeddingGradCPUFunctor<T, Context> functor(
-      ctx, input, weight, out_grad, padding_idx, weight_grad);
+      dev_ctx, input, weight, out_grad, padding_idx, weight_grad);
 
   if (input.dtype() == phi::DataType::INT32) {
     functor.template apply<int>();
   } else if (input.dtype() == phi::DataType::INT64) {
     functor.template apply<int64_t>();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int32 and int64"));
   }
 }
 
 template <typename T, typename Context>
-void SparseWeightEmbeddingSparseGradKernel(const Context& ctx,
+void SparseWeightEmbeddingSparseGradKernel(const Context& dev_ctx,
                                            const DenseTensor& input,
                                            const SelectedRows& weight,
                                            const DenseTensor& out_grad,
                                            int64_t padding_idx,
                                            SelectedRows* weight_grad) {
   SparseWeightEmbeddingSparseGradCPUFunctor<T, Context> functor(
-      ctx, input, weight, out_grad, padding_idx, weight_grad);
+      dev_ctx, input, weight, out_grad, padding_idx, weight_grad);
 
   if (input.dtype() == phi::DataType::INT32) {
     functor.template apply<int>();
   } else if (input.dtype() == phi::DataType::INT64) {
     functor.template apply<int64_t>();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "emebdding input only support int32 and int64"));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "embedding input only support int32 and int64"));
   }
 }
 

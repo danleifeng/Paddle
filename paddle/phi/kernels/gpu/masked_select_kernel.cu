@@ -53,18 +53,25 @@ void MaskedSelectKernel(const Context& dev_ctx,
   DenseTensor mask_expand;
   DenseTensor x_expand;
 
+  if (x.numel() == 0 || mask.numel() == 0) {
+    out->Resize({0});
+    dev_ctx.template Alloc<T>(out);
+
+    return;
+  }
+
   auto expanded_size = funcs::MatrixGetBroadcastBatchPortion(
       common::vectorize(x.dims()), common::vectorize(mask.dims()));
 
-  DDim epxand_dims = common::make_ddim(expanded_size);
-  if (mask.dims() != epxand_dims) {
+  DDim expand_dims = common::make_ddim(expanded_size);
+  if (mask.dims() != expand_dims) {
     phi::ExpandKernel<bool, Context>(
         dev_ctx, mask, IntArray(expanded_size), &mask_expand);
   } else {
     mask_expand = mask;
   }
 
-  if (x.dims() != epxand_dims) {
+  if (x.dims() != expand_dims) {
     phi::ExpandKernel<T, Context>(
         dev_ctx, x, IntArray(expanded_size), &x_expand);
   } else {
@@ -75,7 +82,7 @@ void MaskedSelectKernel(const Context& dev_ctx,
   auto mask_dim = mask_expand.dims();
   PADDLE_ENFORCE_EQ(input_dim,
                     mask_dim,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The dim size of input and mask in OP(masked_selected) "
                         "must be equal, but got input dim:(%ld), mask dim: "
                         "(%ld). Please check input "

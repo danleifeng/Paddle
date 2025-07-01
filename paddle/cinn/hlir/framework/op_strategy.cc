@@ -14,6 +14,8 @@
 
 #include "paddle/cinn/hlir/framework/op_strategy.h"
 
+#include "paddle/common/errors.h"
+
 namespace {
 
 struct PyBindNodeAttrVisitor {
@@ -54,7 +56,7 @@ std::ostream& operator<<(std::ostream& os, const NodeAttr& node_attr) {
   for (auto& item : node_attr.attr_store) {
     std::stringstream os;
     PyBindNodeAttrVisitor visitor(os);
-    absl::visit(visitor, item.second);
+    std::visit(visitor, item.second);
     ss << "- " << os.str() << "\n";
   }
   os << ss.str();
@@ -75,27 +77,27 @@ std::shared_ptr<OpImpl> OpStrategy::SelectImpl(
       }
     }
   }
-  CHECK(res)
-      << "There is no available strategy implementation! SelectImpl failed!";
+  PADDLE_ENFORCE_NE(
+      res,
+      nullptr,
+      ::common::errors::NotFound(
+          "There is no available strategy implementation! SelectImpl failed!"));
   return res;
 }
 
-void OpStrategy::AddImpl(CINNCompute fcompute,
-                         CINNSchedule fschedule,
-                         std::string name,
-                         int plevel) {
+void OpStrategy::AddImpl(CINNCompute fcompute, std::string name, int plevel) {
   //! TODO(haozech) : here curr_cond should get the condition from outside.
   //! Expected : auto curr_cond = SpecializedCondition::Current();
   std::string curr_condition = "default";
   for (auto& op_spec : specializations) {
     if (op_spec->condition == curr_condition) {
-      op_spec->AddImpl(fcompute, fschedule, std::move(name), plevel);
+      op_spec->AddImpl(fcompute, std::move(name), plevel);
       return;
     }
   }
   std::shared_ptr<OpSpec> n = std::make_shared<OpSpec>();
   n->condition = curr_condition;
-  n->AddImpl(fcompute, fschedule, std::move(name), plevel);
+  n->AddImpl(fcompute, std::move(name), plevel);
   this->specializations.push_back(n);
 }
 

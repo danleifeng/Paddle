@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import sys
 import unittest
 
@@ -28,13 +29,18 @@ import paddle
 from paddle import base
 from paddle.base import core
 from paddle.nn.functional import avg_pool2d, lp_pool2d, max_pool2d
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestPool2D_API(unittest.TestCase):
     def setUp(self):
         np.random.seed(123)
-        self.places = [base.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(base.CUDAPlace(0))
 
@@ -765,7 +771,6 @@ class TestPool2D_API(unittest.TestCase):
             result = lp_pool2d_dg(input)
             np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
 
-    @test_with_pir_api
     def test_pool2d_static(self):
         paddle.enable_static()
         for place in self.places:
@@ -1056,6 +1061,94 @@ class TestPool2DError_API(unittest.TestCase):
                 out = lp_pool2d(x, 0, 2)
 
         self.assertRaises(ValueError, run_zero_norm_type)
+
+
+class TestPool2D_API_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(123)
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(base.CPUPlace())
+        if core.is_compiled_with_cuda():
+            self.places.append(base.CUDAPlace(0))
+
+    def check_avg_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 3, 0, 0]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            input.stop_gradient = False
+            result = avg_pool2d(input, kernel_size=2, stride=2, padding=0)
+
+            result_np = pool2D_forward_naive(
+                input_np,
+                ksize=[2, 2],
+                strides=[2, 2],
+                paddings=[0, 0],
+                pool_type='avg',
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+
+    def check_max_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 3, 0, 0]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            input.stop_gradient = False
+            result = max_pool2d(
+                input, kernel_size=2, stride=2, padding=0, return_mask=False
+            )
+
+            result_np = pool2D_forward_naive(
+                input_np,
+                ksize=[2, 2],
+                strides=[2, 2],
+                paddings=[0, 0],
+                pool_type='max',
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+
+    def check_lp_dygraph_results(self, place):
+        with base.dygraph.guard(place):
+            input_np = np.random.random([2, 0, 32, 32]).astype("float32")
+            input = paddle.to_tensor(input_np)
+            input.stop_gradient = False
+            norm_type = 2
+            result = lp_pool2d(
+                input,
+                norm_type,
+                kernel_size=2,
+                stride=1,
+                ceil_mode=False,
+            )
+
+            result_np = pool2D_forward_naive(
+                input_np,
+                ksize=[2, 2],
+                paddings=[0, 0],
+                strides=[1, 1],
+                ceil_mode=False,
+                norm_type=norm_type,
+                pool_type='lp',
+            )
+            np.testing.assert_allclose(result.numpy(), result_np, rtol=1e-05)
+            loss = paddle.sum(result)
+            loss.backward()
+            np.testing.assert_allclose(input.grad.shape, input.shape)
+
+    def test_pool2d(self):
+        for place in self.places:
+            self.check_max_dygraph_results(place)
+            self.check_avg_dygraph_results(place)
+            self.check_lp_dygraph_results(place)
 
 
 if __name__ == '__main__':

@@ -26,6 +26,10 @@ if(TENSORRT_FOUND)
   add_subdirectory(tensorrt)
 endif()
 
+if(WITH_OPENVINO)
+  add_subdirectory(openvino)
+endif()
+
 # fluid_modules exclude API-interface of inference/api and inference/capi_exp
 get_property(fluid_modules GLOBAL PROPERTY FLUID_MODULES)
 get_property(phi_modules GLOBAL PROPERTY PHI_MODULES)
@@ -38,13 +42,8 @@ add_subdirectory(api)
 # Create static inference library if needed
 # All static libs in inference/api
 set(STATIC_INFERENCE_API
-    paddle_inference_api
-    analysis_predictor
-    zero_copy_tensor
-    reset_tensor_array
-    analysis_config
-    paddle_pass_builder
-    ${mkldnn_quantizer_cfg})
+    paddle_inference_api analysis_predictor zero_copy_tensor reset_tensor_array
+    analysis_config paddle_pass_builder)
 
 set(OP_LIST
     ""

@@ -22,6 +22,7 @@
 
 namespace phi {
 
+// ArgMax implementation
 template <typename T, typename Context>
 void ArgMaxKernel(const Context& dev_ctx,
                   const DenseTensor& x,
@@ -30,11 +31,11 @@ void ArgMaxKernel(const Context& dev_ctx,
                   bool flatten,
                   DataType dtype,
                   DenseTensor* out) {
-  PADDLE_ENFORCE_GT(
+  PADDLE_ENFORCE_GE(
       x.numel(),
       0,
-      phi::errors::InvalidArgument(
-          "argmin/argmax input numel must > 0, bug got %d", x.numel()));
+      common::errors::InvalidArgument(
+          "argmin/argmax input numel must > 0, but got %d", x.numel()));
   using XPUType = typename XPUTypeTrait<T>::Type;
   PADDLE_ENFORCE_EQ(
       (dtype == DataType::UNDEFINED || dtype == DataType::INT32 ||
@@ -42,14 +43,13 @@ void ArgMaxKernel(const Context& dev_ctx,
       true,
       errors::InvalidArgument(
           "The attribute of dtype in xpu argmin/argmax must be [%s] or [%s], "
-          "but "
-          "received [%s]",
+          "but received [%s]",
           DataType::INT64,
           DataType::INT32,
           dtype));
   // TODO(ZHUI): fix dtype of out
   DDim x_dims;
-  int axis_val = axis.to<int>();
+  int64_t axis_val = axis.to<int64_t>();
   if (flatten) {
     x_dims = common::make_ddim({x.numel()});
     // if flatten, the axis just as 0
@@ -58,71 +58,156 @@ void ArgMaxKernel(const Context& dev_ctx,
     x_dims = x.dims();
     if (axis_val < 0) axis_val += x_dims.size();
   }
-  auto xdims_vec = common::vectorize<int>(x_dims);
-  int r = 0;
+  auto xdims_vec = common::vectorize<int64_t>(x_dims);
   if (dtype != DataType::INT32) {
     dev_ctx.template Alloc<int64_t>(out);
+    if (x.numel() == 0) return;
     if (x.dims().size() == 0) {
-      xpu::constant(dev_ctx.x_context(),
-                    out->data<int64_t>(),
-                    x.numel(),
-                    static_cast<int64_t>(0));
+      int r = xpu::constant(dev_ctx.x_context(),
+                            out->data<int64_t>(),
+                            x.numel(),
+                            static_cast<int64_t>(0));
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
       return;
     }
-    r = xpu::argmax(dev_ctx.x_context(),
-                    reinterpret_cast<const XPUType*>(x.data<T>()),
-                    out->data<int64_t>(),
-                    xdims_vec,
-                    axis_val);
-    PADDLE_ENFORCE_EQ(
-        r,
-        XPU_SUCCESS,
-        errors::External("XPU argmax kernel return wrong value[%d %s].",
-                         r,
-                         XPUAPIErrorMsg[r]));
+    int r = xpu::argmax(dev_ctx.x_context(),
+                        reinterpret_cast<const XPUType*>(x.data<T>()),
+                        out->data<int64_t>(),
+                        xdims_vec,
+                        axis_val);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "argmax");
   } else {
+    dev_ctx.template Alloc<int>(out);
+    if (x.numel() == 0) return;
     DenseTensor out_int64;
     out_int64.Resize(out->dims());
     dev_ctx.template Alloc<int64_t>(&out_int64);
     if (x.dims().size() == 0) {
-      xpu::constant(dev_ctx.x_context(),
-                    out_int64.data<int64_t>(),
-                    x.numel(),
-                    static_cast<int64_t>(0));
+      int r = xpu::constant(dev_ctx.x_context(),
+                            out_int64.data<int64_t>(),
+                            x.numel(),
+                            static_cast<int64_t>(0));
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
     } else {
-      r = xpu::argmax(dev_ctx.x_context(),
-                      reinterpret_cast<const XPUType*>(x.data<T>()),
-                      out_int64.data<int64_t>(),
-                      xdims_vec,
-                      axis_val);
+      int r = xpu::argmax(dev_ctx.x_context(),
+                          reinterpret_cast<const XPUType*>(x.data<T>()),
+                          out_int64.data<int64_t>(),
+                          xdims_vec,
+                          axis_val);
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "argmax");
     }
 
-    PADDLE_ENFORCE_EQ(
-        r,
-        XPU_SUCCESS,
-        errors::External("XPU argmax kernel return wrong value[%d %s].",
-                         r,
-                         XPUAPIErrorMsg[r]));
-    dev_ctx.template Alloc<int>(out);
-    r = xpu::cast_v2<int64_t, int>(dev_ctx.x_context(),
-                                   out_int64.data<int64_t>(),
-                                   out->data<int>(),
-                                   out_int64.numel());
-    PADDLE_ENFORCE_EQ(
-        r,
-        XPU_SUCCESS,
-        errors::External("XPU cast kernel return wrong value[%d %s].",
-                         r,
-                         XPUAPIErrorMsg[r]));
+    int r = xpu::cast<int64_t, int>(dev_ctx.x_context(),
+                                    out_int64.data<int64_t>(),
+                                    out->data<int>(),
+                                    out_int64.numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
   }
 }
+
+// ArgMin implementation
+template <typename T, typename Context>
+void ArgMinKernel(const Context& dev_ctx,
+                  const DenseTensor& x,
+                  const Scalar& axis,
+                  bool keepdims,
+                  bool flatten,
+                  DataType dtype,
+                  DenseTensor* out) {
+  PADDLE_ENFORCE_GE(
+      x.numel(),
+      0,
+      common::errors::InvalidArgument(
+          "argmin/argmax input numel must > 0, but got %d", x.numel()));
+  using XPUType = typename XPUTypeTrait<T>::Type;
+  PADDLE_ENFORCE_EQ(
+      (dtype == DataType::UNDEFINED || dtype == DataType::INT32 ||
+       dtype == DataType::INT64),
+      true,
+      errors::InvalidArgument(
+          "The attribute of dtype in xpu argmin/argmax must be [%s] or [%s], "
+          "but received [%s]",
+          DataType::INT64,
+          DataType::INT32,
+          dtype));
+
+  DDim x_dims;
+  int64_t axis_val = axis.to<int64_t>();
+  if (flatten) {
+    x_dims = common::make_ddim({x.numel()});
+    // If flatten, the axis just as 0
+    axis_val = 0;
+  } else {
+    x_dims = x.dims();
+    if (axis_val < 0) axis_val += x_dims.size();
+  }
+  auto xdims_vec = common::vectorize<int64_t>(x_dims);
+  if (dtype != DataType::INT32) {
+    dev_ctx.template Alloc<int64_t>(out);
+    if (x.numel() == 0) return;
+    if (x.dims().size() == 0) {
+      int r = xpu::constant(dev_ctx.x_context(),
+                            out->data<int64_t>(),
+                            x.numel(),
+                            static_cast<int64_t>(0));
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
+      return;
+    }
+    int r = xpu::argmin(dev_ctx.x_context(),
+                        reinterpret_cast<const XPUType*>(x.data<T>()),
+                        out->data<int64_t>(),
+                        xdims_vec,
+                        axis_val);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "argmin");
+  } else {
+    dev_ctx.template Alloc<int>(out);
+    if (x.numel() == 0) return;
+    DenseTensor out_int64;
+    out_int64.Resize(out->dims());
+    dev_ctx.template Alloc<int64_t>(&out_int64);
+    if (x.dims().size() == 0) {
+      int r = xpu::constant(dev_ctx.x_context(),
+                            out_int64.data<int64_t>(),
+                            x.numel(),
+                            static_cast<int64_t>(0));
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
+    } else {
+      int r = xpu::argmin(dev_ctx.x_context(),
+                          reinterpret_cast<const XPUType*>(x.data<T>()),
+                          out_int64.data<int64_t>(),
+                          xdims_vec,
+                          axis_val);
+      PADDLE_ENFORCE_XDNN_SUCCESS(r, "argmin");
+    }
+
+    int r = xpu::cast<int64_t, int>(dev_ctx.x_context(),
+                                    out_int64.data<int64_t>(),
+                                    out->data<int>(),
+                                    out_int64.numel());
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "cast");
+  }
+}
+
 }  // namespace phi
+
 PD_REGISTER_KERNEL(argmax,
                    XPU,
                    ALL_LAYOUT,
                    phi::ArgMaxKernel,
                    float,
                    int,
-                   phi::dtype::float16) {
+                   int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
+  kernel->OutputAt(0).SetDataType(phi::DataType::UNDEFINED);
+}
+
+PD_REGISTER_KERNEL(argmin,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::ArgMinKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
   kernel->OutputAt(0).SetDataType(phi::DataType::UNDEFINED);
 }

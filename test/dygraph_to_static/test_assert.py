@@ -18,7 +18,6 @@ import numpy
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
@@ -38,9 +37,11 @@ class TestAssertVariable(Dy2StTestBase):
     def _run(self, func, x, with_exception, to_static):
         with enable_to_static_guard(to_static):
             if with_exception:
-                with self.assertRaises(BaseException):  # noqa: B017
-                    with base.dygraph.guard():
-                        func(x)
+                with (
+                    self.assertRaises(BaseException),  # noqa: B017
+                    base.dygraph.guard(),
+                ):
+                    func(x)
             else:
                 with base.dygraph.guard():
                     func(x)
@@ -49,7 +50,6 @@ class TestAssertVariable(Dy2StTestBase):
         self._run(func, x, with_exception, True)
         self._run(func, x, with_exception, False)
 
-    @test_legacy_and_pt_and_pir
     def test_non_variable(self):
         self._run_dy_static(
             paddle.jit.to_static(dyfunc_assert_non_variable),
@@ -62,7 +62,6 @@ class TestAssertVariable(Dy2StTestBase):
             with_exception=False,
         )
 
-    @test_legacy_and_pt_and_pir
     def test_bool_variable(self):
         self._run_dy_static(
             paddle.jit.to_static(dyfunc_assert_variable),
@@ -75,7 +74,6 @@ class TestAssertVariable(Dy2StTestBase):
             with_exception=False,
         )
 
-    @test_legacy_and_pt_and_pir
     def test_int_variable(self):
         self._run_dy_static(
             paddle.jit.to_static(dyfunc_assert_variable),

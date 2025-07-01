@@ -22,7 +22,7 @@ namespace phi {
 
 template <typename T, typename Context>
 void CudnnLSTMKernel(
-    const Context& ctx,
+    const Context& dev_ctx,
     const DenseTensor& x,
     const DenseTensor& init_h,
     const DenseTensor& init_c,
@@ -40,7 +40,7 @@ void CudnnLSTMKernel(
     DenseTensor* last_c,
     DenseTensor* reserve,
     DenseTensor* state_out) {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "CPU is not support for cudnn_lstm now. Will be add in the future"));
 }
 

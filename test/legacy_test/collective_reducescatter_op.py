@@ -36,15 +36,15 @@ class TestCollectiveReduceScatter(TestCollectiveRunnerBase):
             toutdata = main_prog.current_block().create_var(
                 name="outofrs",
                 dtype='float32',
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
                 stop_gradient=False,
             )
             main_prog.global_block().append_op(
-                type="c_reducescatter",
-                inputs={'X': tindata},
+                type="reduce_scatter",
+                inputs={'x': tindata},
                 attrs={'ring_id': ring_id, 'nranks': nranks},
-                outputs={'Out': toutdata},
+                outputs={'out': toutdata},
             )
             main_prog.global_block().append_op(
                 type="c_sync_comm_stream",

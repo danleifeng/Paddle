@@ -19,9 +19,7 @@ limitations under the License. */
 #include "glog/logging.h"
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Pass;
 
@@ -36,7 +34,7 @@ void PassBuilder::RemovePass(size_t idx) {
   PADDLE_ENFORCE_GT(
       passes_.size(),
       idx,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Passes size is %d, %d is not a valid index.", passes_.size(), idx));
   passes_.erase(passes_.begin() + idx);  // NOLINT
 }
@@ -46,7 +44,7 @@ std::shared_ptr<Pass> PassBuilder::InsertPass(size_t idx,
   PADDLE_ENFORCE_GE(
       passes_.size(),
       idx,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Passes size is %d, %d is not a valid index.", passes_.size(), idx));
   std::shared_ptr<Pass> pass(
       ir::PassRegistry::Instance().Get(pass_type).release());
@@ -54,6 +52,4 @@ std::shared_ptr<Pass> PassBuilder::InsertPass(size_t idx,
   return passes_[idx];
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

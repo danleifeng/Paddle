@@ -63,7 +63,7 @@ class XPUTestPReluOp(XPUOpTestWrapper):
                     -1, -0.5, [1, 1, 1, self.x_shape[-1]]
                 )
             else:
-                self.alpha = np.random.uniform(-1, -0.5, [1] + self.x_shape[1:])
+                self.alpha = np.random.uniform(-1, -0.5, [1, *self.x_shape[1:]])
             self.alpha = self.alpha.astype(self.dtype)
 
             self.inputs = {'X': self.x, 'Alpha': self.alpha}
@@ -198,7 +198,7 @@ class TestModeError(unittest.TestCase):
         with base.program_guard(main_program, paddle.base.Program()):
             x = paddle.static.data(name='x', shape=[2, 3, 4, 5])
             try:
-                y = paddle.static.nn.prelu(x, 'channel', data_format='N')
+                y = paddle.nn.PReLU(3, data_format='N')(x)
             except ValueError as e:
                 pass
 

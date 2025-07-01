@@ -33,7 +33,7 @@ void KLDivLossGradKernel(const Context& dev_ctx,
     return;
   }
 
-  int r = XPU_SUCCESS;
+  int r = 0;
 
   if (log_target) {
     xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
@@ -62,7 +62,7 @@ void KLDivLossGradKernel(const Context& dev_ctx,
   }
 
   if ("none" != reduction) {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Not supported reduction [%s] in kldiv_loss_grad", reduction));
   }
 }

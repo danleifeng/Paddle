@@ -15,18 +15,17 @@
 
 #include <unordered_map>
 
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/integer_set.h"
 #include "paddle/cinn/ir/ir.h"
 #include "paddle/cinn/ir/ir_mutator.h"
 #include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/utils/ir_copy.h"
+#include "paddle/cinn/optim/ir_simplify.h"
 #include "paddle/cinn/optim/replace_mod_to_max.h"
 #include "paddle/cinn/optim/replace_var_with_expr.h"
 #include "paddle/cinn/utils/string.h"
 
-PD_DECLARE_bool(group_schedule_tiling_first);
 namespace cinn {
 namespace optim {
 
@@ -35,7 +34,11 @@ class AnalyzeLoopVarRange : public ir::IRMutator<> {
   void operator()(ir::Expr* expr) { ir::IRMutator<>::Visit(expr, expr); }
 
   void Visit(const ir::IfThenElse* op, Expr* expr) override {
-    CHECK(expr->As<ir::IfThenElse>());
+    PADDLE_ENFORCE_NOT_NULL(
+        expr->As<ir::IfThenElse>(),
+        ::common::errors::InvalidArgument(
+            "The expression could not be cast to ir::IfThenElse. Please check "
+            "the expression type."));
 
     const ir::IfThenElse* if_ir = expr->As<ir::IfThenElse>();
     const ir::LT* less_than_ir = if_ir->condition.As<ir::LT>();
@@ -53,7 +56,10 @@ class AnalyzeLoopVarRange : public ir::IRMutator<> {
 
   // Visit for and collect extent
   void Visit(const ir::For* op, Expr* expr) override {
-    CHECK(expr->As<ir::For>());
+    PADDLE_ENFORCE_NOT_NULL(expr->As<ir::For>(),
+                            ::common::errors::InvalidArgument(
+                                "The expression could not be cast to ir::For. "
+                                "Please check the expression type."));
     ir::For* for_ir = expr->As<ir::For>();
     std::string var_name = for_ir->loop_var->name;
     Expr extent = for_ir->extent;
@@ -178,7 +184,7 @@ class AnalyzeLoopVarRange : public ir::IRMutator<> {
                         0,
                         ::common::errors::PreconditionNotMet(
                             "Cannot find the extent of var %s", var_name));
-      size = common::AutoSimplify(size * var_name_to_extent_.at(var_name));
+      size = optim::ArithSimplify(size * var_name_to_extent_.at(var_name));
     }
 
     return size;
@@ -209,7 +215,7 @@ class AnalyzeLoopVarRange : public ir::IRMutator<> {
       }
     }
     ir::Expr tmp = ir::Add::Make(copy, ir::Expr(1));
-    ir::Expr simplified = common::AutoSimplify(tmp);
+    ir::Expr simplified = optim::ArithSimplify(tmp);
     if (simplified.As<ir::Min>()) {
       ir::Expr lhs = simplified.As<ir::Min>()->a();
       ir::Expr rhs = simplified.As<ir::Min>()->b();
@@ -294,8 +300,7 @@ class ResizeBufferFromAnalyzedRange : public ir::IRMutator<> {
       (*tensor_ptr)->shape = analyzed_shape;
       buffer->shape = analyzed_shape;
     }
-    if (FLAGS_group_schedule_tiling_first &&
-        buffer_name_to_size_.count(buffer_name) > 0) {
+    if (buffer_name_to_size_.count(buffer_name) > 0) {
       const ir::Expr& analyzed_size = buffer_name_to_size_.at(buffer_name);
       VLOG(6) << "Replacing shape of buffer " << buffer->name << " with shape "
               << analyzed_size;

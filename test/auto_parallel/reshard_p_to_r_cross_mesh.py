@@ -20,8 +20,10 @@ import paddle
 import paddle.distributed as dist
 from paddle.base import core
 from paddle.distributed.auto_parallel.static.pir_pass import (
-    apply_reshard_pass,
+    ReshardPasses,
 )
+from paddle.distributed.auto_parallel.static.utils import set_all_ops_op_role
+from paddle.distributed.fleet.meta_optimizers.common import OpRole
 
 
 class TestReshardPToRCrossMesh:
@@ -85,8 +87,8 @@ class TestReshardPToRCrossMesh:
                 reshard_tensor = paddle._C_ops.reshard(
                     input_tensor, self._out_mesh, [dist.Replicate()]
                 )
-
-            apply_reshard_pass(main_program)
+            set_all_ops_op_role(main_program.global_block(), OpRole.Forward)
+            ReshardPasses.apply_reshard_pass(main_program)
 
         ops = [op.name() for op in main_program.global_block().ops]
         if paddle.distributed.get_rank() == 0:
@@ -97,7 +99,7 @@ class TestReshardPToRCrossMesh:
                 'dist_op.shard_tensor',
                 'pd_op.send_v2',
                 'dist_op.reshard',
-                'pd_op.c_allreduce_sum',
+                'pd_op.all_reduce',
             ]
         else:
             np.testing.assert_equal(main_program.num_ops(), 5)
@@ -106,7 +108,7 @@ class TestReshardPToRCrossMesh:
                 'pd_op.data',
                 'dist_op.shard_tensor',
                 'pd_op.recv_v2',
-                'pd_op.c_allreduce_sum',
+                'pd_op.all_reduce',
             ]
         np.testing.assert_equal(
             ops,
@@ -141,7 +143,10 @@ class TestReshardPToRCrossMesh:
                 assert op_result_dist_attr.partial_status == {
                     0: paddle.distributed.ReduceType.kRedSum
                 }
-            elif op.name() == 'pd_op.c_allreduce_sum':
+            elif (
+                op.name() == 'pd_op.all_reduce'
+                and op.int_attr("reduce_type") == dist.ReduceOp.SUM
+            ):
                 continue
                 # check op dist_attr
                 assert op.dist_attr.num_operands() == 1

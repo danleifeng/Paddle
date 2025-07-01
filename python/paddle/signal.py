@@ -17,7 +17,11 @@ from typing import TYPE_CHECKING, Literal
 
 import paddle
 from paddle import _C_ops
-from paddle.framework import in_dynamic_mode
+from paddle.framework import (
+    in_dynamic_mode,
+    in_dynamic_or_pir_mode,
+    in_pir_mode,
+)
 
 from .base.data_feeder import check_variable_and_dtype
 from .base.layer_helper import LayerHelper
@@ -137,6 +141,8 @@ def frame(
                 f'but got ({frame_length}) > ({x.shape[axis]}).'
             )
         return _C_ops.frame(x, frame_length, hop_length, axis)
+    elif in_pir_mode():
+        return _C_ops.frame(x, frame_length, hop_length, axis)
     else:
         op_type = 'frame'
         check_variable_and_dtype(
@@ -242,7 +248,7 @@ def overlap_add(
 
     op_type = 'overlap_add'
 
-    if in_dynamic_mode():
+    if in_dynamic_or_pir_mode():
         out = _C_ops.overlap_add(x, hop_length, axis)
     else:
         check_variable_and_dtype(
@@ -272,7 +278,7 @@ def stft(
     center: bool = True,
     pad_mode: Literal["reflect", "constant"] = "reflect",
     normalized: bool = False,
-    onesided: bool = True,
+    onesided: bool | None = None,
     name: str | None = None,
 ) -> Tensor:
     r"""
@@ -311,7 +317,7 @@ def stft(
             Default: `False`
         onesided (bool, optional): Control whether to return half of the Fourier transform
             output that satisfies the conjugate symmetry condition when input is a real-valued
-            tensor. It can not be `True` if input is a complex tensor. Default: `True`
+            tensor. It can not be `True` if input is a complex tensor. Default: `None`
         name (str|None, optional): The default value is None. Normally there is no need for user
             to set this property. For more information, please refer to :ref:`api_guide_Name`.
 
@@ -412,6 +418,10 @@ def stft(
     x_frames = paddle.multiply(x_frames, window)
 
     norm = 'ortho' if normalized else 'backward'
+
+    if onesided is None:
+        onesided = not is_complex(x_frames)
+
     if is_complex(x_frames):
         assert (
             not onesided
@@ -648,6 +658,6 @@ def istft(
     out = out / window_envelop
 
     if x_rank == 2:
-        out.squeeze_(0)
+        out = paddle.squeeze(out, axis=0)
 
     return out

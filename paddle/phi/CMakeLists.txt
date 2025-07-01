@@ -51,6 +51,18 @@ set(PHI_DEPS
     cblas
     utf8proc
     common)
+if(WITH_CINN)
+  list(APPEND PHI_DEPS ap_phi)
+endif()
+
+list(
+  APPEND
+  PHI_DEPS
+  framework_proto
+  pass_desc_proto
+  data_feed_proto
+  trainer_desc_proto
+  heter_service_proto)
 
 set(INFERENCE_DEPS phi_profiler_proto auto_parallel_proto)
 
@@ -76,6 +88,10 @@ endif()
 
 if(WITH_GLOO)
   list(APPEND PHI_DEPS gloo)
+endif()
+
+if(WITH_FLAGCX)
+  list(APPEND PHI_DEPS flagcx)
 endif()
 
 if(WITH_CUDNN_FRONTEND)
@@ -130,8 +146,12 @@ if(WITH_AVX
    AND WITH_MKL)
   set_source_files_properties(
     kernels/fusion/cpu/fused_layer_norm_avx_kernel.cc
-    kernels/fusion/cpu/self_dp_attention_kernel.cc
     kernels/fusion/cpu/rms_norm_avx_kernel.cc
+    PROPERTIES
+      COMPILE_FLAGS
+      "${Wno_Maybe_Uninitialized} ${FMA_FLAG} ${AVX512F_FLAG} ${NO_INLINE}")
+  set_source_files_properties(
+    kernels/fusion/cpu/self_dp_attention_kernel.cc
     PROPERTIES COMPILE_FLAGS
                "${Wno_Maybe_Uninitialized} ${FMA_FLAG} ${AVX512F_FLAG}")
 endif()
@@ -170,6 +190,18 @@ else()
     DEPS ${PHI_DEPS})
 endif()
 
+set(NVTX3_PATH "${CUDA_INCLUDE_DIRS}/../targets/x86_64-linux/include/nvtx3/")
+get_filename_component(NVTX3_PATH "${NVTX3_PATH}" ABSOLUTE)
+
+if(EXISTS "${NVTX3_PATH}")
+  target_include_directories(phi_core PUBLIC "${NVTX3_PATH}")
+endif()
+
+# core/memory/allocation uses shm_unlink and requires the rt library
+if(UNIX AND NOT APPLE)
+  target_link_libraries(phi_core rt)
+endif()
+
 set(PHI_DUMMY_FILE ${CMAKE_CURRENT_BINARY_DIR}/phi_dummy.cpp)
 if(MSVC)
   set(PHI_DUMMY_FILE_CONTENT
@@ -184,13 +216,15 @@ add_library(phi ${PHI_BUILD_TYPE} ${PHI_DUMMY_FILE})
 target_link_libraries(phi phi_core)
 if(WITH_GPU OR WITH_ROCM)
   target_link_libraries(phi phi_gpu)
+  target_link_libraries(phi_gpu ${ROCM_HIPRTC_LIB})
+  target_link_libraries(phi_core ${ROCM_HIPRTC_LIB})
 endif()
 
 # Note(silverling): some functions in phi_core depend on phi_gpu,
 # when phi is built to dynamic library, it's fine. But when phi
 # is built to static library, phi_gpu should be linked to phi_core.
 # By the way, cyclic dependency is allowed in static library.
-if(WITH_ROCM AND NOT WITH_SHARED_PHI)
+if((WITH_GPU OR WITH_ROCM) AND NOT WITH_SHARED_PHI)
   target_link_libraries(phi_core phi_gpu)
 endif()
 

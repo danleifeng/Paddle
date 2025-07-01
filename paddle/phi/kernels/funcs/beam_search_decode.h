@@ -49,7 +49,7 @@ struct BeamSearchDecoder {
 
   /**
    * convert the result sentence_vector for each source sentence into two
-   * LodTensor.
+   * DenseTensor.
    * One is all candidate sentences with word id, one is all candidate sentences
    * with word score.
    * Param:
@@ -59,7 +59,7 @@ struct BeamSearchDecoder {
    *  reverse: whether ids of sentence in sentence_vector_list is reversed
    *  sort_by_score: whether to sort hypotheses of each sentence by scores.
    */
-  void ConvertSentenceVectorToLodTensor(
+  void ConvertSentenceVectorToDenseTensor(
       std::vector<SentenceVector<T>> sentence_vector_list,
       phi::DenseTensor* id_tensor,
       phi::DenseTensor* score_tensor,
@@ -80,7 +80,7 @@ struct BeamSearchDecoder {
 };
 
 template <typename T>
-void BeamSearchDecoder<T>::ConvertSentenceVectorToLodTensor(
+void BeamSearchDecoder<T>::ConvertSentenceVectorToDenseTensor(
     std::vector<SentenceVector<T>> sentence_vector_list,
     phi::DenseTensor* id_tensor,
     phi::DenseTensor* score_tensor,
@@ -91,7 +91,7 @@ void BeamSearchDecoder<T>::ConvertSentenceVectorToLodTensor(
   PADDLE_ENFORCE_NE(
       src_num,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "src_num is the sequence number of the first decoding step"
           ", indicating by Input(Ids)[0].lod[0].size."
           "src_num has wrong value."
@@ -136,7 +136,7 @@ void BeamSearchDecoder<T>::ConvertSentenceVectorToLodTensor(
                                sentence_vector_list[src_idx].size());
   }
 
-  phi::LoD lod;
+  phi::LegacyLoD lod;
   lod.push_back(source_level_lod);
   lod.push_back(sentence_level_lod);
 
@@ -161,12 +161,12 @@ void BeamSearchDecoder<T>::Backtrace(const TensorArray& step_ids,
   PADDLE_ENFORCE_NE(
       step_ids.empty(),
       true,
-      phi::errors::InvalidArgument("Input(Ids) should not be empty."
-                                   "But the Input(Ids) is empty."));
+      common::errors::InvalidArgument("Input(Ids) should not be empty."
+                                      "But the Input(Ids) is empty."));
   PADDLE_ENFORCE_EQ(
       step_ids.size(),
       step_scores.size(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of Input(Ids) and Input(Scores) should be "
           "the same. But the size of Input(Ids) and Input(Scores) "
           "are not equal."));
@@ -231,7 +231,7 @@ void BeamSearchDecoder<T>::Backtrace(const TensorArray& step_ids,
     }
   }
 
-  ConvertSentenceVectorToLodTensor(
+  ConvertSentenceVectorToDenseTensor(
       sentence_vector_list, id_tensor, score_tensor, true, true);
 }
 }  // namespace funcs

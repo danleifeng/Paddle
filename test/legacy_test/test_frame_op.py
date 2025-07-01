@@ -32,12 +32,12 @@ def frame_from_librosa(x, frame_length, hop_length, axis=-1):
     strides = np.asarray(x.strides)
 
     if axis == -1:
-        shape = list(x.shape)[:-1] + [frame_length, n_frames]
-        strides = list(strides) + [hop_length * x.itemsize]
+        shape = [*list(x.shape)[:-1], frame_length, n_frames]
+        strides = [*strides, hop_length * x.itemsize]
 
     elif axis == 0:
-        shape = [n_frames, frame_length] + list(x.shape)[1:]
-        strides = [hop_length * x.itemsize] + list(strides)
+        shape = [n_frames, frame_length, *list(x.shape)[1:]]
+        strides = [hop_length * x.itemsize, *strides]
 
     else:
         raise ValueError(f"Frame axis={axis} must be either 0 or -1")
@@ -74,7 +74,7 @@ class TestFrameOp(OpTest):
 
     def test_check_output(self):
         paddle.enable_static()
-        self.check_output()
+        self.check_output(check_pir=True)
         paddle.disable_static()
 
     def test_check_grad_normal(self):

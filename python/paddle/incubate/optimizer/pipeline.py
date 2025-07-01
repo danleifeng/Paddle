@@ -55,8 +55,8 @@ class PipelineOptimizer:
 
             >>> paddle.enable_static()
             >>> with base.device_guard("gpu:0"):
-            ...     x = paddle.static.data(name='x', shape=[-1, 1], dtype='int64', lod_level=0)
-            ...     y = paddle.static.data(name='y', shape=[-1, 1], dtype='int64', lod_level=0)
+            ...     x = paddle.static.data(name='x', shape=[-1, 1], dtype='int64')
+            ...     y = paddle.static.data(name='y', shape=[-1, 1], dtype='int64')
             ...     data_loader = base.io.DataLoader.from_generator(
             ...         feed_list=[x, y],
             ...         capacity=64,
@@ -165,15 +165,17 @@ class PipelineOptimizer:
             offset += 1
         block._insert_op(
             op_idx + 1 + offset,
-            type='c_allreduce_max'
-            if op.type == "reduce_any"
-            else 'c_allreduce_sum',
-            inputs={'X': temp_var if op.type == "reduce_any" else out_var},
-            outputs={'Out': temp_var if op.type == "reduce_any" else out_var},
+            type='all_reduce',
+            inputs={'x': temp_var if op.type == "reduce_any" else out_var},
+            outputs={'out': temp_var if op.type == "reduce_any" else out_var},
             attrs={
                 'ring_id': self.global_ring_id,
                 self._op_role_key: self._op_role.Optimize,
-                'use_calc_stream': True,
+                'reduce_type': (
+                    paddle.distributed.ReduceOp.MAX
+                    if op.type == "reduce_any"
+                    else paddle.distributed.ReduceOp.SUM
+                ),
             },
         )
         offset += 1
@@ -889,9 +891,11 @@ class PipelineOptimizer:
                         )
                         block._insert_op_without_sync(
                             index=index + extra_index_info['index'],
-                            type='send_v2'
-                            if not use_mp or is_param
-                            else 'partial_send',
+                            type=(
+                                'send_v2'
+                                if not use_mp or is_param
+                                else 'partial_send'
+                            ),
                             inputs={'X': var},
                             attrs={
                                 self._op_device_key: prev_dev,
@@ -930,9 +934,11 @@ class PipelineOptimizer:
                             extra_index_info['index'] += 1
                         block._insert_op_without_sync(
                             index=index + extra_index_info['index'],
-                            type='recv_v2'
-                            if not use_mp or is_param
-                            else 'partial_recv',
+                            type=(
+                                'recv_v2'
+                                if not use_mp or is_param
+                                else 'partial_recv'
+                            ),
                             outputs={'Out': [var]},
                             attrs={
                                 'out_shape': var_shape,

@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from paddle.distribution import distribution
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
 
 
@@ -87,7 +89,7 @@ class Independent(distribution.Distribution):
     def variance(self) -> Tensor:
         return self._base.variance
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         return self._base.sample(shape)
 
     def log_prob(self, value: Tensor) -> Tensor:

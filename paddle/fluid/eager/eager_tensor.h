@@ -52,11 +52,11 @@ class VariableCompatTensor
         paddle::framework::IsRegisteredVarType<T>(),
         "Not registered type. Please register T inside var_type_traits.h");
     PADDLE_ENFORCE_NOT_NULL(
-        holder_, phi::errors::NotFound("Variable is not initialized."));
+        holder_, common::errors::NotFound("Variable is not initialized."));
     PADDLE_ENFORCE_EQ(
         holder_->Type(),
         paddle::framework::VarTypeTrait<T>::kId,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The Variable type must be %s, but the type it holds is %s.",
             paddle::framework::ToTypeName(
                 paddle::framework::VarTypeTrait<T>::kId),
@@ -74,7 +74,7 @@ class VariableCompatTensor
       PADDLE_ENFORCE_EQ(
           holder_->Type(),
           paddle::framework::VarTypeTrait<T>::kId,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The Variable type must be %s, but the type it holds is %s.",
               paddle::framework::ToTypeName(
                   paddle::framework::VarTypeTrait<T>::kId),
@@ -93,7 +93,7 @@ class VariableCompatTensor
 
   int Type() const {
     PADDLE_ENFORCE_NOT_NULL(
-        holder_, phi::errors::NotFound("Variable is not initialized."));
+        holder_, common::errors::NotFound("Variable is not initialized."));
     return holder_->Type();
   }
 
@@ -104,31 +104,33 @@ class VariableCompatTensor
   ~VariableCompatTensor() override = default;
 
   int64_t numel() const override {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "VariableCompatTensor does not support `numel` method."));
   }
 
   const phi::DDim& dims() const override {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "VariableCompatTensor does not support `dims` method."));
   }
 
   phi::DataType dtype() const override {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "VariableCompatTensor does not support `dtype` method."));
   }
 
   phi::DataLayout layout() const override {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "VariableCompatTensor does not support `layout` method."));
   }
 
   const phi::Place& place() const override {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "VariableCompatTensor does not support `place` method."));
   }
 
   bool valid() const override { return IsInitialized(); }
+
+  bool has_allocation() const override { return IsInitialized(); }
 
   bool initialized() const override { return IsInitialized(); }
 
@@ -136,7 +138,7 @@ class VariableCompatTensor
                      phi::DataType dtype UNUSED,
                      size_t requested_size UNUSED = 0,
                      bool fake_alloc UNUSED = false) override {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "VariableCompatTensor does not support `AllocateFrom` method."));
   }
 
@@ -212,14 +214,14 @@ class EagerVariable final {
         ConstructVariableFromTensor<phi::SelectedRows>(tensor);
       } else if (IsVariableCompatTensor(tensor) &&
                  static_cast<const VariableCompatTensor*>(tensor.impl().get())
-                     ->IsType<paddle::framework::Vocab>()) {
-        ConstructVariableFromCompatTensor<paddle::framework::Vocab>(tensor);
+                     ->IsType<phi::Vocab>()) {
+        ConstructVariableFromCompatTensor<phi::Vocab>(tensor);
       } else if (IsVariableCompatTensor(tensor) &&
                  static_cast<const VariableCompatTensor*>(tensor.impl().get())
-                     ->IsType<paddle::framework::Strings>()) {
-        ConstructVariableFromCompatTensor<paddle::framework::Strings>(tensor);
+                     ->IsType<phi::Strings>()) {
+        ConstructVariableFromCompatTensor<phi::Strings>(tensor);
       } else {
-        PADDLE_THROW(phi::errors::Fatal(
+        PADDLE_THROW(common::errors::Fatal(
             "Unrecognized egr::EagerVariable type, only "
             "DenseTensor and SelectedRows are supported for now."));
       }
@@ -251,12 +253,12 @@ class EagerVariable final {
         return SetImplWithLegacyTensor<phi::SelectedRows>();
       } else {
         PADDLE_THROW(
-            phi::errors::Fatal("Unable to fetch underlying tensor "
-                               "from EagerVariable, only LoDTensor and "
-                               "Tensor are supported for now"));
+            common::errors::Fatal("Unable to fetch underlying tensor "
+                                  "from EagerVariable, only DenseTensor and "
+                                  "Tensor are supported for now"));
       }
     } else {
-      PADDLE_THROW(phi::errors::Fatal(
+      PADDLE_THROW(common::errors::Fatal(
           "Can not Sync EagerVariable %s whose paddle::framework::Variable is "
           "not initialized!",
           name()));
@@ -289,7 +291,7 @@ class EagerVariable final {
     PADDLE_ENFORCE_EQ(
         (tensor_dense.get() && tensor_dense),
         true,
-        phi::errors::Fatal(
+        common::errors::Fatal(
             "Tensor %s does not hold phi::SelectedRows or phi::DenseTensor. "
             "Or it holds empty impl, this should not happened since we should "
             "treat all kinds of tensor as what they are.",
@@ -311,10 +313,10 @@ class EagerVariable final {
         static_cast<VariableCompatTensor*>(tensor.impl().get());
     PADDLE_ENFORCE_NOT_NULL(
         compat_tensor,
-        phi::errors::Fatal("Tensor %s holds empty impl, this should not "
-                           "happened since we should "
-                           "treat all kinds of tensor as what they are.",
-                           tensor.name()));
+        common::errors::Fatal("Tensor %s holds empty impl, this should not "
+                              "happened since we should "
+                              "treat all kinds of tensor as what they are.",
+                              tensor.name()));
     *framework_holder = compat_tensor->Get<VarType>();
   }
 

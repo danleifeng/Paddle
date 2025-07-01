@@ -30,7 +30,6 @@ import paddle
 from paddle import base
 from paddle.framework import in_pir_mode
 from paddle.nn import Layer
-from paddle.pir_utils import test_with_pir_api
 from paddle.static.amp import decorate
 
 paddle.enable_static()
@@ -234,7 +233,7 @@ def train(net_type, use_cuda, save_dirname, is_local):
     paddle.seed(123)
     with base.program_guard(train_program, startup_prog):
         images = paddle.static.data(
-            name='pixel', shape=[-1] + data_shape, dtype='float32'
+            name='pixel', shape=[-1, *data_shape], dtype='float32'
         )
         label = paddle.static.data(name='label', shape=[-1, 1], dtype='int64')
 
@@ -629,12 +628,10 @@ class TestImageClassification(unittest.TestCase):
             {'lstm'},
         )
 
-    @test_with_pir_api
     def test_vgg_cuda(self):
         with self.scope_prog_guard():
             self.main('vgg', use_cuda=True)
 
-    @test_with_pir_api
     def test_resnet_cuda(self):
         with self.scope_prog_guard():
             self.main('resnet', use_cuda=True)
@@ -644,9 +641,11 @@ class TestImageClassification(unittest.TestCase):
         prog = base.Program()
         startup_prog = base.Program()
         scope = base.core.Scope()
-        with base.scope_guard(scope):
-            with base.program_guard(prog, startup_prog):
-                yield
+        with (
+            base.scope_guard(scope),
+            base.program_guard(prog, startup_prog),
+        ):
+            yield
 
 
 if __name__ == '__main__':

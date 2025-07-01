@@ -41,36 +41,36 @@ void SoftmaxKernel(const Context& dev_ctx,
     return;
   }
 
-  std::vector<int> x_dims;
+  std::vector<int64_t> x_dims;
   for (int i = 0; i < rank; i++) {
     x_dims.push_back(x.dims()[i]);
   }
 
-  int r = XPU_SUCCESS;
+  int r = 0;
   auto version =
       phi::backends::xpu::get_xpu_version(dev_ctx.GetPlace().GetDeviceId());
   if (version == phi::backends::xpu::XPUVersion::XPU1) {
     xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
     XPUType* clip_x_data_l3 = RAII_GUARD.alloc_l3_or_gm<XPUType>(x.numel());
-    r = xpu::clip_v2(dev_ctx.x_context(),
-                     reinterpret_cast<const XPUType*>(x.data<T>()),
-                     clip_x_data_l3,
-                     x.numel(),
-                     static_cast<XPUType>(-1e20),
-                     static_cast<XPUType>(1e20));
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "clip_v2");
+    r = xpu::clamp(dev_ctx.x_context(),
+                   reinterpret_cast<const XPUType*>(x.data<T>()),
+                   clip_x_data_l3,
+                   x.numel(),
+                   static_cast<XPUType>(-1e20),
+                   static_cast<XPUType>(1e20));
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "clamp");
     r = xpu::softmax<XPUType>(dev_ctx.x_context(),
                               clip_x_data_l3,
                               reinterpret_cast<XPUType*>(out->data<T>()),
                               x_dims,
-                              calc_axis);
+                              static_cast<int64_t>(calc_axis));
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "softmax");
   } else {
     r = xpu::softmax<XPUType>(dev_ctx.x_context(),
                               reinterpret_cast<const XPUType*>(x.data<T>()),
                               reinterpret_cast<XPUType*>(out->data<T>()),
                               x_dims,
-                              calc_axis);
+                              static_cast<int64_t>(calc_axis));
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "softmax");
   }
 }

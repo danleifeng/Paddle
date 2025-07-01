@@ -73,8 +73,9 @@ def vec_to_tril_matrix(
     # Calculate the dimension of the square matrix based on the last but one dimension of `p`
     # Define the output shape, which adds two dimensions for the square matrix
     shape0 = flatten_shape // last_dim
-    output_shape = sample_shape + (
-        shape0 // reduce(operator.mul, sample_shape),
+    output_shape = (
+        *sample_shape,
+        shape0 // reduce(operator.mul, sample_shape, 1),
         dim,
         dim,
     )
@@ -119,6 +120,7 @@ def tril_matrix_to_vec(mat: Tensor, diag: int = 0) -> Tensor:
     out_shape += (vec_len,)
 
     # Use the mask to index the lower triangular elements from the input matrix
+    tril_mask = paddle.broadcast_to(tril_mask, mat.shape)
     vec = paddle.masked_select(mat, tril_mask).reshape(out_shape)
     return vec
 
@@ -191,13 +193,6 @@ class LKJCholesky(distribution.Distribution):
             if not paddle.all(self.concentration > 0):
                 raise ValueError("The arg of `concentration` must be positive.")
 
-        self.concentration = concentration
-        if isinstance(self.concentration, float):
-            self.concentration = (self.concentration,)
-
-        if not isinstance(self.concentration, paddle.Tensor):
-            self.concentration = paddle.to_tensor(self.concentration)
-
         self.sample_method = sample_method
         batch_shape = self.concentration.shape
         event_shape = (dim, dim)
@@ -251,7 +246,7 @@ class LKJCholesky(distribution.Distribution):
         # u_hypersphere[..., 0, :].fill_(0.0)
         # u_hypersphere[..., 0, :] = 0.0
         u_hypersphere_other = u_hypersphere[..., 1:, :]
-        zero_shape = tuple(u_hypersphere.shape[:-2]) + (1, self.dim)
+        zero_shape = (*tuple(u_hypersphere.shape[:-2]), 1, self.dim)
         zero_row = paddle.zeros(shape=zero_shape, dtype=u_hypersphere.dtype)
         u_hypersphere = paddle.concat([zero_row, u_hypersphere_other], axis=-2)
 
@@ -259,9 +254,7 @@ class LKJCholesky(distribution.Distribution):
 
         # Fill diagonal elements; clamp for numerical stability
         eps = paddle.finfo(w.dtype).tiny
-        diag_elems = paddle.clip(
-            1 - paddle.sum(w**2, axis=-1), min=eps
-        ).sqrt()
+        diag_elems = paddle.clip(1 - paddle.sum(w**2, axis=-1), min=eps).sqrt()
 
         w += paddle.diag_embed(diag_elems)
         return w
@@ -285,8 +278,8 @@ class LKJCholesky(distribution.Distribution):
 
         # Construct the lower triangular matrix from the partial correlations
         last_dim = self.dim * (self.dim - 1) // 2
-        flatten_shape = last_dim * reduce(operator.mul, sample_shape)
-        if self.concentration.shape != ():
+        flatten_shape = last_dim * reduce(operator.mul, sample_shape, 1)
+        if len(self.concentration.shape) != 0:
             flatten_shape *= self.concentration.shape[-1]
 
         partial_correlation = partial_correlation.reshape((flatten_shape,))
@@ -321,32 +314,20 @@ class LKJCholesky(distribution.Distribution):
             partial_correlation.shape[-2], partial_correlation.shape[-1]
         )
         r = r * z1m_cumprod_sqrt_shifted
-        if sample_shape == (1,):
-            r = r.reshape((flatten_shape // last_dim, self.dim, self.dim))
         return r
 
-    def sample(self, sample_shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, sample_shape: Sequence[int] = []) -> Tensor:
         """Generate a sample using the specified sampling method."""
         if not isinstance(sample_shape, Sequence):
             raise TypeError('sample shape must be Sequence object.')
 
-        # for paddle.static, U need to set sample_shape
-        if sample_shape == ():
-            sample_shape = (1,)
         if self.sample_method == "onion":
             res = self._onion(sample_shape)
         else:
             res = self._cvine(sample_shape)
 
-        output_shape = []
-        if sample_shape != (1,):
-            output_shape = list(sample_shape)
-
-        if tuple(self.concentration.shape) != () and tuple(
-            self.concentration.shape
-        ) != (1,):
-            output_shape.extend(self.concentration.shape)
-
+        output_shape = list(sample_shape)
+        output_shape.extend(self.concentration.shape)
         output_shape.extend([self.dim, self.dim])
 
         return res.reshape(output_shape)

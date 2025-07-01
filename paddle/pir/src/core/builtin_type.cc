@@ -25,7 +25,7 @@ const DenseTensorType::Dim& DenseTensorType::dims() const {
 
 DataLayout DenseTensorType::data_layout() const { return storage()->layout_; }
 
-const DenseTensorType::LoD& DenseTensorType::lod() const {
+const DenseTensorType::LegacyLoD& DenseTensorType::lod() const {
   return storage()->lod_;
 }
 
@@ -53,6 +53,7 @@ DenseTensorType DenseTensorType::dyn_cast_impl(Type type) {
 
 }  // namespace pir
 
+IR_DEFINE_EXPLICIT_TYPE_ID(pir::UndefinedType)
 IR_DEFINE_EXPLICIT_TYPE_ID(pir::UInt8Type)
 IR_DEFINE_EXPLICIT_TYPE_ID(pir::Int8Type)
 IR_DEFINE_EXPLICIT_TYPE_ID(pir::VectorType)

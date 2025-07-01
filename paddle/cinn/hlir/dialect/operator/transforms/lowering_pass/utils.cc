@@ -15,6 +15,7 @@
 #include "paddle/cinn/hlir/dialect/operator/transforms/lowering_pass/utils.h"
 
 #include "paddle/cinn/adt/generate_map_expr.h"
+#include "paddle/cinn/hlir/dialect/operator/ir/attribute_storage.h"
 #include "paddle/cinn/hlir/dialect/operator/ir/generate_shape_util.h"
 #include "paddle/cinn/hlir/dialect/operator/ir/op_attribute.h"
 #include "paddle/cinn/hlir/dialect/operator/transforms/lowering_pass/collect_sym_expr.h"
@@ -35,58 +36,22 @@ using cinn::hlir::framework::PirCompiler;
 using cinn::hlir::framework::pir::CINNKernelInfo;
 using cinn::hlir::framework::pir::CompatibleInfo;
 
-std::vector<pir::Value> GetBlockOutsideInput(
-    const std::vector<pir::Operation*>& op_list) {
-  std::vector<pir::Value> vec_res;
-  std::unordered_set<::pir::Value> block_inner_output;
-  for (size_t k = 0; k < op_list.size(); ++k) {
-    for (size_t i = 0; i < op_list[k]->num_results(); ++i) {
-      block_inner_output.insert(op_list[k]->result(i));
-    }
-  }
-
-  std::unordered_set<::pir::Value> insert_value;
-  for (size_t k = 0; k < op_list.size(); ++k) {
-    for (size_t i = 0; i < op_list[k]->num_operands(); ++i) {
-      if (!block_inner_output.count(op_list[k]->operand_source(i)) &&
-          !insert_value.count(op_list[k]->operand_source(i))) {
-        vec_res.push_back(op_list[k]->operand_source(i));
-        insert_value.insert(op_list[k]->operand_source(i));
-      }
-    }
-  }
-  return vec_res;
-}
-
-std::unordered_map<OpLoweringGroupPtr,
-                   std::unordered_map<std::string, pir::Attribute>>
-CompileGroupAsOpAttribute(const std::vector<OpLoweringGroupPtr>& group_list) {
-  PirCompiler pir_compiler(cinn::common::DefaultDeviceTarget());
-  auto fn_ptr_res = pir_compiler.Build(group_list);
-
-  std::unordered_map<OpLoweringGroupPtr,
-                     std::unordered_map<std::string, pir::Attribute>>
-      result;
-  for (size_t i = 0; i < group_list.size(); ++i) {
-    std::unordered_map<std::string, ::pir::Attribute> op_attrs{
-        {cinn::dialect::JitKernelOp::kAttrName,
-         cinn::dialect::CINNKernelInfoAttribute::get(pir::IrContext::Instance(),
-                                                     fn_ptr_res[i])},
-    };
-    result.insert({group_list[i], op_attrs});
-  }
-  return result;
-}
-
 std::unordered_map<std::string, ::pir::Attribute> GetJitKernelAttr(
     const OpLoweringGroupPtr& group) {
-  const auto CreateKernelInfo = [&]() -> hlir::framework::pir::CINNKernelInfo {
-    if (FLAGS_enable_cinn_compile_cache) {
+  const auto& CreateKernelInfo = [&]() -> CINNKernelInfo {
+    const auto& CreateFromCache = [&]() {
       hlir::framework::pir::FusionInfo fusion_info(*group);
       return CompilationCache::Instance().GetKernelInfo(fusion_info);
-    } else {
+    };
+    const auto& CreateFromNewCompile = [&]() {
       PirCompiler pir_compiler(cinn::common::DefaultDeviceTarget());
       return pir_compiler.Build({group})[0];
+    };
+
+    if (FLAGS_enable_cinn_compile_cache) {
+      return CreateFromCache();
+    } else {
+      return CreateFromNewCompile();
     }
   };
   std::unordered_map<std::string, ::pir::Attribute> attrs{
@@ -110,9 +75,10 @@ OpLoweringGroupPtr BuildOpLoweringGroup(pir::Operation* fusion_op_ptr) {
                           : group_op_kind;
     }
   }
+
   PADDLE_ENFORCE_GT(fusion_op.attributes().count("group_info"),
                     0UL,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "fusion_op should have group_info attribute."));
 
   const auto attr = fusion_op.attribute("group_info")
@@ -120,7 +86,12 @@ OpLoweringGroupPtr BuildOpLoweringGroup(pir::Operation* fusion_op_ptr) {
                         .data();
 
   const auto& fn_name = attr.fn_name;
-  auto group = std::make_shared<OpLoweringGroup>(ops, fn_name);
+  auto group = std::make_shared<OpLoweringGroup>(
+      ops,
+      fn_name,
+      fusion_op_ptr->attribute("fusion_tracker")
+          .dyn_cast<cinn::dialect::FusionTrackerPtrAttribute>()
+          .data());
 
   group_op_kind =
       static_cast<int>(attr.op_pattern_kind) > static_cast<int>(group_op_kind)
@@ -143,11 +114,10 @@ OpLoweringGroupPtr BuildOpLoweringGroup(pir::Operation* fusion_op_ptr) {
   // Because the group is rebuilt, the order of group.output_values generated
   // by BuildCUDAJITInfo may not be same with the order bound in the yield op,
   // so a mapping is required.
-  UpdateGroupShapeOrDataExprs(group);
   if (FLAGS_cinn_enable_map_expr) {
     cinn::adt::TryGenerateMapExprFromGroup(group);
   }
-  // Rebuild other informations
+  // Rebuild other information
   // TODO(zhangyuqin1998): Do we need group.master_ops?
   return group;
 }
@@ -155,6 +125,8 @@ OpLoweringGroupPtr BuildOpLoweringGroup(pir::Operation* fusion_op_ptr) {
 void UpdateGroupShapeOrDataExprs(OpLoweringGroupPtr group) {
   auto& shape_analysis =
       pir::ShapeAnalysisManager::Instance().Get(group->GetParentProgram());
+  group->set_substitute_dimexpr_map(
+      CollectSubstituteDimExprMap(group, shape_analysis));
   group->set_value_to_shape_or_data_exprs(
       CreateGroupShapeOrDataExprs(group, shape_analysis));
 }

@@ -26,8 +26,10 @@
 - gather_nd
 - log
 - max
+- min
 - maximum
 - minimum
+- pow
 - prod
 - cumprod
 - roll
@@ -49,3 +51,10 @@
 - tanh
 - sign
 - sigmoid
+- index_put
+- index_add
+- isnan
+- isfinite
+- take_along_axis
+- variance
+- masked_fill

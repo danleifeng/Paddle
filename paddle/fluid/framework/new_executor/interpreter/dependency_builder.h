@@ -52,7 +52,7 @@ class DependencyBuilder {
     PADDLE_ENFORCE_GE(
         op_happens_before_->size(),
         0,
-        phi::errors::Unavailable("op_happen_before is not yet built"));
+        common::errors::Unavailable("op_happen_before is not yet built"));
     return op_happens_before_->at(prior_op_idx).at(posterior_op_idx);
   }
 
@@ -90,7 +90,7 @@ class DependencyBuilder {
 
   // ops_behind_ is the adjacency list about op to its posterior-ops, that is to
   // say, op_behind_[i] == {a, b, c} means op[a], op[b] and op[c] depend on
-  // op[i] directly or indirectly. ops_before_ is the revered adjacency list of
+  // op[i] directly or indirectly. ops_before_ is the reversed adjacency list of
   // ops_behind_.
   std::vector<std::vector<size_t>> ops_before_;
   std::vector<std::vector<size_t>> ops_behind_;
@@ -160,7 +160,7 @@ class DependencyBuilderSimplify {
     PADDLE_ENFORCE_GE(
         op_happens_before_.size(),
         0,
-        phi::errors::Unavailable("op_happen_before is not yet built"));
+        common::errors::Unavailable("op_happen_before is not yet built"));
     return op_happens_before_.at(prior_op_idx).at(posterior_op_idx);
   }
   std::vector<size_t> get_new_executor_order();
@@ -186,7 +186,7 @@ class DependencyBuilderSimplify {
 
   // ops_behind_ is the adjacency list about op to its posterior-ops, that is to
   // say, op_behind_[i] == {a, b, c} means op[a], op[b] and op[c] depend on
-  // op[i] directly or indirectly. ops_before_ is the revered adjacency list of
+  // op[i] directly or indirectly. ops_before_ is the reversed adjacency list of
   // ops_behind_.
   std::vector<std::vector<size_t>> ops_before_;
   std::vector<std::vector<size_t>> ops_behind_;

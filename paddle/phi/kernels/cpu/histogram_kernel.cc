@@ -16,6 +16,7 @@
 
 #include "paddle/phi/backends/cpu/cpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/phi/kernels/reduce_sum_kernel.h"
 #include "paddle/utils/optional.h"
@@ -26,8 +27,8 @@ void HistogramKernel(const Context& dev_ctx,
                      const DenseTensor& input,
                      const paddle::optional<DenseTensor>& weight,
                      int64_t bins,
-                     int min,
-                     int max,
+                     float min,
+                     float max,
                      bool density,
                      DenseTensor* output) {
   auto& nbins = bins;
@@ -37,6 +38,11 @@ void HistogramKernel(const Context& dev_ctx,
   const T* input_data = input.data<T>();
   auto weight_data = weight.get_ptr() ? weight.get_ptr()->data<T>() : nullptr;
   auto input_numel = input.numel();
+  if (input_numel == 0) {
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(output->dims())), 0, output);
+    return;
+  }
 
   if (input_data == nullptr) return;
 
@@ -57,7 +63,7 @@ void HistogramKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_LT(
       range,
       static_cast<double>(std::numeric_limits<T>::max()),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The range of max - min is out of range for target type, "
           "current kernel type is %s, the range should less than %f "
           "but now min is %f, max is %f.",
@@ -66,16 +72,17 @@ void HistogramKernel(const Context& dev_ctx,
           output_min,
           output_max));
 
-  PADDLE_ENFORCE_EQ((std::isinf(static_cast<float>(output_min)) ||
-                     std::isnan(static_cast<float>(output_max)) ||
-                     std::isinf(static_cast<float>(output_min)) ||
-                     std::isnan(static_cast<float>(output_max))),
-                    false,
-                    phi::errors::OutOfRange("range of min, max is not finite"));
+  PADDLE_ENFORCE_EQ(
+      (std::isinf(static_cast<float>(output_min)) ||
+       std::isnan(static_cast<float>(output_max)) ||
+       std::isinf(static_cast<float>(output_min)) ||
+       std::isnan(static_cast<float>(output_max))),
+      false,
+      common::errors::OutOfRange("range of min, max is not finite"));
   PADDLE_ENFORCE_GE(
       output_max,
       output_min,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "max must be larger or equal to min. If min and max are both zero, "
           "the minimum and maximum values of the data are used. "
           "But received max is %d, min is %d",

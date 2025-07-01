@@ -68,14 +68,12 @@ struct TensorBufferMapChecker : public ir::IRVisitorRequireReImpl<void> {
   VisitImpl(PolyFor);
   VisitImpl(Select);
   VisitImpl(Call);
-  VisitImpl(_Module_);
   VisitImpl(_Var_);
   VisitImpl(Load);
   VisitImpl(Store);
   VisitImpl(Alloc);
   VisitImpl(Free);
   VisitImpl(_Buffer_);
-  VisitImpl(_LoweredFunc_);
   VisitImpl(Let);
   VisitImpl(Reduce);
   VisitImpl(Ramp);
@@ -229,17 +227,7 @@ void TensorBufferMapChecker::Visit(const ir::Call *x) {
     Visit(x->write_args.back());
   }
 }
-void TensorBufferMapChecker::Visit(const ir::_Module_ *x) {
-  for (auto &e : x->functions) {
-    TensorBufferMapChecker::Visit(&e);
-  }
-  for (auto &e : x->buffers) {
-    TensorBufferMapChecker::Visit(&e);
-  }
-  for (auto &e : x->submodules) {
-    TensorBufferMapChecker::Visit(&e);
-  }
-}
+
 void TensorBufferMapChecker::Visit(const ir::_Var_ *x) {
   if (x->lower_bound.defined()) {
     TensorBufferMapChecker::Visit(x->lower_bound);
@@ -278,17 +266,16 @@ void TensorBufferMapChecker::Visit(const ir::_Buffer_ *x) {
   }
   TensorBufferMapChecker::Visit(x->elem_offset);
 }
-
-void TensorBufferMapChecker::Visit(const ir::_LoweredFunc_ *x) {
-  TensorBufferMapChecker::Visit(x->body);
-}
 void TensorBufferMapChecker::Visit(const ir::Let *x) {
   TensorBufferMapChecker::Visit(x->symbol);
   if (x->body.defined()) TensorBufferMapChecker::Visit(x->body);
 }
 void TensorBufferMapChecker::Visit(const ir::Reduce *x) {
   if (x->init.defined()) TensorBufferMapChecker::Visit(x->init);
-  CHECK(x->body.defined());
+  PADDLE_ENFORCE_EQ(
+      x->body.defined(),
+      true,
+      ::common::errors::InvalidArgument("The x->body is not defined"));
   TensorBufferMapChecker::Visit(x->body);
 }
 
@@ -349,7 +336,8 @@ void TensorBufferMapChecker::Visit(const ir::IntrinsicOp *x) {
 }
 
 void TensorBufferMapChecker::Visit(const ir::_BufferRange_ *x) {
-  CHECK(x);
+  PADDLE_ENFORCE_NOT_NULL(
+      x, ::common::errors::InvalidArgument("Check that _BufferRange_ is null"));
   TensorBufferMapChecker::Visit(x->buffer);
   for (auto &var : x->ranges) {
     if (var->lower_bound.defined()) {
@@ -362,7 +350,8 @@ void TensorBufferMapChecker::Visit(const ir::_BufferRange_ *x) {
 }
 
 void TensorBufferMapChecker::Visit(const ir::ScheduleBlock *x) {
-  CHECK(x);
+  PADDLE_ENFORCE_NOT_NULL(
+      x, ::common::errors::InvalidArgument("ScheduleBlock is null"));
   for (auto &var : x->iter_vars) {
     if (var->lower_bound.defined()) {
       TensorBufferMapChecker::Visit(&var->lower_bound);
@@ -381,7 +370,8 @@ void TensorBufferMapChecker::Visit(const ir::ScheduleBlock *x) {
 }
 
 void TensorBufferMapChecker::Visit(const ir::ScheduleBlockRealize *x) {
-  CHECK(x);
+  PADDLE_ENFORCE_NOT_NULL(
+      x, ::common::errors::InvalidArgument("ScheduleBlockRealize is null"));
   for (auto &value : x->iter_values) {
     TensorBufferMapChecker::Visit(&value);
   }
@@ -406,7 +396,9 @@ void CheckTensorBufferMap(const std::vector<ir::Expr> &expr,
               << " has wrong tensor-buffer map in " << e;
     }
     PADDLE_ENFORCE_EQ(
-        flag, true, phi::errors::InvalidArgument("CheckTensorBufferMap fail"));
+        flag,
+        true,
+        ::common::errors::InvalidArgument("CheckTensorBufferMap fail"));
   }
 }
 
@@ -419,7 +411,9 @@ void CheckTensorBufferMap(const std::vector<ir::Expr *> &expr,
               << " has wrong tensor-buffer map in " << e;
     }
     PADDLE_ENFORCE_EQ(
-        flag, true, phi::errors::InvalidArgument("CheckTensorBufferMap fail"));
+        flag,
+        true,
+        ::common::errors::InvalidArgument("CheckTensorBufferMap fail"));
   }
 }
 
@@ -430,7 +424,9 @@ void CheckTensorBufferMap(const Expr *expr, const std::string &process) {
             << " has wrong tensor-buffer map in " << expr;
   }
   PADDLE_ENFORCE_EQ(
-      flag, true, phi::errors::InvalidArgument("CheckTensorBufferMap fail"));
+      flag,
+      true,
+      ::common::errors::InvalidArgument("CheckTensorBufferMap fail"));
 }
 
 void CheckTensorBufferMap(const Expr &expr, const std::string &process) {
@@ -440,7 +436,9 @@ void CheckTensorBufferMap(const Expr &expr, const std::string &process) {
             << " has wrong tensor-buffer map in " << expr;
   }
   PADDLE_ENFORCE_EQ(
-      flag, true, phi::errors::InvalidArgument("CheckTensorBufferMap fail"));
+      flag,
+      true,
+      ::common::errors::InvalidArgument("CheckTensorBufferMap fail"));
 }
 
 }  // namespace optim

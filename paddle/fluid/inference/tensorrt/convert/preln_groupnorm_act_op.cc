@@ -16,9 +16,7 @@ limitations under the License. */
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 #include "paddle/fluid/inference/tensorrt/engine.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class PrelnGroupnormActOpConverter : public OpConverter {
  public:
@@ -41,7 +39,7 @@ class PrelnGroupnormActOpConverter : public OpConverter {
     std::string scale_name = op_desc.Input("Scale").front();
     std::string bias_name = op_desc.Input("Bias").front();
 
-    // get the presistable var's data
+    // get the persistable var's data
     auto GetWeight = [&](const std::string& var_name,
                          phi::DDim* dims) -> TensorRTEngine::Weight {
       auto* temp_var = scope.FindVar(var_name);
@@ -58,30 +56,26 @@ class PrelnGroupnormActOpConverter : public OpConverter {
     auto bias_weights = GetWeight(bias_name, &bias_dims);
     bool with_fp16 = engine_->WithFp16() && !engine_->disable_trt_plugin_fp16();
 
-    if (engine_->with_dynamic_shape()) {
-      plugin::PrelnGroupnormActPluginDynamic* plugin =
-          new plugin::PrelnGroupnormActPluginDynamic(
-              static_cast<const float*>(scale_weights.get().values),
-              scale_weights.get().count,
-              static_cast<const float*>(bias_weights.get().values),
-              bias_weights.get().count,
-              epsilon,
-              groups,
-              with_silu,
-              with_fp16);
-      nvinfer1::ILayer* groupnorm_layer =
-          engine_->AddDynamicPlugin(inputs.data(), 2, plugin);
-      std::vector<std::string> output_names;
-      output_names.emplace_back(op_desc.Output("Out_0").front());
-      output_names.emplace_back(op_desc.Output("Out_1").front());
-      ReplenishLayerAndOutput(
-          groupnorm_layer, "preln_groupnorm_act", output_names, test_mode);
-    }
+    plugin::PrelnGroupnormActPluginDynamic* plugin =
+        new plugin::PrelnGroupnormActPluginDynamic(
+            static_cast<const float*>(scale_weights.get().values),
+            scale_weights.get().count,
+            static_cast<const float*>(bias_weights.get().values),
+            bias_weights.get().count,
+            epsilon,
+            groups,
+            with_silu,
+            with_fp16);
+    nvinfer1::ILayer* groupnorm_layer =
+        engine_->AddDynamicPlugin(inputs.data(), 2, plugin);
+    std::vector<std::string> output_names;
+    output_names.emplace_back(op_desc.Output("Out_0").front());
+    output_names.emplace_back(op_desc.Output("Out_1").front());
+    ReplenishLayerAndOutput(
+        groupnorm_layer, "preln_groupnorm_act", output_names, test_mode);
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(preln_groupnorm_act, PrelnGroupnormActOpConverter);

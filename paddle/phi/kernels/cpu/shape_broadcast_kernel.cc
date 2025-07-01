@@ -27,7 +27,7 @@ std::vector<T> ComputeBroadcastShape(const paddle::array_ref<T>& large_shape,
   PADDLE_ENFORCE_GE(
       large_shape.size(),
       small_shape.size(),
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Size of large_shape is expected to be greater or equal size of "
           "small_shape, but got [%d] >= [%d].",
           large_shape.size(),
@@ -45,29 +45,29 @@ std::vector<T> ComputeBroadcastShape(const paddle::array_ref<T>& large_shape,
 }
 
 template <typename T, typename Context>
-void ShapeBroadcastKernel(const Context& ctx,
+void ShapeBroadcastKernel(const Context& dev_ctx,
                           const DenseTensor& x_shape,
                           const DenseTensor& y_shape,
                           DenseTensor* out) {
-  PADDLE_ENFORCE_EQ(
-      x_shape.dims().size(),
-      1,
-      phi::errors::InvalidArgument("Invalid input tensor. The rank of x_shape "
-                                   "should be equal 1, but now received [%d].",
-                                   x_shape.dims().size()));
-  PADDLE_ENFORCE_EQ(
-      y_shape.dims().size(),
-      1,
-      phi::errors::InvalidArgument("Invalid input tensor. The rank of y_shape "
-                                   "should be equal 1, but now received [%d].",
-                                   y_shape.dims().size()));
+  PADDLE_ENFORCE_EQ(x_shape.dims().size(),
+                    1,
+                    common::errors::InvalidArgument(
+                        "Invalid input tensor. The rank of x_shape "
+                        "should be equal 1, but now received [%d].",
+                        x_shape.dims().size()));
+  PADDLE_ENFORCE_EQ(y_shape.dims().size(),
+                    1,
+                    common::errors::InvalidArgument(
+                        "Invalid input tensor. The rank of y_shape "
+                        "should be equal 1, but now received [%d].",
+                        y_shape.dims().size()));
   paddle::array_ref<T> x_shape_data(x_shape.data<T>(), x_shape.numel());
   paddle::array_ref<T> y_shape_data(y_shape.data<T>(), y_shape.numel());
   const auto& output_data =
       x_shape_data.size() > y_shape_data.size()
           ? ComputeBroadcastShape(x_shape_data, y_shape_data)
           : ComputeBroadcastShape(y_shape_data, x_shape_data);
-  T* out_data = ctx.template HostAlloc<T>(out);
+  T* out_data = dev_ctx.template HostAlloc<T>(out);
   int64_t out_numel = out->numel();
   for (int i = 0; i < out_numel; ++i) {
     out_data[i] = output_data[i];

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import os
 import random
 import unittest
 
@@ -21,7 +22,6 @@ import numpy as np
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestRegularizer(unittest.TestCase):
@@ -32,7 +32,13 @@ class TestRegularizer(unittest.TestCase):
         ]
 
     def get_places(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
         return places
@@ -40,10 +46,12 @@ class TestRegularizer(unittest.TestCase):
     @contextlib.contextmanager
     def scope_prog_guard(self, main_prog, startup_prog):
         scope = base.core.Scope()
-        with base.unique_name.guard():
-            with base.scope_guard(scope):
-                with base.program_guard(main_prog, startup_prog):
-                    yield
+        with (
+            base.unique_name.guard(),
+            base.scope_guard(scope),
+            base.program_guard(main_prog, startup_prog),
+        ):
+            yield
 
     def run_program(self, place, feed_list):
         exe = base.Executor(place)
@@ -73,7 +81,7 @@ class TestRegularizer(unittest.TestCase):
             main_prog=main_prog, startup_prog=startup_prog
         ):
             data = paddle.static.data(
-                name="words", shape=[-1, 1], dtype="int64", lod_level=1
+                name="words", shape=[-1, 1], dtype="int64"
             )
             label = paddle.static.data(
                 name="label", shape=[-1, 1], dtype="int64"
@@ -99,7 +107,7 @@ class TestRegularizer(unittest.TestCase):
             main_prog=main_prog, startup_prog=startup_prog
         ):
             data = paddle.static.data(
-                name="words", shape=[-1, 1], dtype="int64", lod_level=1
+                name="words", shape=[-1, 1], dtype="int64"
             )
             label = paddle.static.data(
                 name="label", shape=[-1, 1], dtype="int64"
@@ -119,7 +127,6 @@ class TestRegularizer(unittest.TestCase):
             param_sum = self.run_program(place, [data, label])
         return param_sum
 
-    @test_with_pir_api
     def test_repeated_regularization(self):
         paddle.enable_static()
         l1 = paddle.regularizer.L1Decay(0.1)

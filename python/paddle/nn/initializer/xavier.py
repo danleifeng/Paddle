@@ -124,8 +124,9 @@ class XavierInitializer(Initializer):
             else var.shape
         )
         # to be compatible of fp16 initializers
-        if var.dtype == core.VarDesc.VarType.FP16 or (
-            var.dtype == core.VarDesc.VarType.BF16 and not self._uniform
+        origin_dtype = var.dtype
+        if origin_dtype == core.VarDesc.VarType.FP16 or (
+            origin_dtype == core.VarDesc.VarType.BF16 and not self._uniform
         ):
             out_dtype = core.VarDesc.VarType.FP32
             out_var = block.create_var(
@@ -134,22 +135,27 @@ class XavierInitializer(Initializer):
                 ),
                 shape=out_var_shape,
                 dtype=out_dtype,
-                type=core.VarDesc.VarType.LOD_TENSOR,
+                type=core.VarDesc.VarType.DENSE_TENSOR,
                 persistable=False,
             )
         elif (
-            var.dtype in (core.DataType.FLOAT16, core.DataType.BFLOAT16)
+            origin_dtype in (core.DataType.FLOAT16, core.DataType.BFLOAT16)
             and not self._uniform
         ):
             out_dtype = core.DataType.FLOAT32
             out_var = var
         else:
-            out_dtype = var.dtype
+            out_dtype = origin_dtype
             out_var = var
 
         if in_dygraph_mode():
             if self._uniform:
-                limit = self._gain * math.sqrt(6.0 / float(fan_in + fan_out))
+                if 0 in [fan_in, fan_out]:
+                    limit = 0.0
+                else:
+                    limit = self._gain * math.sqrt(
+                        6.0 / float(fan_in + fan_out)
+                    )
                 out_var = _C_ops.uniform(
                     out_var_shape,
                     out_dtype,
@@ -159,7 +165,10 @@ class XavierInitializer(Initializer):
                     _current_expected_place(),
                 )
             else:
-                std = self._gain * math.sqrt(2.0 / float(fan_in + fan_out))
+                if 0 in [fan_in, fan_out]:
+                    std = 0.0
+                else:
+                    std = self._gain * math.sqrt(2.0 / float(fan_in + fan_out))
 
                 place = _current_expected_place()
                 out_var = _C_ops.gaussian(
@@ -171,10 +180,16 @@ class XavierInitializer(Initializer):
                     place,
                 )
 
-            if var.dtype == core.VarDesc.VarType.FP16 or (
-                var.dtype == core.VarDesc.VarType.BF16 and not self._uniform
+            if origin_dtype == core.VarDesc.VarType.FP16 or (
+                origin_dtype
+                in [
+                    core.VarDesc.VarType.BF16,
+                    core.DataType.FLOAT16,
+                    core.DataType.BFLOAT16,
+                ]
+                and not self._uniform
             ):
-                out_var = _C_ops.cast(out_var, var.dtype)
+                out_var = _C_ops.cast(out_var, origin_dtype)
             if isinstance(var, framework.EagerParamBase) and var.is_dist():
                 # lazy init for dist tensor
                 out_var = (
@@ -186,7 +201,12 @@ class XavierInitializer(Initializer):
             return None
         elif in_pir_mode():
             if self._uniform:
-                limit = self._gain * math.sqrt(6.0 / float(fan_in + fan_out))
+                if 0 in [fan_in, fan_out]:
+                    limit = 0.0
+                else:
+                    limit = self._gain * math.sqrt(
+                        6.0 / float(fan_in + fan_out)
+                    )
                 out_var = paddle._pir_ops.uniform(
                     out_var.shape,
                     out_dtype,
@@ -196,7 +216,10 @@ class XavierInitializer(Initializer):
                     _current_expected_place(),
                 )
             else:
-                std = self._gain * math.sqrt(2.0 / float(fan_in + fan_out))
+                if 0 in [fan_in, fan_out]:
+                    std = 0.0
+                else:
+                    std = self._gain * math.sqrt(2.0 / float(fan_in + fan_out))
                 out_var = _C_ops.gaussian(
                     out_var.shape,
                     0.0,
@@ -207,15 +230,20 @@ class XavierInitializer(Initializer):
                 )
 
             if (
-                var.dtype in (core.DataType.FLOAT16, core.DataType.BFLOAT16)
+                origin_dtype in (core.DataType.FLOAT16, core.DataType.BFLOAT16)
                 and not self._uniform
             ):
-                return _C_ops.cast(out_var, var.dtype)
+                return _C_ops.cast(out_var, origin_dtype)
 
             return out_var
         else:
             if self._uniform:
-                limit = self._gain * math.sqrt(6.0 / float(fan_in + fan_out))
+                if 0 in [fan_in, fan_out]:
+                    limit = 0.0
+                else:
+                    limit = self._gain * math.sqrt(
+                        6.0 / float(fan_in + fan_out)
+                    )
                 op = block.append_op(
                     type="uniform_random",
                     inputs={},
@@ -230,7 +258,10 @@ class XavierInitializer(Initializer):
                     stop_gradient=True,
                 )
             else:
-                std = self._gain * math.sqrt(2.0 / float(fan_in + fan_out))
+                if 0 in [fan_in, fan_out]:
+                    std = 0.0
+                else:
+                    std = self._gain * math.sqrt(2.0 / float(fan_in + fan_out))
                 op = block.append_op(
                     type="gaussian_random",
                     outputs={"Out": out_var},
@@ -244,14 +275,17 @@ class XavierInitializer(Initializer):
                     stop_gradient=True,
                 )
 
-            if var.dtype == core.VarDesc.VarType.FP16 or (
-                var.dtype == core.VarDesc.VarType.BF16 and not self._uniform
+            if origin_dtype == core.VarDesc.VarType.FP16 or (
+                origin_dtype == core.VarDesc.VarType.BF16 and not self._uniform
             ):
                 block.append_op(
                     type="cast",
                     inputs={"X": out_var},
                     outputs={"Out": var},
-                    attrs={"in_dtype": out_var.dtype, "out_dtype": var.dtype},
+                    attrs={
+                        "in_dtype": out_var.dtype,
+                        "out_dtype": origin_dtype,
+                    },
                 )
 
             var.op = op

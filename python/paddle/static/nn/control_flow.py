@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import warnings
 from functools import cached_property, partial, reduce
+from typing import Any
 
 import paddle
 from paddle import _C_ops
@@ -469,7 +470,7 @@ def get_inputs_outputs_in_block(
             for out_var_name in op.output(oname):
                 inner_outputs.add(out_var_name)
 
-    # Step2: Remove LOD_TENSOR_ARRAY created in current control flow block.
+    # Step2: Remove DENSE_TENSOR_ARRAY created in current control flow block.
     remove_inner_inputs = set()
     parent_block = helper.main_program.block(current_block.parent_idx)
 
@@ -481,7 +482,8 @@ def get_inputs_outputs_in_block(
         if (
             not parent_block_var
             and current_block_var
-            and current_block_var.type == core.VarDesc.VarType.LOD_TENSOR_ARRAY
+            and current_block_var.type
+            == core.VarDesc.VarType.DENSE_TENSOR_ARRAY
         ):
             remove_inner_inputs.add(in_var_name)
 
@@ -549,7 +551,7 @@ class While:
             >>> loop_len = paddle.full(shape=[1], dtype='int64', fill_value=10)
             >>> one = paddle.full(shape=[1], dtype='float32', fill_value=1)
             >>> data = paddle.static.data(name='data', shape=[1], dtype='float32')
-            >>> sums = paddle.full(shape=[1], dtype='float32', fill_value=0)  # Define the variable to be obtained >>> ouside of While, which name should be different from the variable inside the While to be obtained
+            >>> sums = paddle.full(shape=[1], dtype='float32', fill_value=0)  # Define the variable to be obtained outside of While, which name should be different from the variable inside the While to be obtained
 
             >>> cond = paddle.less_than(x=i, y=loop_len)
             >>> while_op = paddle.static.nn.control_flow.While(cond=cond)
@@ -635,7 +637,7 @@ support_ret_buildin_type = (bool, float, int)
 
 def assign_skip_lod_tensor_array(input, output):
     """
-    Assign input to output, but skip the process of copying LoDTensorArray unless it's created in while_block.
+    Assign input to output, but skip the process of copying DenseTensorArray unless it's created in while_block.
     """
 
     def has_shape_diff(x_var, y_var):
@@ -655,7 +657,7 @@ def assign_skip_lod_tensor_array(input, output):
             output = input
         return
 
-    if input.type == core.VarDesc.VarType.LOD_TENSOR_ARRAY:
+    if input.type == core.VarDesc.VarType.DENSE_TENSOR_ARRAY:
         main_program = input.block.program
         parent_block = main_program.block(
             main_program.current_block().parent_idx
@@ -679,6 +681,77 @@ def assign_skip_lod_tensor_array(input, output):
             paddle.assign(input, output)
 
 
+def create_fake_value_for_undefined_var(while_op, value):
+    # Create a fake value for create WhileOp, and set its type and stop_gradient as next_var
+    stop_gradient = value.stop_gradient
+    fake_value = paddle.full(shape=[], dtype=value.dtype, fill_value=0)
+    fake_value_op = fake_value.get_defining_op()
+    fake_value_op.move_before(while_op.as_operation())
+
+    fake_value.set_type(value.type())
+    fake_value.stop_gradient = stop_gradient
+    while_op.add_extra_input(fake_value)
+
+    block_arg = while_op.body().add_arg(value.type())
+    block_arg.stop_gradient = stop_gradient
+    return fake_value, block_arg
+
+
+class LoopVar:
+    def __init__(self, curr_var, next_var=None, block_arg=None):
+        self.curr_var = curr_var
+        self.next_var = next_var
+        self.block_arg = block_arg
+        self._is_fake = False
+
+    @property
+    def is_variable_curr_var(self):
+        return isinstance(self.curr_var, paddle.pir.Value)
+
+    @property
+    def is_undefined_curr_var(self):
+        return isinstance(
+            self.curr_var, paddle.jit.dy2static.utils.UndefinedVar
+        )
+
+    @property
+    def is_variable_next_var(self):
+        return isinstance(self.next_var, paddle.pir.Value)
+
+    @property
+    def is_fake(self):
+        return self._is_fake
+
+    def bind_block_arg(self, block_arg):
+        self.block_arg = block_arg
+
+    def bind_next_var(self, next_var):
+        self.next_var = next_var
+
+    def infer_type_with_next_var(self, next_var, while_op):
+        assert self.is_undefined_curr_var
+
+        def create_loop_var_like(while_op, next_var):
+            fake_value, block_arg = create_fake_value_for_undefined_var(
+                while_op, next_var
+            )
+            loop_var = LoopVar(fake_value, next_var, block_arg)
+            loop_var._is_fake = True
+            return loop_var
+
+        if isinstance(next_var, paddle.pir.Value):
+            return create_loop_var_like(while_op, next_var)
+        if is_sequence(next_var):
+            return map_structure(
+                lambda var: self.infer_type_with_next_var(var, while_op),
+                next_var,
+            )
+        return LoopVar(self.curr_var, next_var, self.block_arg)
+
+    def __repr__(self):
+        return f"LoopVar(curr_var={self.curr_var}, next_var={self.next_var}, block_arg={self.block_arg})"
+
+
 def while_loop(cond, body, loop_vars, is_test=False, name=None):
     """
     :api_attr: Static Graph
@@ -692,15 +765,15 @@ def while_loop(cond, body, loop_vars, is_test=False, name=None):
     Args:
         cond(Callable): A callable returning a boolean tensor controlling whether to continue looping. And ``cond`` takes
             as many arguments as ``loop_vars`` .
-        body(Callable): A callable returning a tuple or list of tensors or LoDTensorArrays of the same arity
+        body(Callable): A callable returning a tuple or list of tensors or DenseTensorArrays of the same arity
             (length and structure) and types as ``loops_vars`` . And ``body`` takes as many arguments as ``loop_vars`` .
-        loop_vars(list|tuple): A list or tuple of tensors or LoDTensorArrays that is passed to both ``cond`` and ``body`` .
+        loop_vars(list|tuple): A list or tuple of tensors or DenseTensorArrays that is passed to both ``cond`` and ``body`` .
         is_test(bool, optional): A flag indicating whether execution is in test phase. Default value is False.
         name(str, optional): Normally there is no need for users to set this property. For more information, please
             refer to :ref:`api_guide_Name`. Default is None.
 
     Returns:
-        A list or tuple of Tensors or LoDTensorArrays which returned by ``body`` .
+        A list or tuple of Tensors or DenseTensorArrays which returned by ``body`` .
 
     Examples:
         .. code-block:: python
@@ -747,101 +820,153 @@ def while_loop(cond, body, loop_vars, is_test=False, name=None):
         )
 
     if in_pir_mode():
-        from paddle.jit.dy2static.utils import UndefinedVar
 
-        def create_fake_value_for_undefined_var():
-            # Create a fake value for create WhileOp, it's type will be reset after body is executed.
-            return paddle.full(shape=[], fill_value=0)
+        def cast_value_in_amp(loop_var):
+            amp_attrs = core._get_amp_attrs()
+            amp_level = amp_attrs._amp_level
+            apply_amp_level_list = [
+                core.AmpLevel.O1,
+                core.AmpLevel.O2,
+            ]
+            if amp_level not in apply_amp_level_list:
+                return
+            if not loop_var.is_variable_curr_var:
+                return
+            if loop_var.curr_var.dtype != loop_var.next_var.dtype:
+                cast_out_var = paddle.cast(
+                    loop_var.next_var, loop_var.curr_var.dtype
+                )
+                loop_var.next_var = cast_out_var
 
-        flattened_loop_vars = flatten(loop_vars)
-
-        undefined_var_mapping = {
-            idx: create_fake_value_for_undefined_var()
-            for idx, var in enumerate(flattened_loop_vars)
-            if isinstance(var, UndefinedVar)
-        }
-        unified_loop_vars = [
-            undefined_var_mapping[idx] if isinstance(var, UndefinedVar) else var
-            for idx, var in enumerate(flattened_loop_vars)
+        loop_vars: Any = map_structure(LoopVar, loop_vars)
+        variable_loop_vars = [
+            loop_var
+            for loop_var in flatten(loop_vars)
+            if loop_var.is_variable_curr_var
         ]
-        while_op = build_while_op(pre_cond, unified_loop_vars)
+        while_op = build_while_op(
+            pre_cond, [var.curr_var for var in variable_loop_vars]
+        )
         with while_op.body() as cur_block:
-            args = pack_sequence_as(loop_vars, cur_block.args())
+            assert len(cur_block.args()) == len(variable_loop_vars)
+            for loop_var, arg in zip(variable_loop_vars, cur_block.args()):
+                loop_var.bind_block_arg(arg._clone())
+
+            # For non-variable inputs, we use the original value directly.
+            args = map_structure(
+                lambda var: (
+                    var.block_arg if var.is_variable_curr_var else var.curr_var
+                ),
+                loop_vars,
+            )
             next_vars = body(*args)
+
+            if not isinstance(next_vars, (list, tuple)):
+                next_vars = [next_vars]
+
+            def infer_loop_vars_type_with_next_vars(loop_vars, next_vars):
+                def infer_loop_var_type_with_next_var(loop_var, next_var):
+                    if is_sequence(loop_var):
+                        return map_structure(
+                            infer_loop_var_type_with_next_var,
+                            loop_var,
+                            next_var,
+                        )
+                    if loop_var.is_undefined_curr_var:
+                        new_loop_var = loop_var.infer_type_with_next_var(
+                            next_var, while_op
+                        )
+                    else:
+                        loop_var.bind_next_var(next_var)
+                        new_loop_var = loop_var
+                    return new_loop_var
+
+                new_loop_vars = []
+                for next_var, loop_var in zip(next_vars, loop_vars):
+                    new_loop_vars.append(
+                        infer_loop_var_type_with_next_var(loop_var, next_var)
+                    )
+                return new_loop_vars
 
             try:
                 assert_same_structure(
-                    flatten(next_vars), unified_loop_vars, check_types=False
+                    loop_vars,
+                    next_vars,
+                    check_types=False,
+                    skip_if=lambda x: (
+                        isinstance(x, LoopVar)
+                        and isinstance(
+                            x.curr_var, paddle.jit.dy2static.utils.UndefinedVar
+                        )
+                    )
+                    or (isinstance(x, paddle.jit.dy2static.utils.UndefinedVar)),
                 )
             except ValueError as e:
                 raise ValueError(
                     "body in while_loop should return the same arity "
                     f"(length and structure) as loop_vars: {e}"
                 )
-            if not isinstance(next_vars, (list, tuple)):
-                next_vars = [next_vars]
-            next_cond = cond(*next_vars)
+
+            loop_vars = infer_loop_vars_type_with_next_vars(
+                loop_vars, next_vars
+            )
+
+            from paddle.jit.dy2static.convert_operators import (
+                to_static_variable,
+            )
+
+            def check_next_var(loop_var):
+                if not loop_var.is_variable_curr_var:
+                    return
+                if not isinstance(
+                    loop_var.next_var, paddle.pir.Value
+                ) and not isinstance(loop_var.next_var, (bool, float, int)):
+                    raise ValueError(
+                        "The loop var in the while op is variable, but the corresponding yielded var is not variable, and it is not a constant of type bool, int, or float."
+                    )
+                loop_var.next_var = to_static_variable(loop_var.next_var)
+
+            paddle.utils.map_structure(check_next_var, loop_vars)
+
+            next_cond = cond(
+                *map_structure(lambda var: var.next_var, loop_vars)
+            )
             next_cond.stop_gradient = True
 
             # Filter out the constants from next_vars, we only pass the variables (Value) into cf_yield.
             # And pass the original fake value directly to constants position.
-            flattened_next_vars = flatten(next_vars)
-            (
-                variable_next_var_indices,
-                constant_next_var_indices,
-            ) = get_indices_by_discriminator(
-                flattened_next_vars,
-                lambda x: isinstance(x, paddle.pir.Value),
+            map_structure(cast_value_in_amp, loop_vars)
+            # Move all Fake Value to the end of next_vars
+            variable_loop_vars = list(
+                filter(
+                    lambda var: var.is_variable_curr_var and not var.is_fake,
+                    flatten(loop_vars),
+                ),
+            ) + list(
+                filter(
+                    lambda var: var.is_variable_curr_var and var.is_fake,
+                    flatten(loop_vars),
+                ),
             )
-            variable_next_vars, constant_next_vars = select_by_indices(
-                flattened_next_vars,
-                variable_next_var_indices,
-                constant_next_var_indices,
-            )
-            (fake_constant_next_vars,) = select_by_indices(
-                cur_block.args(), constant_next_var_indices
-            )
-            unified_next_vars = create_container_by_items_and_indices(
-                (variable_next_vars, variable_next_var_indices),
-                (fake_constant_next_vars, constant_next_var_indices),
-            )
-            cf_yield([next_cond, *unified_next_vars])
-
-            # Reset type and stop_gradient of UndefinedVar from next_vars
-            for idx, value in undefined_var_mapping.items():
-                if idx in constant_next_var_indices:
-                    continue
-                value_new_type = flatten(next_vars)[idx].type()
-                value.set_type(value_new_type)
-                cur_block.args()[idx].set_type(value_new_type)
-                while_op.as_operation().results()[idx].set_type(value_new_type)
-
-                value_new_stop_gradient = flatten(next_vars)[idx].stop_gradient
-                value.stop_gradient = value_new_stop_gradient
-                cur_block.args()[idx].stop_gradient = value_new_stop_gradient
-                while_op.as_operation().results()[
-                    idx
-                ].stop_gradient = value_new_stop_gradient
+            cf_yield([next_cond, *(var.next_var for var in variable_loop_vars)])
 
         # Restore the outputs by variable and constants
         optimized_results = while_op.optimize_update()
-        (optimized_variable_results,) = select_by_indices(
-            optimized_results, variable_next_var_indices
-        )
+        assert len(optimized_results) == len(variable_loop_vars)
+        for loop_var, result in zip(variable_loop_vars, optimized_results):
+            loop_var.next_var = result
+
         # Prune unused fake values
-        for fake_value in undefined_var_mapping.values():
-            if fake_value.use_empty():
-                fake_value_def_op = fake_value.get_defining_op()
+        for loop_var in flatten(loop_vars):
+            if loop_var.is_fake and loop_var.curr_var.use_empty():
+                fake_value_def_op = loop_var.curr_var.get_defining_op()
                 fake_value_def_op.get_parent_block().remove_op(
                     fake_value_def_op
                 )
 
-        return pack_sequence_as(
+        return map_structure(
+            lambda var: var.next_var,
             loop_vars,
-            create_container_by_items_and_indices(
-                (optimized_variable_results, variable_next_var_indices),
-                (constant_next_vars, constant_next_var_indices),
-            ),
         )
 
     if in_dygraph_mode():
@@ -903,7 +1028,7 @@ def _deal_with_undefined_var(output_vars, loop_vars):
 
     def create_var_like(o_var):
         if (
-            isinstance(o_var, (Variable,) + support_ret_buildin_type)
+            isinstance(o_var, (Variable, *support_ret_buildin_type))
             or o_var is None
         ):
             return create_undefined_variable()
@@ -1278,6 +1403,14 @@ def create_container_by_items_and_indices(*items_indices_pairs):
     return container
 
 
+def run_with_block(fn, block):
+    def new_fn(*args, **kwargs):
+        with block():
+            return fn(*args, **kwargs)
+
+    return new_fn
+
+
 class OutputSelector:
     def __init__(
         self, if_op, flattened_true_output, flattened_false_output, names
@@ -1301,6 +1434,13 @@ class OutputSelector:
                 true_out,
                 false_out,
             ) = OutputSelector.constant_to_variable_promotion(
+                [
+                    (true_out, self.if_op.true_block),
+                    (false_out, self.if_op.false_block),
+                ],
+                name,
+            )
+            (true_out, false_out) = OutputSelector.precision_promotion(
                 [
                     (true_out, self.if_op.true_block),
                     (false_out, self.if_op.false_block),
@@ -1383,60 +1523,16 @@ class OutputSelector:
                 return True
             return all(type(out) is type(outs[0]) for out in outs[1:])
 
-        def all_has_same_dtype(outs):
-            if len(outs) <= 1:
-                return True
-            return all(out.dtype == outs[0].dtype for out in outs[1:])
-
-        def constant_to_variable_with_block(constant, block_context_manager):
-            with block_context_manager():
-                return to_static_variable(constant)
-
-        def promote_precision(out_with_blocks):
-            def get_expected_precision(out_with_blocks):
-                if len(out_with_blocks) <= 1:
-                    return core.DataType.FLOAT32
-                # now only support FLOAT16 to FLOAT32
-                if any(
-                    out.dtype == core.DataType.FLOAT16
-                    for out, _ in out_with_blocks
-                ) and any(
-                    out.dtype == core.DataType.FLOAT32
-                    for out, _ in out_with_blocks
-                ):
-                    return core.DataType.FLOAT32
-                else:
-                    return out_with_blocks[0][0].dtype
-
-            new_outs = []
-            expected_dtype = get_expected_precision(out_with_blocks)
-            for out, block in out_with_blocks:
-                if expected_dtype != out.dtype:
-                    with block():
-                        out = paddle.cast(
-                            out, _PADDLE_PIR_DTYPE_2_NUMPY_DTYPE[expected_dtype]
-                        )
-                new_outs.append(out)
-            return new_outs
+        def get_first_value_dtype(outs):
+            for out in outs:
+                if isinstance(out, paddle.pir.Value):
+                    return out.dtype
+            return None
 
         if all(isinstance(out, paddle.pir.Value) for out in outs):
-            amp_attrs = core._get_amp_attrs()
-            amp_level = amp_attrs._amp_level
-            apply_amp_level_list = [
-                core.AmpLevel.O1,
-                core.AmpLevel.O2,
-            ]
-            if (amp_level in apply_amp_level_list) and (
-                not all_has_same_dtype(outs)
-            ):
-                warnings.warn(
-                    f"Return results from different branches in cond has different dtype: true value dtype is '{outs[0].dtype}' and false value dtype is '{outs[1].dtype}', "
-                    "so we will promote the lower precision to the higher one."
-                )
-                return promote_precision(out_with_blocks)
             return outs
 
-        if all(arg is None for arg in outs):
+        if all(out is None for out in outs):
             return outs
 
         if all(
@@ -1451,12 +1547,14 @@ class OutputSelector:
                     "so we will promote the constant to variable."
                 )
                 return [
-                    constant_to_variable_with_block(out, block)
+                    # TODO(SigureMo): Should we use the same dtype for all the constants?
+                    # e.g. in true branch var is 3, else branch var is 2, then the dtype should be float64.
+                    run_with_block(to_static_variable, block)(out, dtype=None)
                     for out, block in out_with_blocks
                 ]
 
         if any(isinstance(out, paddle.pir.Value) for out in outs) and all(
-            isinstance(out, (paddle.pir.Value,) + promotion_builtin_types)
+            isinstance(out, (paddle.pir.Value, *promotion_builtin_types))
             for out in outs
         ):
             warnings.warn(
@@ -1465,7 +1563,9 @@ class OutputSelector:
                 + f"'{type(outs[0])}'"
             )
             return [
-                constant_to_variable_with_block(out, block)
+                run_with_block(to_static_variable, block)(
+                    out, dtype=get_first_value_dtype(outs)
+                )
                 for out, block in out_with_blocks
             ]
 
@@ -1480,6 +1580,61 @@ class OutputSelector:
             "Unsupported return type of true_fn and false_fn in cond: false_var "
             f"returned `{name}` by false_fn is `{outs[0]}` and true_var of true_fn is `{outs[1]}`"
         )
+
+    @staticmethod
+    def precision_promotion(out_with_blocks, name):
+        # Only support promotion from fp16 to fp32 in AMP mode
+        outs, _ = zip(*out_with_blocks)
+
+        amp_attrs = core._get_amp_attrs()
+        amp_level = amp_attrs._amp_level
+        apply_amp_level_list = [
+            core.AmpLevel.O1,
+            core.AmpLevel.O2,
+        ]
+        if amp_level not in apply_amp_level_list:
+            return outs
+
+        def all_has_same_dtype(outs):
+            if len(outs) <= 1:
+                return True
+            return all(out.dtype == outs[0].dtype for out in outs[1:])
+
+        def promote_precision(out_with_blocks):
+            def get_expected_precision(out_with_blocks):
+                if len(outs) <= 1:
+                    return outs[0].dtype
+                # now only support fp16 to fp32
+                if any(
+                    out.dtype == paddle.float16 for out, _ in out_with_blocks
+                ) and any(
+                    out.dtype == paddle.float32 for out, _ in out_with_blocks
+                ):
+                    return paddle.float32
+                else:
+                    return out_with_blocks[0][0].dtype
+
+            new_outs = []
+            expected_dtype = get_expected_precision(out_with_blocks)
+            for out, block in out_with_blocks:
+                if expected_dtype != out.dtype:
+                    out = run_with_block(paddle.cast, block)(
+                        out, _PADDLE_PIR_DTYPE_2_NUMPY_DTYPE[expected_dtype]
+                    )
+                new_outs.append(out)
+            return new_outs
+
+        if all(
+            isinstance(out, paddle.pir.Value) for out in outs
+        ) and not all_has_same_dtype(outs):
+            warnings.warn(
+                f"Return results from different branches in cond has different dtype: true value dtype is '{outs[0].dtype}' and false value dtype is '{outs[1].dtype}', "
+                "so we will promote the lower precision to the higher one."
+            )
+            outs = promote_precision(out_with_blocks)
+            return outs
+
+        return outs
 
 
 def cond(pred, true_fn=None, false_fn=None, name=None, return_names=None):
@@ -1805,7 +1960,7 @@ def copy_var_to_parent_block(var, layer_helper):
     parent_block = prog.block(parent_idx)
 
     if (
-        var.type == core.VarDesc.VarType.LOD_TENSOR_ARRAY
+        var.type == core.VarDesc.VarType.DENSE_TENSOR_ARRAY
         and parent_block._find_var_recursive(var.name)
     ):
         parent_block_var = var
@@ -1950,10 +2105,10 @@ def select_input_with_buildin_type(inputs, mask, name):
         )
     elif (
         isinstance(false_var, UndefinedVar)
-        and isinstance(true_var, (Variable,) + support_ret_buildin_type)
+        and isinstance(true_var, (Variable, *support_ret_buildin_type))
     ) or (
         isinstance(true_var, UndefinedVar)
-        and isinstance(false_var, (Variable,) + support_ret_buildin_type)
+        and isinstance(false_var, (Variable, *support_ret_buildin_type))
     ):
         true_var, false_var = to_static_variable(true_var), to_static_variable(
             false_var

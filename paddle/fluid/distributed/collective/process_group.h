@@ -1,4 +1,4 @@
-// Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,8 +14,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -50,7 +52,8 @@ using phi::distributed::ProcessGroupMapFromGid;
 
 static void CheckTensorContiguous(const phi::DenseTensor& tensor) {
   if (!tensor.meta().is_contiguous()) {
-    PADDLE_THROW(phi::errors::InvalidArgument("The tensor must be contiguous"));
+    PADDLE_THROW(
+        common::errors::InvalidArgument("The tensor must be contiguous"));
   }
 }
 
@@ -58,9 +61,48 @@ static void CheckTensorContiguous(const std::vector<phi::DenseTensor>& inputs) {
   for (const auto& tensor : inputs) {
     if (!tensor.meta().is_contiguous()) {
       PADDLE_THROW(
-          phi::errors::InvalidArgument("The tensor must be contiguous"));
+          common::errors::InvalidArgument("The tensor must be contiguous"));
     }
   }
+}
+
+static void CheckTensorSamePlace(const std::vector<phi::DenseTensor>& tensors) {
+  for (const auto& tensor : tensors) {
+    if (tensor.place() != tensors[0].place()) {
+      PADDLE_THROW(
+          common::errors::InvalidArgument("The tensors must be in the same "
+                                          "place"));
+    }
+  }
+}
+
+static std::vector<int64_t> GetAllToAllSplitSizes(
+    const std::vector<phi::DenseTensor>& tensors) {
+  std::vector<int64_t> split_sizes(tensors.size());
+  std::transform(tensors.begin(),
+                 tensors.end(),
+                 split_sizes.begin(),
+                 [](const phi::DenseTensor& tensor) { return tensor.numel(); });
+  return split_sizes;
+}
+
+static std::vector<const void*> GetTensorPtrs(
+    const std::vector<phi::DenseTensor>& tensors) {
+  std::vector<const void*> tensor_ptrs(tensors.size());
+  std::transform(tensors.begin(),
+                 tensors.end(),
+                 tensor_ptrs.begin(),
+                 [](const phi::DenseTensor& tensor) { return tensor.data(); });
+  return tensor_ptrs;
+}
+
+static int64_t GetTensorNumel(const std::vector<phi::DenseTensor>& tensors) {
+  return std::accumulate(tensors.begin(),
+                         tensors.end(),
+                         int64_t(0),
+                         [](int64_t sum, const phi::DenseTensor& tensor) {
+                           return sum + tensor.numel();
+                         });
 }
 
 }  //  namespace distributed

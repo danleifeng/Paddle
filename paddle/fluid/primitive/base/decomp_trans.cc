@@ -29,6 +29,7 @@
 COMMON_DECLARE_bool(prim_check_ops);
 COMMON_DECLARE_bool(prim_enable_dynamic);
 COMMON_DECLARE_string(prim_forward_blacklist);
+COMMON_DECLARE_bool(comp_skip_default_ops);
 
 using paddle::dialect::DenseTensorType;
 using paddle::dialect::SelectedRowsType;
@@ -49,13 +50,12 @@ std::unordered_set<std::string> decomp_op_contain_none = {
     "pd_op.instance_norm",
 };
 //
+
 std::unordered_set<std::string> dynamic_shape_blacklist = {"pd_op.squeeze",
                                                            "pd_op.unsqueeze",
-                                                           "pd_op.batch_norm",
-                                                           "pd_op.batch_norm_",
-                                                           "pd_op.bmm",
                                                            "pd_op.flatten",
-                                                           "pd_op.one_hot"};
+                                                           "pd_op.eye",
+                                                           "pd_op.diag"};
 
 namespace {
 std::set<std::string> StringSplit(const std::string& str) {
@@ -104,7 +104,8 @@ static bool has_dynamic_shape(const phi::DDim& dims) {
 static const phi::DDim GetValueDims(pir::Value value) {
   pir::Type origin_type = value.type();
   if (!origin_type) {
-    PADDLE_THROW(phi::errors::InvalidArgument("The type of value is nullptr."));
+    PADDLE_THROW(
+        common::errors::InvalidArgument("The type of value is nullptr."));
   }
   auto getdims = [](pir::Type value_type) -> phi::DDim {
     if (value_type.isa<DenseTensorType>()) {
@@ -112,7 +113,7 @@ static const phi::DDim GetValueDims(pir::Value value) {
     } else if (value_type.isa<SelectedRowsType>()) {
       return value_type.dyn_cast<SelectedRowsType>().dims();
     } else {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "[Prim] Currently, we can only get shape for dense "
           "tensor."));
     }
@@ -141,7 +142,7 @@ static phi::DataType GetValueDtype(pir::Value value) {
     return paddle::dialect::TransToPhiDataType(
         value.type().dyn_cast<SelectedRowsType>().dtype());
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Currently, we can only get phi::DataType from DenseTensorType and "
         "SelectedRowsType."));
   }
@@ -164,10 +165,16 @@ bool has_decomp_rule(const pir::Operation& op) {
   pir::OpInfo op_info = ctx->GetRegisteredOpInfo(op.name());
   auto decomp_interface_impl =
       op_info.GetInterfaceImpl<paddle::dialect::DecompInterface>();
-  if (decomp_interface_impl == nullptr) return false;
-  return true;
+  return decomp_interface_impl != nullptr;
 }
 
+bool has_decomp_vjp(const pir::Operation& vjp_op) {
+  pir::IrContext* ctx = pir::IrContext::Instance();
+  pir::OpInfo vjp_op_info = ctx->GetRegisteredOpInfo(vjp_op.name());
+  auto decomp_vjp_interface_impl =
+      vjp_op_info.GetInterfaceImpl<paddle::dialect::DecompVjpInterface>();
+  return decomp_vjp_interface_impl != nullptr;
+}
 void DecompProgram::check_ops() {
   auto primitives_set = GetPrimitiveOpNames();
   std::set<std::string> undecomposed_set;
@@ -183,7 +190,7 @@ void DecompProgram::check_ops() {
       decomposed_ops_stream.append(" ");
       decomposed_ops_stream.append(item);
     }
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "[Prim] Currently, decomposed program "
         "should not contain none primitive ops: %s .",
         decomposed_ops_stream));
@@ -220,6 +227,11 @@ void DecompProgram::check_decomp_outputs(
   bool skip_invalid_op_check =
       decomp_op_contain_none.find(op_name) != decomp_op_contain_none.end();
   for (size_t i = 0; i < orig_outs.size(); i++) {
+    if (orig_outs[i].use_empty()) {
+      VLOG(3) << "[Prim] Decomp op skip check of " << op_name << " output "
+              << i;
+      continue;
+    }
     if (skip_invalid_op_check &&
         (paddle::dialect::IsEmptyValue(orig_outs[i]) ||
          paddle::dialect::IsEmptyValue(decomp_outs[i]))) {
@@ -362,9 +374,18 @@ bool DecompProgram::enable_decomp_by_filter(const std::string& op_name) {
       flag = false;
     }
   }
+  std::set<std::string> default_comp_blacklist = {"pd_op.embedding",
+                                                  "pd_op.dropout"};
+
   auto from_flag_blacklist = StringSplit(FLAGS_prim_forward_blacklist);
   if (!from_flag_blacklist.empty())
     blacklist_.insert(from_flag_blacklist.begin(), from_flag_blacklist.end());
+
+  if (FLAGS_comp_skip_default_ops) {
+    blacklist_.insert(default_comp_blacklist.begin(),
+                      default_comp_blacklist.end());
+  }
+
   if (!blacklist_.empty() && blacklist_.find(op_name) != blacklist_.end())
     flag = false;
   return flag;
@@ -374,13 +395,25 @@ std::vector<std::vector<pir::Value>> call_decomp_rule(pir::Operation* op) {
   paddle::dialect::DecompInterface decomp_interface =
       op->dyn_cast<paddle::dialect::DecompInterface>();
   PADDLE_ENFORCE(decomp_interface,
-                 phi::errors::InvalidArgument(
+                 common::errors::InvalidArgument(
                      "[Prim] The decomp function is not registered in %s op ",
                      op->name()));
   std::vector<std::vector<pir::Value>> decomp_res = decomp_interface.Decomp(op);
   return decomp_res;
 }
 
+std::vector<std::vector<pir::Value>> call_decomp_vjp(pir::Operation* vjp_op) {
+  paddle::dialect::DecompVjpInterface decomp_vjp_interface =
+      vjp_op->dyn_cast<paddle::dialect::DecompVjpInterface>();
+  PADDLE_ENFORCE(
+      decomp_vjp_interface,
+      common::errors::InvalidArgument(
+          "[Prim] The decomp_vjp function is not registered in %s vjp_op ",
+          vjp_op->name()));
+  std::vector<std::vector<pir::Value>> decomp_res =
+      decomp_vjp_interface.DecompVjp(vjp_op);
+  return decomp_res;
+}
 std::vector<pir::Operation*> DecompProgram::parse_block_ops(pir::Block* block) {
   std::vector<pir::Operation*> ops_list;
   for (auto& op : *block) {
@@ -405,7 +438,7 @@ std::vector<pir::Operation*> DecompProgram::parse_block_ops(pir::Block* block) {
       end_idx,
       ops_list.size(),
       common::errors::PreconditionNotMet(
-          "Requred end_idx <= block.ops().size() in DecompProgram."));
+          "Required end_idx <= block.ops().size() in DecompProgram."));
   return std::vector<pir::Operation*>(ops_list.begin() + start_idx,
                                       ops_list.begin() + end_idx);
 }
@@ -476,9 +509,24 @@ void DecompProgram::decomp_block(
     if (enable_prim) {
       VLOG(4) << "[Prim] decomp op name " << op->name();
       check_decomp_dynamic_shape(op);
-      auto& builder = *(paddle::dialect::ApiBuilder::Instance().GetBuilder());
-      builder.set_insertion_point(op);
+      std::shared_ptr<pir::Builder> builder =
+          paddle::dialect::ApiBuilder::Instance().GetBuilder();
+      builder->set_insertion_point(op);
+
+      int op_role = (op->attribute<pir::Int32Attribute>("op_role"))
+                        ? op->attribute<pir::Int32Attribute>("op_role").data()
+                        : -1;
+      int chunk_id = (op->attribute<pir::Int32Attribute>("chunk_id"))
+                         ? op->attribute<pir::Int32Attribute>("chunk_id").data()
+                         : -1;
+      std::string comp_op_name = op->name();
+      pir::BuilderAttrGuard guard(builder, op_role, chunk_id, comp_op_name);
+
       std::vector<std::vector<pir::Value>> decomp_res = call_decomp_rule(op);
+      if (decomp_res.size() == 0) {
+        // if we don't decomp this op, then leave it intact.
+        continue;
+      }
       std::vector<pir::Value> orig_outs = op->results();
       bool is_next_builtin_split_slice = false;
 
@@ -544,8 +592,9 @@ void DecompProgram::decomp_block(
       tar_vars[i] = src_vars_[i];
     }
   }
-  auto& builder = *(paddle::dialect::ApiBuilder::Instance().GetBuilder());
-  builder.SetInsertionPointToBlockEnd(block);
+  std::shared_ptr<pir::Builder> builder =
+      paddle::dialect::ApiBuilder::Instance().GetBuilder();
+  builder->SetInsertionPointToBlockEnd(block);
 }
 
 }  // namespace paddle

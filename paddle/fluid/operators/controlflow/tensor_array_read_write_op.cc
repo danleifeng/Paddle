@@ -41,8 +41,7 @@ class WriteToArrayOp : public ArrayOp {
     if (x == nullptr) return;
     auto &x_tensor = x->Get<phi::DenseTensor>();
     size_t offset = GetOffset(scope, place);
-    auto *out =
-        scope.FindVar(Output("Out"))->GetMutable<framework::LoDTensorArray>();
+    auto *out = scope.FindVar(Output("Out"))->GetMutable<phi::TensorArray>();
     if (offset >= out->size()) {
       VLOG(10) << "Resize " << Output("Out") << " from " << out->size()
                << " to " << offset + 1;
@@ -93,19 +92,19 @@ class WriteToArrayInferShape : public framework::InferShapeBase {
     PADDLE_ENFORCE_EQ(
         context->HasInput("I"),
         true,
-        phi::errors::NotFound("Input(I) of WriteToArrayOp is not found."));
+        common::errors::NotFound("Input(I) of WriteToArrayOp is not found."));
 
     // TODO(wangchaochaohu) control flow Op do not support runtime infer shape
-    // Later we add [ontext->GetInputDim("I")) == 1] check when it's supported
+    // Later we add [context->GetInputDim("I")) == 1] check when it's supported
 
     if (!context->HasInput("X")) {
       return;
     }
 
-    PADDLE_ENFORCE_EQ(
-        context->HasOutput("Out"),
-        true,
-        phi::errors::NotFound("Output(Out) of WriteToArrayOp is not found."));
+    PADDLE_ENFORCE_EQ(context->HasOutput("Out"),
+                      true,
+                      common::errors::NotFound(
+                          "Output(Out) of WriteToArrayOp is not found."));
     context->SetOutputDim("Out", context->GetInputDim("X"));
 
     // When compile time, we need to:
@@ -127,8 +126,8 @@ class WriteToArrayInferVarType : public framework::StaticGraphVarTypeInference {
   void operator()(framework::InferVarTypeContext *ctx) const override {
     auto x_name = Input(ctx, "X")[0];
     auto out_name = Output(ctx, "Out")[0];
-    VLOG(10) << "Set Variable " << out_name << " as LOD_TENSOR_ARRAY";
-    SetType(ctx, out_name, framework::proto::VarType::LOD_TENSOR_ARRAY);
+    VLOG(10) << "Set Variable " << out_name << " as DENSE_TENSOR_ARRAY";
+    SetType(ctx, out_name, framework::proto::VarType::DENSE_TENSOR_ARRAY);
     if (HasVar(ctx, x_name)) {
       SetDataType(ctx, out_name, GetDataType(ctx, x_name));
     }
@@ -148,12 +147,14 @@ class ReadFromArrayOp : public ArrayOp {
                const phi::Place &place) const override {
     auto *x = scope.FindVar(Input("X"));
     PADDLE_ENFORCE_NOT_NULL(
-        x, phi::errors::NotFound("Input(X) of ReadFromArrayOp is not found."));
-    auto &x_array = x->Get<framework::LoDTensorArray>();
+        x,
+        common::errors::NotFound("Input(X) of ReadFromArrayOp is not found."));
+    auto &x_array = x->Get<phi::TensorArray>();
     auto *out = scope.FindVar(Output("Out"));
     PADDLE_ENFORCE_NOT_NULL(
         out,
-        phi::errors::NotFound("Output(Out) of ReadFromArrayOp is not found."));
+        common::errors::NotFound(
+            "Output(Out) of ReadFromArrayOp is not found."));
     size_t offset = GetOffset(scope, place);
     if (offset < x_array.size()) {
       auto *out_tensor = out->GetMutable<phi::DenseTensor>();
@@ -163,7 +164,7 @@ class ReadFromArrayOp : public ArrayOp {
       out_tensor->set_lod(x_array[offset].lod());
     } else {
       VLOG(10) << "offset " << offset << " >= " << x_array.size();
-      // set grad of the writed tensor to 0 when used as write_to_array_grad
+      // set grad of the written tensor to 0 when used as write_to_array_grad
       auto *fw_var = scope.FindVar(Input("X_W"));
       if (fw_var == nullptr) return;
       auto &fw_var_tensor = fw_var->Get<phi::DenseTensor>();
@@ -190,7 +191,7 @@ class ReadFromArrayProtoMaker : public framework::OpProtoAndCheckerMaker {
              "(Tensor) the subscript index in tensor array. The number of "
              "element should be 1");
     AddInput("X_W",
-             "(Tensor) the writed tensor when used as the grad op of "
+             "(Tensor) the written tensor when used as the grad op of "
              "write_to_array. We use this to fill zero gradient.")
         .AsDispensable();
     AddOutput("Out", "(phi::DenseTensor) the tensor will be read from.");

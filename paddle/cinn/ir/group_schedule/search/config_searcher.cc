@@ -98,8 +98,10 @@ ScoreType WeightedSamplingTrailObjectiveFunc::operator()(
   auto tile_config_database = std::make_shared<NaiveTileConfigDatabase>();
   VLOG(3) << "Bucket_info_.space.size is " << bucket_info_.space.size();
   if (candidate.size() != 0) {
-    ScheduleConfig::TileConfig config{
-        candidate[0], candidate[1], candidate[2], NoneReduceMethod()};
+    ScheduleConfig::TileConfig config;
+    config.warp_num = candidate[0];
+    config.tree_reduce_num = candidate[1];
+    config.spatial_inner_num = candidate[2];
     tile_config_database->AddConfig(
         cinn::common::DefaultTarget(), bucket_info_, config);
     auto& schedule_config_manager = ScheduleConfigManager::Instance();
@@ -198,26 +200,29 @@ bool CandidateGenerator::IsValid(const CandidateType& candidate) const {
 }
 
 ScheduleConfigSearcher::ScheduleConfigSearcher(
-    std::unique_ptr<BaseObjectiveFunc> objective_func,
+    std::vector<std::unique_ptr<BaseObjectiveFunc>> objective_funcs,
     const std::vector<std::pair<int, int>>& candidate_range,
-    const std::vector<ConstraintFunc>& contraints)
-    : objective_func_(std::move(objective_func)),
+    const std::vector<ConstraintFunc>& constraints)
+    : objective_funcs_(std::move(objective_funcs)),
       candidate_range_(candidate_range),
-      contraints_(contraints) {}
+      constraints_(constraints) {}
 
 std::pair<ScoreType, CandidateType> ScheduleConfigSearcher::Search(
-    bool is_search_minimun) {
+    bool is_search_minimum) {
   VLOG(6) << "Start Search...";
-  CandidateGenerator candidate_generator(candidate_range_, contraints_);
+  CandidateGenerator candidate_generator(candidate_range_, constraints_);
   std::vector<CandidateType> candidates = candidate_generator.Candidates();
   VLOG(6) << "Candidate num = " << candidates.size();
   for (const auto& candidate : candidates) {
-    ScoreType score = (*objective_func_)(candidate);
+    ScoreType score = 0;
+    for (auto& objective_func_ : objective_funcs_) {
+      score += (*objective_func_)(candidate);
+    }
     VLOG(6) << "Candidate: [" << utils::Join<int64_t>(candidate, ", ") << "]";
     VLOG(6) << "Score = " << score;
     records_[score] = candidate;
   }
-  return is_search_minimun ? *records_.begin() : *(records_.end()--);
+  return is_search_minimum ? *records_.begin() : *(records_.end()--);
 }
 
 }  // namespace search

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -29,6 +30,12 @@ def gen_data():
 class TestFleetStaticEMA(unittest.TestCase):
     def setUp(self):
         self._places = [paddle.CPUPlace()]
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not paddle.device.is_compiled_with_cuda()
+        ):
+            self._places.append(paddle.CPUPlace())
         if paddle.device.is_compiled_with_cuda():
             self._places.append(paddle.CUDAPlace(0))
         self._ema_decay = 0.999
@@ -40,26 +47,26 @@ class TestFleetStaticEMA(unittest.TestCase):
         strategy.without_graph_optimization = True
         paddle.distributed.fleet.init(is_collective=True, strategy=strategy)
 
-        with static.program_guard(self._train_program, self._startup_prog):
-            with utils.unique_name.guard():
-                data = static.data(name='x', shape=[-1, 5], dtype='float32')
-                hidden = static.nn.fc(
-                    x=data, size=10, weight_attr=self._param_name
-                )
-                cost = paddle.mean(hidden)
+        with (
+            static.program_guard(self._train_program, self._startup_prog),
+            utils.unique_name.guard(),
+        ):
+            data = static.data(name='x', shape=[-1, 5], dtype='float32')
+            hidden = static.nn.fc(x=data, size=10, weight_attr=self._param_name)
+            cost = paddle.mean(hidden)
 
-                self._test_program = static.default_main_program().clone(
-                    for_test=True
-                )
+            self._test_program = static.default_main_program().clone(
+                for_test=True
+            )
 
-                optimizer = paddle.optimizer.Adam(learning_rate=0.001)
-                optimizer = paddle.distributed.fleet.distributed_optimizer(
-                    optimizer, strategy
-                )
-                optimizer.minimize(cost)
+            optimizer = paddle.optimizer.Adam(learning_rate=0.001)
+            optimizer = paddle.distributed.fleet.distributed_optimizer(
+                optimizer, strategy
+            )
+            optimizer.minimize(cost)
 
-                self._ema = static.ExponentialMovingAverage(self._ema_decay)
-                self._ema.update()
+            self._ema = static.ExponentialMovingAverage(self._ema_decay)
+            self._ema.update()
 
     def train(self, place, restore):
         exe = static.Executor(place)

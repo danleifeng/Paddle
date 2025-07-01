@@ -24,9 +24,9 @@
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
 
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/core/meta_tensor.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/core/type_defs.h"
 
 #include "dnnl.hpp"  // NOLINT
@@ -37,8 +37,9 @@
 #include "paddle/phi/backends/onednn/onednn_helper.h"
 #include "paddle/phi/kernels/funcs/data_layout_transform.h"
 
-namespace paddle {
-namespace framework {
+COMMON_DECLARE_bool(check_cuda_error);
+
+namespace paddle::framework {
 
 static paddle::framework::Attribute ConvertPirAttribute2FrameworkAttribute(
     pir::Attribute attr,
@@ -59,7 +60,7 @@ static paddle::framework::Attribute ConvertPirAttribute2FrameworkAttribute(
     if (array_list.size() > 0) {
       PADDLE_ENFORCE_EQ(array_list[0].isa<pir::Int32Attribute>(),
                         true,
-                        phi::errors::Unimplemented(
+                        common::errors::Unimplemented(
                             "the 0th elementwise MUST be pir::Int32Attribute"));
       for (size_t i = 0; i < array_list.size(); ++i) {
         vec_res.push_back(array_list[i].dyn_cast<pir::Int32Attribute>().data());
@@ -77,14 +78,14 @@ static paddle::framework::Attribute ConvertPirAttribute2FrameworkAttribute(
         }
 
       } else {
-        PADDLE_THROW(phi::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "ConvertPirAttribute2RuntimeAttribute not support [%s] ",
             attr_type_name));
       }
     }
     return vec_res;
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ConvertPirAttribute2RuntimeAttribute not support [%s] ",
         attr_type_name));
   }
@@ -117,7 +118,7 @@ OneDNNLegacyKernelInstruction::OneDNNLegacyKernelInstruction(
       op_info.GetInterfaceImpl<paddle::dialect::OpYamlInfoInterface>();
   PADDLE_ENFORCE_NOT_NULL(
       yaml_interface,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "can not find OpYamlInfoInterface from [%s]", legacy_op_name_));
   paddle::dialect::OpYamlInfoParser yaml_info_parser(
       yaml_interface->get_op_info_(op_name),
@@ -259,6 +260,11 @@ OneDNNLegacyKernelInstruction::~OneDNNLegacyKernelInstruction() {
 }
 
 void OneDNNLegacyKernelInstruction::Run() {
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("OneDNNLegacyKernelInstruction " + legacy_op_name_ +
+                   " begin");
+  }
+
   // Step1. TransLayout
   auto inputs = kernel_context_->InNameList();
   for (auto& input_name : inputs) {
@@ -312,6 +318,10 @@ void OneDNNLegacyKernelInstruction::Run() {
   // Step3. Run kernel
   VLOG(6) << "Run op " << legacy_op_name_ << " kernel.";
   (*(phi_kernel_))((kernel_context_));
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("OneDNNLegacyKernelInstruction " + legacy_op_name_ +
+                   " finish");
+  }
 }
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

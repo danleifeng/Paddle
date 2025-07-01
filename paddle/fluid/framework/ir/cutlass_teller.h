@@ -14,7 +14,7 @@
 
 #pragma once
 #include <unordered_set>
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 namespace paddle {
 namespace framework {
 namespace ir {
@@ -42,8 +42,18 @@ class CutlassTeller {
                      int device_id) {
     auto strides = op_desc->GetAttrIfExists<std::vector<int>>("strides");
     auto dilations = op_desc->GetAttrIfExists<std::vector<int>>("dilations");
-    CHECK_EQ(strides.size() == 2UL, true);
-    CHECK_EQ(dilations.size() == 2UL, true);
+    PADDLE_ENFORCE_EQ(strides.size(),
+                      2UL,
+                      common::errors::InvalidArgument(
+                          "The 'strides' attribute in conv2d should be a "
+                          "vector of size 2, but received size %d.",
+                          strides.size()));
+    PADDLE_ENFORCE_EQ(dilations.size(),
+                      2UL,
+                      common::errors::InvalidArgument(
+                          "The 'dilations' attribute in conv2d should be a "
+                          "vector of size 2, but received size %d.",
+                          dilations.size()));
     int stride_h = strides[0];
     int stride_w = strides[1];
     int dilation_h = dilations[0];
@@ -54,14 +64,19 @@ class CutlassTeller {
     for (const auto &filter_name : filter_names) {
       auto *filter_var = scope->FindLocalVar(filter_name);
       const auto &filter_tensor = filter_var->Get<phi::DenseTensor>();
-      CHECK_EQ(filter_tensor.dims().size() == 4UL, true);
+      PADDLE_ENFORCE_EQ(filter_tensor.dims().size(),
+                        4UL,
+                        common::errors::InvalidArgument(
+                            "The 'Filter' tensor in conv2d should have 4 "
+                            "dimensions, but received dimensions %d.",
+                            filter_tensor.dims().size()));
       auto groups = op_desc->GetAttrIfExists<int>("groups");
       int oc = filter_tensor.dims()[0];
       int kc = filter_tensor.dims()[1];
       int kh = filter_tensor.dims()[2];
       int kw = filter_tensor.dims()[3];
 
-      // For convience, we only support EXPLICIT
+      // For convenience, we only support EXPLICIT
       auto padding_algorithm =
           op_desc->GetAttrIfExists<std::string>("padding_algorithm");
       if (padding_algorithm != "EXPLICIT") {
@@ -95,8 +110,18 @@ class CutlassTeller {
                       int device_id) {
     auto strides = op_desc->GetAttrIfExists<std::vector<int>>("strides");
     auto dilations = op_desc->GetAttrIfExists<std::vector<int>>("dilations");
-    CHECK_EQ(strides.size() == 2UL, true);
-    CHECK_EQ(dilations.size() == 2UL, true);
+    PADDLE_ENFORCE_EQ(strides.size(),
+                      2UL,
+                      common::errors::InvalidArgument(
+                          "The 'strides' attribute in conv2d should be a "
+                          "vector of size 2, but received size %d.",
+                          strides.size()));
+    PADDLE_ENFORCE_EQ(dilations.size(),
+                      2UL,
+                      common::errors::InvalidArgument(
+                          "The 'dilations' attribute in conv2d should be a "
+                          "vector of size 2, but received size %d.",
+                          dilations.size()));
     int stride_h = strides[0];
     int stride_w = strides[1];
     int dilation_h = dilations[0];
@@ -107,14 +132,19 @@ class CutlassTeller {
     for (const auto &filter_name : filter_names) {
       auto *filter_var = scope->FindLocalVar(filter_name);
       const auto &filter_tensor = filter_var->Get<phi::DenseTensor>();
-      CHECK_EQ(filter_tensor.dims().size() == 4UL, true);
+      PADDLE_ENFORCE_EQ(filter_tensor.dims().size(),
+                        4UL,
+                        common::errors::InvalidArgument(
+                            "The 'Filter' tensor in conv2d should have 4 "
+                            "dimensions, but received dimensions %d.",
+                            filter_tensor.dims().size()));
       auto groups = op_desc->GetAttrIfExists<int>("groups");
       int oc = filter_tensor.dims()[0];
       int kc = filter_tensor.dims()[1];
       int kh = filter_tensor.dims()[2];
       int kw = filter_tensor.dims()[3];
 
-      // For convience, we only support EXPLICIT
+      // For convenience, we only support EXPLICIT
       auto padding_algorithm =
           op_desc->GetAttrIfExists<std::string>("padding_algorithm");
       if (padding_algorithm != "EXPLICIT") {
@@ -150,8 +180,18 @@ class CutlassTeller {
                         int device_id) {
     auto strides = op_desc->GetAttrIfExists<std::vector<int>>("strides");
     auto dilations = op_desc->GetAttrIfExists<std::vector<int>>("dilations");
-    CHECK_EQ(strides.size() == 2UL, true);
-    CHECK_EQ(dilations.size() == 2UL, true);
+    PADDLE_ENFORCE_EQ(strides.size(),
+                      2UL,
+                      common::errors::InvalidArgument(
+                          "The 'strides' attribute in conv2d should be a "
+                          "vector of size 2, but received size %d.",
+                          strides.size()));
+    PADDLE_ENFORCE_EQ(dilations.size(),
+                      2UL,
+                      common::errors::InvalidArgument(
+                          "The 'dilations' attribute in conv2d should be a "
+                          "vector of size 2, but received size %d.",
+                          dilations.size()));
     int stride_h = strides[0];
     int stride_w = strides[1];
     int dilation_h = dilations[0];
@@ -168,14 +208,19 @@ class CutlassTeller {
     for (const auto &filter_name : filter_names) {
       auto *filter_var = scope->FindLocalVar(filter_name);
       const auto &filter_tensor = filter_var->Get<phi::DenseTensor>();
-      CHECK_EQ(filter_tensor.dims().size() == 4UL, true);
+      PADDLE_ENFORCE_EQ(filter_tensor.dims().size(),
+                        4UL,
+                        common::errors::InvalidArgument(
+                            "The 'Filter' tensor in conv2d should have 4 "
+                            "dimensions, but received dimensions %d.",
+                            filter_tensor.dims().size()));
       auto groups = op_desc->GetAttrIfExists<int>("groups");
       int oc = filter_tensor.dims()[0];
       int kc = filter_tensor.dims()[1];
       int kh = filter_tensor.dims()[2];
       int kw = filter_tensor.dims()[3];
 
-      // For convience, we only support EXPLICIT
+      // For convenience, we only support EXPLICIT
       auto padding_algorithm =
           op_desc->GetAttrIfExists<std::string>("padding_algorithm");
       if (padding_algorithm != "EXPLICIT") {
@@ -218,7 +263,7 @@ class CutlassTeller {
                         CutlassFusionType fuse_type,
                         // below two are used by cbaele
                         std::string activation1 = "identity",
-                        std::string elemenstwise_type = "elementwise_add") {
+                        std::string elementwise_type = "elementwise_add") {
     int sm_version = platform::GetGPUComputeCapability(device_id);
     int ic = kc * groups;
     if (!cutlass_sm.count(sm_version)) {
@@ -245,7 +290,7 @@ class CutlassTeller {
 
       // conv + bias + act + elementwise_op
       if (fuse_type == CutlassFusionType::cbaele &&
-          !cbaele_act_set.count(activation + "_" + elemenstwise_type + "_" +
+          !cbaele_act_set.count(activation + "_" + elementwise_type + "_" +
                                 activation1)) {
         return false;
       }
@@ -349,7 +394,7 @@ class CutlassTeller {
                         CutlassFusionType fuse_type,
                         // below two are used by cbaele
                         std::string activation1 = "identity",
-                        std::string elemenstwise_type = "elementwise_add") {
+                        std::string elementwise_type = "elementwise_add") {
     return false;
   }
   std::unordered_set<std::string> CbaAct(int device_id) { return {}; }

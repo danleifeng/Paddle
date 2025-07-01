@@ -342,11 +342,13 @@ class OptimizationTuner:
 
         # Generate optimizer
         # FIXME should be remove from apply pass after pass support optimizers
-        with program_guard(dist_main_prog, dist_startup_prog):
-            with dist_main_prog.switch_name_generator_guard("opt_"):
-                optimizer_ops = dist_context.serial_optimizer.apply_gradients(
-                    dist_params_grads
-                )
+        with (
+            program_guard(dist_main_prog, dist_startup_prog),
+            dist_main_prog.switch_name_generator_guard("opt_"),
+        ):
+            optimizer_ops = dist_context.serial_optimizer.apply_gradients(
+                dist_params_grads
+            )
         completer.complete_update_annotation(dist_main_prog)
 
         resharder = Resharder(
@@ -411,15 +413,15 @@ class OptimizationTuner:
             paddle.distributed.ParallelEnv()
         )
         profile_ctx['group_map'] = parse_process_groups()
-        profile_ctx[
-            "loss_var_name"
-        ] = self._baseline_dist_context.serial_loss.name
-        profile_ctx[
-            "main_program_decs"
-        ] = trial.main_program.desc.serialize_to_string()
-        profile_ctx[
-            "startup_program_decs"
-        ] = trial.startup_program.desc.serialize_to_string()
+        profile_ctx["loss_var_name"] = (
+            self._baseline_dist_context.serial_loss.name
+        )
+        profile_ctx["main_program_decs"] = (
+            trial.main_program.desc.serialize_to_string()
+        )
+        profile_ctx["startup_program_decs"] = (
+            trial.startup_program.desc.serialize_to_string()
+        )
         self._dataset.batch_size = self._batch_size
         self._dataset.input_names = self._get_input_names()
 
@@ -459,7 +461,7 @@ class OptimizationTuner:
             + " "
             + profile_args
         )
-        cmd = [sys.executable, "-u"] + coverage_args + shlex.split(cmd_args)
+        cmd = [sys.executable, "-u", *coverage_args, *shlex.split(cmd_args)]
 
         parent_env = copy.copy(os.environ.copy())
         # env flags need for profile
@@ -469,11 +471,14 @@ class OptimizationTuner:
         # TODO if any rank hang or fail, kill all processes
         self._logger.debug("Executing cmd:\n{} .".format(" ".join(cmd)))
         # new_process = subprocess.Popen(cmd, env=new_env)
-        with open(
-            os.path.join(trial_dir, "stdout.log" + str(self.rank)), "wb"
-        ) as out, open(
-            os.path.join(trial_dir, "stderr.log" + str(self.rank)), "wb"
-        ) as err:
+        with (
+            open(
+                os.path.join(trial_dir, "stdout.log" + str(self.rank)), "wb"
+            ) as out,
+            open(
+                os.path.join(trial_dir, "stderr.log" + str(self.rank)), "wb"
+            ) as err,
+        ):
             result = subprocess.Popen(cmd, stdout=out, stderr=err, env=new_env)
             result.wait()
             out.flush()
@@ -572,8 +577,7 @@ The best trial is: [{best_trial.name}], whose configuration is following:
         summary_ += "\n" + best_trial.summary() + "\n"
         self._logger.info(summary_)
         with open(os.path.join(self.project_dir, "summary.txt"), "w+") as fw:
-            for line in summary_.split("\n"):
-                fw.write(line + "\n")
+            fw.writelines(line + "\n" for line in summary_.split("\n"))
 
         # full_strategy = self.get_best_config()
         # path = os.path.join(self.project_dir, "tuned_dist_strategy.yaml")

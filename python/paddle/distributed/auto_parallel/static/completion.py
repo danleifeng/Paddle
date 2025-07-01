@@ -166,7 +166,6 @@ def _can_apply_infer_spmd_rule(dist_op):
         "fused_rotary_position_embedding",
         "matmul_v2",
         "elementwise_div",
-        "gelu",
         "fused_softmax_mask_upper_triangle",
         "elementwise_add",
         "elementwise_mul",
@@ -1190,9 +1189,11 @@ class Completer:
             raise ValueError(
                 "VPP schedule mode only can be set in pipeline mode."
             )
-        if vpp_degree > 1 and (not seg_method or schedule_mode != "VPP"):
+        if vpp_degree > 1 and (
+            not seg_method or schedule_mode not in ["VPP", "ZBVPP"]
+        ):
             raise ValueError(
-                "Please set right schedule_mode and vpp_seg_method for VPP."
+                "Please set right schedule_mode and vpp_seg_method for VPP and ZBVPP."
             )
         if vpp_degree < 2:
             return
@@ -1222,12 +1223,12 @@ class Completer:
                 end_op_index = i
                 break
 
-        # all ops betweeen start_op_index and end_op_index should not be ignored
+        # all ops between start_op_index and end_op_index should not be ignored
         for i in range(start_op_index, end_op_index + 1):
             struct_name = ops[i].struct_name
             m = regex.search(struct_name)
             if not m:
-                # only assgin op created by reshard is allowed
+                # only assign op created by reshard is allowed
                 if (
                     ops[i].type == "assign"
                     and "reshard_api" in ops[i].output_arg_names[0]
@@ -1283,7 +1284,13 @@ class Completer:
             _logger.info("Using Auto VPP")
 
         # Step3: Get op index boundary, pp_stage, chunk_id, struct_names of each segment
-        seg_pp_stages = [i % pp_degree for i in range(num_chunks)]
+        seg_pp_stages = []
+        seg_pp_stage = list(range(pp_degree))
+        for _ in range(vpp_degree):
+            seg_pp_stages.extend(seg_pp_stage)
+            if schedule_mode == "ZBVPP":
+                seg_pp_stage.reverse()
+
         seg_chunk_ids = [i // pp_degree for i in range(num_chunks)]
         part_size = len(seg_op_deps) // num_chunks
         segment_struct_names = []
@@ -1300,7 +1307,7 @@ class Completer:
                 struct_name = []
             segment_parts[num_chunks] = len(ops)
 
-        # Step4: set right chunk_id and process_mesh for each op and var
+        # Step4: set right chunk_id and process_mesh for each op and var in each segment
         var_to_chunk_id = {}
         var_to_process_mesh = {}
         for seg_id in range(len(segment_parts) - 1):
@@ -1352,6 +1359,15 @@ class Completer:
                             block, op, process_mesh, var_to_process_mesh
                         )
                     set_chunk_id(block, op, chunk_id, var_to_chunk_id)
+
+        # Step5: set right chunk_id and process_mesh for loss op
+        # Note(sonder): for zbvpp schedule mode, the loss will be calculated in the first stage when vpp_degree is even
+        if schedule_mode == "ZBVPP" and vpp_degree % 2 == 0:
+            for i in range(end_op_index, total_op_num):
+                set_chunk_id(block, ops[i], vpp_degree - 1, var_to_chunk_id)
+                set_process_mesh(
+                    block, ops[i], sub_process_meshes[0], var_to_process_mesh
+                )
 
     def _update_dist_attr_for_dp(self):
         # TODO: we must ensure the world process group contains all ranks

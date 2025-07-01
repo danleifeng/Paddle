@@ -21,7 +21,6 @@ import paddle
 import paddle.nn.functional as F
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def ref_selu(
@@ -43,7 +42,6 @@ class SeluTest(OpTest):
     def setUp(self):
         self.op_type = "selu"
         self.python_api = paddle.nn.functional.selu
-        self.x_shape = [3, 5, 5, 10]
         self.init_x_shape()
         self.init_dtype()
 
@@ -74,13 +72,13 @@ class SeluTest(OpTest):
         }
 
     def init_x_shape(self):
-        pass
+        self.x_shape = [3, 5, 5, 10]
 
     def init_dtype(self):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(['X'], 'Out', check_pir=True)
@@ -109,6 +107,21 @@ class SeluTestBF16OP(SeluTest):
         )
 
 
+class SeluTestZeroSize1(SeluTest):
+    def init_x_shape(self):
+        self.x_shape = [9, 0]
+
+
+class SeluTestZeroSize2(SeluTest):
+    def init_x_shape(self):
+        self.x_shape = [0, 0]
+
+
+class SeluTestZeroSize3(SeluTest):
+    def init_x_shape(self):
+        self.x_shape = [5, 0, 8]
+
+
 class TestSeluAPI(unittest.TestCase):
     # test paddle.nn.SELU, paddle.nn.functional.selu
     def setUp(self):
@@ -124,7 +137,6 @@ class TestSeluAPI(unittest.TestCase):
             else paddle.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_static_api(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data('X', self.x_np.shape, self.x_np.dtype)
@@ -148,7 +160,6 @@ class TestSeluAPI(unittest.TestCase):
             np.testing.assert_allclose(out_ref, r.numpy(), rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_base_api(self):
         with base.program_guard(base.Program()):
             x = paddle.static.data('X', self.x_np.shape, self.x_np.dtype)
@@ -158,7 +169,6 @@ class TestSeluAPI(unittest.TestCase):
         out_ref = ref_selu(self.x_np, self.scale, self.alpha)
         np.testing.assert_allclose(out_ref, res[0], rtol=1e-05)
 
-    @test_with_pir_api
     def test_errors(self):
         with paddle.static.program_guard(paddle.static.Program()):
             # The input type must be Variable.
@@ -184,4 +194,5 @@ class TestSeluAPI(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    paddle.enable_static()
     unittest.main()

@@ -69,7 +69,7 @@ void GRUCPUKernel(const Context &dev_ctx,
   dev_ctx.template Alloc<T>(batch_reset_hidden_prev);
   dev_ctx.template Alloc<T>(batch_hidden);
 
-  phi::funcs::LoDTensor2BatchFunctor<Context, T> to_batch;
+  phi::funcs::DenseTensor2BatchFunctor<Context, T> to_batch;
   to_batch(dev_ctx, input, batch_gate, true, is_reverse);
 
   if (bias) {
@@ -110,8 +110,9 @@ void GRUCPUKernel(const Context &dev_ctx,
                                      frame_size /*height of height*/);
     PADDLE_ENFORCE_NOT_NULL(
         packed_gate,
-        phi::errors::NotFound("The calculation result of packed_gate by "
-                              "GEMM_ALLOC should not be null when using MKL."));
+        common::errors::NotFound(
+            "The calculation result of packed_gate by "
+            "GEMM_ALLOC should not be null when using MKL."));
     blas.GEMM_PACK(CblasBMatrix,
                    CblasNoTrans,
                    1 /*cur bs?*/,
@@ -127,8 +128,9 @@ void GRUCPUKernel(const Context &dev_ctx,
                                       frame_size /*height of height*/);
     PADDLE_ENFORCE_NOT_NULL(
         packed_state,
-        phi::errors::NotFound("The calculation result of packed_state by "
-                              "GEMM_ALLOC should not be null when using MKL."));
+        common::errors::NotFound(
+            "The calculation result of packed_state by "
+            "GEMM_ALLOC should not be null when using MKL."));
     blas.GEMM_PACK(CblasBMatrix,
                    CblasNoTrans,
                    1 /*cur bs?*/,
@@ -229,7 +231,7 @@ void GRUCPUKernel(const Context &dev_ctx,
 #ifdef PADDLE_WITH_MKLML
   }
 #endif
-  phi::funcs::Batch2LoDTensorFunctor<Context, T> to_seq;
+  phi::funcs::Batch2DenseTensorFunctor<Context, T> to_seq;
   batch_hidden->set_lod(batch_gate->lod());
   to_seq(dev_ctx, *batch_hidden, hidden);
 }

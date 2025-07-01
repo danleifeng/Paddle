@@ -24,7 +24,7 @@ namespace phi {
 
 template <typename Context, typename T>
 struct SequenceSoftmaxFunctor {
-  void operator()(const Context &ctx,
+  void operator()(const Context &dev_ctx,
                   const phi::DenseTensor &x,
                   const phi::Vector<size_t> &ref_lod, /*expand referenced lod*/
                   phi::DenseTensor *out);
@@ -32,7 +32,7 @@ struct SequenceSoftmaxFunctor {
 
 template <typename Context, typename T>
 struct SequenceSoftmaxGradFunctor {
-  void operator()(const Context &ctx,
+  void operator()(const Context &dev_ctx,
                   const phi::DenseTensor &dout,
                   const phi::DenseTensor &out,
                   const phi::Vector<size_t> &ref_lod, /*referenced lod*/
@@ -41,13 +41,13 @@ struct SequenceSoftmaxGradFunctor {
 
 template <typename T>
 struct SequenceSoftmaxFunctor<phi::CPUContext, T> {
-  void operator()(const phi::CPUContext &ctx,
+  void operator()(const phi::CPUContext &dev_ctx,
                   const phi::DenseTensor &x,
                   const phi::Vector<size_t> &ref_lod, /*referenced lod*/
                   phi::DenseTensor *out) {
     size_t height = ref_lod.size() - 1;
     const T *in_data = x.data<T>();
-    T *out_data = ctx.Alloc<T>(out);
+    T *out_data = dev_ctx.Alloc<T>(out);
     for (size_t i = 0; i < height; ++i) {
       size_t span = ref_lod[i + 1] - ref_lod[i];
       T result = 0;
@@ -63,7 +63,7 @@ struct SequenceSoftmaxFunctor<phi::CPUContext, T> {
 
 template <typename T>
 struct SequenceSoftmaxGradFunctor<phi::CPUContext, T> {
-  void operator()(const phi::CPUContext &ctx,
+  void operator()(const phi::CPUContext &dev_ctx,
                   const phi::DenseTensor &dout,
                   const phi::DenseTensor &out,
                   const phi::Vector<size_t> &ref_lod, /*referenced lod*/
@@ -72,7 +72,7 @@ struct SequenceSoftmaxGradFunctor<phi::CPUContext, T> {
 
     const T *softmax_grad_data = dout.data<T>();
     const T *softmax = out.data<T>();
-    T *dx_data = ctx.Alloc<T>(dx);
+    T *dx_data = dev_ctx.Alloc<T>(dx);
 
     for (size_t i = 0; i < height; ++i) {
       size_t span = ref_lod[i + 1] - ref_lod[i];
@@ -99,7 +99,7 @@ void SequenceSoftmaxKernel(const Context &dev_ctx,
   auto dims = x->dims();
   PADDLE_ENFORCE_EQ(lod.empty(),
                     false,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Input(X) phi::DenseTensor of SequenceSoftmax "
                         "operator does not contain "
                         "LoD information."));
@@ -108,7 +108,7 @@ void SequenceSoftmaxKernel(const Context &dev_ctx,
   PADDLE_ENFORCE_EQ(
       dims[0],
       static_cast<int64_t>(lod[level].back()),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The first dimension of Input(X) should be equal to the sum of all "
           "sequences' lengths. But the first dimension of Input(X) is %d, "
           "the sum of all sequences' lengths is %d.",
@@ -117,7 +117,7 @@ void SequenceSoftmaxKernel(const Context &dev_ctx,
   PADDLE_ENFORCE_EQ(
       dims[0],
       x->numel(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The width of each timestep in Input(X) of SequenceSoftmax "
           "operator should be 1. But the first dimension of Input(X) is %d, "
           "the number of elements is %d.",

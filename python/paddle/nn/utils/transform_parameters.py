@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from functools import reduce
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING
 
 import paddle
 from paddle import _C_ops
@@ -27,11 +27,13 @@ from paddle.base.framework import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from paddle import Tensor
     from paddle._typing import ShapeLike
 
 
-# input==output, inplace strategy of reshape has no cost almostly
+# input==output, inplace strategy of reshape has no cost almost
 def _inplace_reshape_dygraph(x: Tensor, shape: ShapeLike) -> None:
     x_shape = _create_tensor(dtype='int64')
     if in_dygraph_mode():

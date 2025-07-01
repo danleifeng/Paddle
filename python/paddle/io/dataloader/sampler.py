@@ -17,11 +17,7 @@ from __future__ import annotations
 from typing import (
     TYPE_CHECKING,
     Any,
-    Generator,
     Generic,
-    Iterator,
-    Sequence,
-    Sized,
     TypeVar,
 )
 
@@ -31,6 +27,8 @@ from ...framework import core
 from ...tensor import randperm
 
 if TYPE_CHECKING:
+    from collections.abc import Generator, Iterator, Sequence, Sized
+
     import numpy.typing as npt
 
     from paddle import Tensor
@@ -115,11 +113,10 @@ class Sampler(Generic[_T]):
         raise NotImplementedError
 
     # Not define __len__ method in this base class here for __len__
-    # is not needed in same sence, e.g. paddle.io.IterableDataset
+    # is not needed in same sense, e.g. paddle.io.IterableDataset
     if TYPE_CHECKING:
 
-        def __len__(self) -> int:
-            ...
+        def __len__(self) -> int: ...
 
 
 class SequenceSampler(Sampler[int]):
@@ -294,7 +291,7 @@ class RandomSampler(Sampler[int]):
 
 
 def _weighted_sample(weights, num_samples, replacement=True):
-    if isinstance(weights, core.LoDTensor):
+    if isinstance(weights, core.DenseTensor):
         weights = weights.numpy()
     if isinstance(weights, (list, tuple)):
         weights = np.array(weights)

@@ -16,17 +16,17 @@ from __future__ import annotations
 
 import typing
 from collections import OrderedDict
-from collections.abc import Iterable, Mapping
-from typing import Any, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import Any
 
 from typing_extensions import Self
+
+import paddle
+from paddle import Tensor
 
 from ...base.dygraph.base import param_guard
 from ...base.framework import Parameter
 from .layers import Layer
-
-if typing.TYPE_CHECKING:
-    from paddle import Tensor
 
 __all__ = []
 
@@ -319,6 +319,109 @@ class LayerDict(Layer):
                 self.add_sublayer(kv[0], kv[1])
 
 
+class ParameterDict(Layer):
+    """
+    Holds parameters in a dictionary.
+
+    ParameterDict can be indexed like a regular Python dictionary, but Parameters it contains are properly registered.
+
+    Parameters:
+        parameters (iterable, optional): a mapping (dictionary) of (string : Any) or an iterable of key-value pairs of type (string, Any)
+
+    Examples:
+        .. code-block:: python
+
+            >>> import paddle
+
+            >>> class MyLayer(paddle.nn.Layer):
+            ...     def __init__(self, num_stacked_param):
+            ...         super().__init__()
+            ...         # create ParameterDict with iterable Parameters
+            ...         self.params = paddle.nn.ParameterDict(
+            ...             {f"t{i}": paddle.create_parameter(shape=[2, 2], dtype='float32') for i in range(num_stacked_param)})
+            ...
+            ...     def forward(self, x):
+            ...         for i, key in enumerate(self.params):
+            ...             x = paddle.matmul(x, self.params[key])
+            ...         return x
+            ...
+            >>> x = paddle.uniform(shape=[5, 2], dtype='float32')
+            >>> num_stacked_param = 4
+            >>> model = MyLayer(num_stacked_param)
+            >>> print(len(model.params))
+            4
+            >>> res = model(x)
+            >>> print(res.shape)
+            [5, 2]
+
+            >>> replaced_param = paddle.create_parameter(shape=[2, 3], dtype='float32')
+            >>> model.params['t3'] = replaced_param  # replace t3 param
+            >>> res = model(x)
+            >>> print(res.shape)
+            [5, 3]
+            >>> model.params['t4'] = paddle.create_parameter(shape=[3, 4], dtype='float32')  # append param
+            >>> print(len(model.params))
+            5
+            >>> res = model(x)
+            >>> print(res.shape)
+            [5, 4]
+    """
+
+    def __init__(
+        self,
+        parameters: (
+            ParameterDict
+            | Mapping[str, Tensor]
+            | Sequence[tuple[str, Tensor]]
+            | None
+        ) = None,
+    ) -> None:
+        super().__init__()
+        if parameters is not None:
+            self.update(parameters)
+
+    def __getitem__(self, key: str) -> Tensor:
+        with param_guard(self._parameters):
+            return self._parameters[key]
+
+    def __setitem__(self, key: str, param: Tensor) -> None:
+        assert isinstance(param, Parameter)
+        setattr(self, key, param)
+
+    def __len__(self) -> int:
+        return len(self._parameters)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._parameters)
+
+    def update(
+        self,
+        parameters: (
+            ParameterDict | Mapping[str, Tensor] | Sequence[tuple[str, Tensor]]
+        ),
+    ) -> None:
+        """Update a given parameter at the end of the dict.
+
+        Parameters:
+            parameters (Parameter): parameter to update
+        """
+        assert isinstance(parameters, Iterable), (
+            "The type of parameters is not iterable of key/value pairs, the type of sublayers is "
+            + type(parameters).__name__
+        )
+
+        if isinstance(parameters, (OrderedDict, ParameterDict, Mapping)):
+            for key, parameter in parameters.items():
+                self.add_parameter(key, parameter)
+        else:
+            for i, kv in enumerate(parameters):
+                if len(kv) != 2:
+                    raise ValueError(
+                        f"The length of the {i}'s element in parameters is {len(kv)}, which must be 2."
+                    )
+                self.add_parameter(kv[0], kv[1])
+
+
 class ParameterList(Layer):
     """ParameterList Container.
 
@@ -387,8 +490,11 @@ class ParameterList(Layer):
             return self._parameters[str(idx)]
 
     def __setitem__(self, idx: int, param: Tensor) -> None:
-        assert isinstance(param, Parameter)
-        setattr(self, str(idx), param)
+        if not isinstance(param, (Parameter, Tensor)):
+            raise TypeError(
+                f"param should be 'Parameter' or 'Tensor', but received {type(param)}"
+            )
+        paddle.assign(param, getattr(self, str(idx)))
 
     def __len__(self) -> int:
         return len(self._parameters)
@@ -411,7 +517,7 @@ class ParameterList(Layer):
 class LayerList(Layer):
     """
     LayerList holds sublayers, and sublayers it contains are properly registered.
-    Holded sublayers can be indexed like a regular python list.
+    held sublayers can be indexed like a regular python list.
 
     Parameters:
         sublayers (iterable of Layer, optional): sublayers to hold
@@ -523,11 +629,14 @@ class LayerList(Layer):
                 >>> print(linears[-2] is another)
                 True
         """
-        assert isinstance(index, int) and -len(self._sub_layers) <= index < len(
+        assert isinstance(index, int) and -len(
             self._sub_layers
-        ), f"index should be an integer in range [{-len(self)}, {len(self)})"
+        ) <= index <= len(
+            self._sub_layers
+        ), f"index should be an integer in range [{-len(self)}, {len(self)}]"
 
-        index = self._get_abs_idx(index)
+        if index < 0:
+            index += len(self)
         for i in range(len(self._sub_layers), index, -1):
             self._sub_layers[str(i)] = self._sub_layers[str(i - 1)]
         self._sub_layers[str(index)] = sublayer
@@ -595,6 +704,20 @@ class Sequential(Layer):
             >>> model2.add_sublayer('l3', paddle.nn.Linear(3, 3))  # add sublayer
             >>> res2 = model2(data)  # sequential execution
 
+            >>> # append single layer at the end of sequential
+            >>> model2 = paddle.nn.Sequential(paddle.nn.Linear(10, 20))
+            >>> model2.append(paddle.nn.Linear(20, 30))
+            >>> res2 = model2(data)  # [30, 30]
+
+            >>> # insert single layer at the given position
+            >>> model2 = paddle.nn.Sequential(paddle.nn.Linear(20, 30))
+            >>> model2.insert(0, paddle.nn.Linear(10, 20))
+            >>> res2 = model2(data)  # [30, 30]
+
+            >>> # extend sequential with given sequence of layer(s) at the end
+            >>> model2 = paddle.nn.Sequential()
+            >>> model2.extend([paddle.nn.Linear(10, 20), paddle.nn.Linear(20, 30)])
+            >>> res2 = model2(data)  # [30, 30]
     """
 
     def __init__(self, *layers: Layer | tuple[str, Layer] | list[Any]) -> None:
@@ -636,3 +759,28 @@ class Sequential(Layer):
         for layer in self._sub_layers.values():
             input = layer(input)
         return input
+
+    def append(self, module: Layer) -> Sequential:
+        self.add_sublayer(str(len(self)), module)
+        return self
+
+    def insert(self, index: int, module: Layer) -> Sequential:
+        if not isinstance(module, Layer):
+            raise AssertionError(f'module should be of type: {Layer}')
+        n = len(self._sub_layers)
+        if not (-n <= index <= n):
+            raise IndexError(f'Index out of range: {index}')
+        if index < 0:
+            index += n
+        for i in range(n, index, -1):
+            self._sub_layers[str(i)] = self._sub_layers[str(i - 1)]
+        self._sub_layers[str(index)] = module
+        return self
+
+    def extend(self, sequential: Iterable[Layer]) -> Sequential:
+        for layer in sequential:
+            self.append(layer)
+        return self
+
+    def __iter__(self) -> Iterator[Layer]:
+        return iter(self._sub_layers.values())

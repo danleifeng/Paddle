@@ -18,6 +18,8 @@ import unittest
 
 import paddle
 from paddle import base
+from paddle.vision.models import ResNet
+from paddle.vision.models.resnet import BottleneckBlock
 
 
 class TestSaveModuleWithCommonOp(unittest.TestCase):
@@ -43,7 +45,9 @@ class TestSaveModuleWithCommonOp(unittest.TestCase):
 
         file_path = os.path.join(self.temp_dir.name, "test_save_program1.json")
         pir_version = 1
-        base.core.serialize_pir_program(main_program, file_path, pir_version)
+        base.core.serialize_pir_program(
+            main_program, file_path, True, False, True, pir_version
+        )
 
         recover_program = paddle.static.Program()
         base.core.deserialize_pir_program(
@@ -80,7 +84,7 @@ class TestSaveModuleWithCommonOp(unittest.TestCase):
         )
         pir_version = 1
         base.core.serialize_pir_program(
-            main_program, file_path, pir_version, True, True, False
+            main_program, file_path, True, True, False, pir_version
         )
 
         recover_program = paddle.static.Program()
@@ -107,7 +111,7 @@ class TestSaveModuleWithCommonOp(unittest.TestCase):
         file_path = os.path.join(self.temp_dir.name, "test_save_program2.json")
         pir_version = 1
         base.core.serialize_pir_program(
-            main_program, file_path, pir_version, True, True, True
+            main_program, file_path, True, True, True, pir_version
         )
 
         recover_program = paddle.static.Program()
@@ -178,7 +182,9 @@ class TestSaveModuleWithIfOp(unittest.TestCase):
             self.temp_dir.name, "test_save_program_if.json"
         )
         pir_version = 1
-        base.core.serialize_pir_program(main_program, file_path, pir_version)
+        base.core.serialize_pir_program(
+            main_program, file_path, True, False, True, pir_version
+        )
 
         recover_program = paddle.static.Program()
         base.core.deserialize_pir_program(
@@ -199,7 +205,9 @@ class TestSaveModuleWithIfOp(unittest.TestCase):
             self.temp_dir.name, "test_save_program_if2.json"
         )
         pir_version = 1
-        base.core.serialize_pir_program(main_program, file_path, pir_version)
+        base.core.serialize_pir_program(
+            main_program, file_path, True, False, True, pir_version
+        )
 
         recover_program = paddle.static.Program()
         base.core.deserialize_pir_program(
@@ -265,7 +273,9 @@ class TestSaveModuleWithwhileOp(unittest.TestCase):
             self.temp_dir.name, "test_save_program_while.json"
         )
         pir_version = 1
-        base.core.serialize_pir_program(main_program, file_path, pir_version)
+        base.core.serialize_pir_program(
+            main_program, file_path, True, False, True, pir_version
+        )
 
         recover_program = paddle.static.Program()
         base.core.deserialize_pir_program(
@@ -291,7 +301,9 @@ class TestSaveModuleWithwhileOp(unittest.TestCase):
             self.temp_dir.name, "test_save_program_while.json"
         )
         pir_version = 1
-        base.core.serialize_pir_program(main_program, file_path, pir_version)
+        base.core.serialize_pir_program(
+            main_program, file_path, True, False, True, pir_version
+        )
 
         recover_program = paddle.static.Program()
         base.core.deserialize_pir_program(
@@ -355,7 +367,9 @@ class TestSaveModuleWithwhileOp(unittest.TestCase):
             self.temp_dir.name, "test_save_program_while_nest.json"
         )
         pir_version = 1
-        base.core.serialize_pir_program(main_program, file_path, pir_version)
+        base.core.serialize_pir_program(
+            main_program, file_path, True, False, True, pir_version
+        )
 
         recover_program = paddle.static.Program()
         base.core.deserialize_pir_program(
@@ -365,6 +379,33 @@ class TestSaveModuleWithwhileOp(unittest.TestCase):
         self.check_block(
             main_program.global_block(), recover_program.global_block()
         )
+
+
+class TestJsonToPdmodel(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        paddle.disable_static()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_json_to_pdmodel(self):
+        net = ResNet(BottleneckBlock, 50)
+        net = paddle.jit.to_static(net, full_graph=True)
+        save_json = os.path.join(self.temp_dir.name, 'save1')
+        save_model = os.path.join(self.temp_dir.name, 'save2')
+        input_spec = [
+            paddle.static.InputSpec(shape=[1, 3, 224, 224], dtype='float32')
+        ]
+        paddle.jit.save(net, save_json, input_spec)
+
+        # load and save to pdmodel
+        with paddle.pir_utils.OldIrGuard():
+            input_spec = [
+                paddle.static.InputSpec(shape=[1, 3, 224, 224], dtype='float32')
+            ]
+        paddle.jit.json_to_pdmodel(net, input_spec, save_json, save_model)
+        self.assertTrue(os.path.exists(save_model + '.pdmodel'))
 
 
 if __name__ == '__main__':

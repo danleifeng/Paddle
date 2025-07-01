@@ -24,8 +24,7 @@
 #include "paddle/pir/include/core/program.h"
 #include "paddle/pir/include/core/value.h"
 
-namespace paddle {
-namespace jit {
+namespace paddle::jit {
 
 InterpreterEngine::InterpreterEngine(
     const std::shared_ptr<FunctionInfo> &info,
@@ -36,7 +35,8 @@ InterpreterEngine::InterpreterEngine(
   PADDLE_ENFORCE_GT(
       static_cast<int64_t>(info_->ProgramDesc().Block(0).OpSize()),
       0,
-      phi::errors::PreconditionNotMet("There is no operator in ProgramDesc."));
+      common::errors::PreconditionNotMet(
+          "There is no operator in ProgramDesc."));
   utils::ShareParamsIntoScope(info_->ParamNames(), params_dict_, &scope_);
   VLOG(6) << framework::GenScopeTreeDebugInfo(&scope_);
   CreateInterpreterCore();
@@ -103,5 +103,4 @@ std::unique_ptr<BaseEngine> InterpreterEngine::Clone(void *stream) {
   return std::unique_ptr<BaseEngine>(x);
 }
 
-}  // namespace jit
-}  // namespace paddle
+}  // namespace paddle::jit

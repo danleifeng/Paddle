@@ -16,12 +16,10 @@
 #include "paddle/fluid/framework/ir/cutlass_teller.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 #ifdef PADDLE_WITH_CUDA
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 #endif
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 #define GET_IR_NODE(node__) GET_IR_NODE_FROM_SUBGRAPH(node__, node__, pattern);
 #define GET_NODES                    \
@@ -34,7 +32,7 @@ namespace ir {
   GET_IR_NODE(act_op);               \
   GET_IR_NODE(act_out);
 
-// Inherient the basic information from `base_desc`, and modify some fields.
+// Inherit the basic information from `base_desc`, and modify some fields.
 framework::proto::OpDesc PrepareOpDesc(
     const framework::proto::OpDesc& base_desc,
     const std::string& bias,
@@ -185,7 +183,7 @@ void ConvElementwiseAddActFusePass::ApplyImpl(ir::Graph* graph) const {
     all_act_set.insert(custom_act_set.begin(), custom_act_set.end());
   }
 
-  patterns::ConvElementwiseaddAct pattern(gpd.mutable_pattern(), pattern_name);
+  patterns::ConvElementwiseAddAct pattern(gpd.mutable_pattern(), pattern_name);
   pattern(x, all_act_set);
   int found_count = 0;
   auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
@@ -233,7 +231,7 @@ void ConvElementwiseAddActFusePass::ApplyImpl(ir::Graph* graph) const {
     PADDLE_ENFORCE_NE(
         subgraph.count(x),
         0,
-        phi::errors::NotFound("Detector did not find input x of conv2d."));
+        common::errors::NotFound("Detector did not find input x of conv2d."));
     auto* conv_in_node = subgraph.at(x);
 
     IR_NODE_LINK_TO(conv_in_node, new_conv_op);          // Input
@@ -252,9 +250,7 @@ void ConvElementwiseAddActFusePass::ApplyImpl(ir::Graph* graph) const {
   AddStatis(found_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(conv_elementwise_add_act_fuse_pass,
               paddle::framework::ir::ConvElementwiseAddActFusePass);

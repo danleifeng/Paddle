@@ -187,10 +187,10 @@ __global__ void int4_weight_only_dequant(const uint8_t* weight,
 
   int warp_id = threadIdx.x / 32, lane_id = threadIdx.x % 32;
   int tile_id = blockIdx.x * blockDim.x / 32 + warp_id;
-  // Every two rows of the original weights are interleaved into a row with
-  // stride of 64, so if each thread processes 16 elements(for int8, we can use
-  // ldg.128 to load weights), then every group of four adjacent threads will
-  // alternately process two different row weights for example every 128
+  // Every 4 rows of the original weights are interleaved into a row with
+  // stride of 32, so if each thread processes 16 elements(for int8, we can use
+  // ldg.128 to load weights), then every group of two adjacent threads will
+  // alternately process four different row weights for example every 128
   // consecutive int8 elements [128*i, 128*(i+1)-1] of row N under interleave
   // layout, the first 64 are from [64*i, 64*(i+1)-1] of row 2N before
   // interleaving, and the last 64 are from [64*i, 64*(i+1)-1] of row 2N+1

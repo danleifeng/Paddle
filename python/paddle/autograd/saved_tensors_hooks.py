@@ -11,9 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from paddle.base import core
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from paddle import Tensor
 __all__ = []
 
 
@@ -29,7 +36,7 @@ class saved_tensors_hooks:
             of the original tensor. `pack_hook` will also be called while any
             tensor need be saved by `PyLayerContext.save_for_backward`. If a tensor
             saved for backward is no need buffer, `pack_hook` will not be called.
-            Only the tensor saved for backward is LoDTensor, `pack_hook` will be
+            Only the tensor saved for backward is DenseTensor, `pack_hook` will be
             called.
         unpack_hook (function): The unpack hook will be called every time the
             backward need use the saved inputs/outputs tensors. Then you can reload
@@ -103,14 +110,18 @@ class saved_tensors_hooks:
             >>> y.sum().backward()
     """
 
-    def __init__(self, pack_hook, unpack_hook):
+    def __init__(
+        self,
+        pack_hook: Callable[[Tensor], Any | None],
+        unpack_hook: Callable[[Any], Tensor | None],
+    ) -> None:
         self.pack_hook = pack_hook
         self.unpack_hook = unpack_hook
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         core.eager.register_saved_tensors_hooks(
             self.pack_hook, self.unpack_hook
         )
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: object) -> None:
         core.eager.reset_saved_tensors_hooks()

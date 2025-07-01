@@ -59,7 +59,7 @@ framework::BlockDesc* AppendSendAndRecvBlock(framework::ProgramDesc* program) {
   op->SetAttr("scale", 0.5f);
 
   auto& out = *root_block->Var("res");
-  out.SetType(framework::proto::VarType::LOD_TENSOR);
+  out.SetType(framework::proto::VarType::DENSE_TENSOR);
   out.SetShape({1, 10});
 
   return block;
@@ -274,7 +274,7 @@ TEST(SENDANDRECV, CPU) {
   PADDLE_ENFORCE_EQ(
       task.first,
       "x",
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Recv message and Send message name not match, Check your Code"));
 
   InitTensorsOnClient2((*micro_scope)[1], &place, rows_numel);
@@ -288,7 +288,7 @@ TEST(SENDANDRECV, CPU) {
   PADDLE_ENFORCE_EQ(
       task2.first,
       "y",
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Recv message and Send message name not match, Check your Code"));
 
   heter_server_ptr_->Stop();

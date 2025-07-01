@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -25,9 +26,20 @@ class TestSigmoidCrossEntropyWithLogitsOpGradWithAutoGrad(unittest.TestCase):
     def setUp(self):
         np.random.seed(2023)
         paddle.seed(2023)
-        self.places = [base.CPUPlace()]
+        self.places = []
+        if os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower() in [
+            '1',
+            'true',
+            'on',
+        ] or (
+            not base.core.is_compiled_with_cuda()
+            and not base.core.is_compiled_with_xpu()
+        ):
+            self.places.append(base.CPUPlace())
         if base.core.is_compiled_with_cuda():
             self.places.append(base.CUDAPlace(0))
+        if base.core.is_compiled_with_xpu():
+            self.places.append(base.XPUPlace(0))
         self.batch_size = 64
         self.num_classes = 20
 
@@ -37,7 +49,7 @@ class TestSigmoidCrossEntropyWithLogitsOpGradWithAutoGrad(unittest.TestCase):
             )
         )
 
-        self.lable = np.random.uniform(
+        self.label = np.random.uniform(
             0, 1, (self.batch_size, self.num_classes)
         ).astype("float32")
 
@@ -69,7 +81,7 @@ class TestSigmoidCrossEntropyWithLogitsOpGradWithAutoGrad(unittest.TestCase):
 
         def cal(fn, place):
             x1 = paddle.to_tensor(self.x, stop_gradient=False, place=place)
-            label1 = paddle.to_tensor(self.lable)
+            label1 = paddle.to_tensor(self.label)
             pos_weight1 = paddle.to_tensor(self.pos_weight, place=place)
             res = fn(x1, label1, pos_weight1)
             return res
@@ -78,7 +90,10 @@ class TestSigmoidCrossEntropyWithLogitsOpGradWithAutoGrad(unittest.TestCase):
             if idx == 0:
                 paddle.set_device('cpu')
             else:
-                paddle.set_device('gpu')
+                if base.core.is_compiled_with_cuda():
+                    paddle.set_device('gpu')
+                if base.core.is_compiled_with_xpu():
+                    paddle.set_device('xpu')
 
             ref = cal(fn_ref, p)
             actual = cal(fn_comp, p)

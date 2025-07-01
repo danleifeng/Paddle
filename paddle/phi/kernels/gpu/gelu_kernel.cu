@@ -61,10 +61,13 @@ void GeluKernel(const Context& dev_ctx,
                 bool approximate,
                 DenseTensor* out) {
   dev_ctx.template Alloc<T>(out);
+  if (out && out->numel() == 0) {
+    return;
+  }
   std::vector<const DenseTensor*> ins = {&x};
   std::vector<DenseTensor*> outs = {out};
   if (approximate) {
-#ifdef __NVCC__
+#if defined(__NVCC__) || defined(__HIPCC__)
     if (std::is_same<T, dtype::float16>::value) {
       size_t n = x.numel();
       const auto* in_ptr = reinterpret_cast<const __half*>(x.data<T>());

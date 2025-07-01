@@ -29,12 +29,12 @@ class TestCollectiveAllToAllSingleAPI(test_base.TestCollectiveAPIRunnerBase):
             if indata.dtype == "bfloat16":
                 tindata = paddle.to_tensor(indata, "float32").cast("uint16")
                 toutdata = paddle.to_tensor(tindata, "float32").cast("uint16")
-                dist.alltoall_single(tindata, toutdata)
+                dist.alltoall_single(toutdata, tindata)
                 return [toutdata.cast("float32").numpy()]
             else:
                 tindata = paddle.to_tensor(indata)
                 toutdata = paddle.to_tensor(indata)
-                dist.alltoall_single(tindata, toutdata)
+                dist.alltoall_single(toutdata, tindata)
                 return [toutdata.numpy()]
 
 

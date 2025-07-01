@@ -264,7 +264,7 @@ struct DirectStore {
 
 template <typename T>
 inline __device__ void WelfordCombine(T val, T* mean, T* m2, T* count) {
-  // Use Welford Online algorithem to compute mean and variance
+  // Use Welford Online algorithm to compute mean and variance
   // For more details you can refer to:
   // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
   *count += 1;
@@ -1015,13 +1015,13 @@ void FusedLayerNormKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         quant_scale != 0.0f,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Quant fused_bias_residual_layernorm'output, must has quant_scale, "
             "quant_scale!=0, but quant_scale = %f ",
             quant_scale));
     PADDLE_ENFORCE_EQ(quant_round_type == 0 || quant_round_type == 1,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant fused_bias_residual_layernorm'output, must "
                           "has quant_round_type, "
                           "quant_round_type = 0 or quant_round_type = 1, but "
@@ -1029,14 +1029,14 @@ void FusedLayerNormKernel(const Context& dev_ctx,
                           quant_scale));
     PADDLE_ENFORCE_EQ(quant_max_bound != 0.0f,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant fused_bias_residual_layernorm'output, must "
                           "has quant_max_bound and "
                           "quant_max_bound!=0, but quant_max_bound = %f ",
                           quant_scale));
     PADDLE_ENFORCE_EQ(quant_min_bound != 0.0f,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Quant fused_bias_residual_layernorm'output, must "
                           "has quant_min_bound and "
                           "quant_min_bound!=0, but quant_min_bound = %f ",
@@ -1048,8 +1048,8 @@ void FusedLayerNormKernel(const Context& dev_ctx,
   const U* norm_weight_data =
       norm_weight ? norm_weight.get().data<U>() : nullptr;
   const U* norm_bias_data = norm_bias ? norm_bias.get().data<U>() : nullptr;
-  int32_t rows = 1;
-  int32_t cols = 1;
+  int64_t rows = 1;
+  int64_t cols = 1;
   for (int i = 0; i < begin_norm_axis; i++) {
     rows *= x.dims()[i];
   }
@@ -1226,6 +1226,8 @@ PD_REGISTER_KERNEL(fused_bias_residual_layernorm,
                    float,
                    phi::dtype::float16,
                    phi::dtype::bfloat16) {
+  kernel->InputAt(3).SetDataType(phi::DataType::FLOAT32);
+  kernel->InputAt(4).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(0).SetDataType(phi::DataType::UNDEFINED);
   kernel->OutputAt(2).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(3).SetDataType(phi::DataType::FLOAT32);
@@ -1237,6 +1239,8 @@ PD_REGISTER_KERNEL(fused_bias_residual_layernorm,
                    phi::fusion::FusedLayerNormKernel,
                    float,
                    phi::dtype::float16) {
+  kernel->InputAt(3).SetDataType(phi::DataType::FLOAT32);
+  kernel->InputAt(4).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(0).SetDataType(phi::DataType::UNDEFINED);
   kernel->OutputAt(2).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(3).SetDataType(phi::DataType::FLOAT32);
@@ -1248,7 +1252,10 @@ PD_REGISTER_KERNEL(fused_bias_residual_layernorm,
                    ALL_LAYOUT,
                    phi::fusion::FusedLayerNormKernel,
                    float,
-                   phi::dtype::float16) {
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {
+  kernel->InputAt(3).SetDataType(phi::DataType::FLOAT32);
+  kernel->InputAt(4).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(0).SetDataType(phi::DataType::UNDEFINED);
   kernel->OutputAt(2).SetDataType(phi::DataType::FLOAT32);
   kernel->OutputAt(3).SetDataType(phi::DataType::FLOAT32);

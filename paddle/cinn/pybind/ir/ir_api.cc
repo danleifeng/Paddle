@@ -34,7 +34,6 @@
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/ir/utils/ir_compare.h"
 #include "paddle/cinn/lang/packed_func.h"
-#include "paddle/cinn/poly/stage.h"
 #include "paddle/cinn/pybind/bind.h"
 #include "paddle/cinn/pybind/bind_utils.h"
 #include "paddle/cinn/pybind/ir/ir.h"
@@ -99,7 +98,7 @@ void BindLoweredFunc(py::module *m) {
           [](const ir::LoweredFunc &self) -> std::string { return self->name; })
       .def("__str__",
            [](const ir::LoweredFunc &self) -> std::string {
-             return utils::GetStreamCnt(Expr(self));
+             return utils::GetStreamCnt(self);
            })
       .def("__repr__",
            [](const ir::LoweredFunc &self) -> std::string {
@@ -384,6 +383,7 @@ void BindIrIr(py::module *m) {
                                     const std::string &,
                                     bool,
                                     bool,
+                                    bool,
                                     bool>(&ir::_Var_::Make))
       .def("copy", &ir::_Var_::Copy);
 
@@ -439,7 +439,8 @@ void BindIrIr(py::module *m) {
   py::class_<ir::__node, ir::BinaryOpNode<ir::__node>> py_##__node(*m,       \
                                                                    #__node); \
   py_##__node.def(py::init<ir::Expr, ir::Expr>())                            \
-      .def_static("make", &ir::__node::Make)                                 \
+      .def_static("make",                                                    \
+                  py::overload_cast<ir::Expr, ir::Expr>(&ir::__node::Make))  \
       .def("type", &ir::__node::type)
 
   DEFINE_BINARY_NODE(Add);
@@ -551,8 +552,7 @@ void BindIrIr(py::module *m) {
       .def("expr_fields_const",
            py::overload_cast<>(&ir::Block::expr_fields, py::const_));
 
-  DefineExprNode<ir::_Module_>(m, "_Module_");
-  py::class_<ir::_Module_, ir::ExprNode<ir::_Module_>> _module_(*m, "_Module_");
+  py::class_<ir::_Module_, ir::IrNode> _module_(*m, "_Module_");
   _module_.def_readwrite("name", &ir::_Module_::name)
       .def_readwrite("target", &ir::_Module_::target)
       .def_readwrite("buffers", &ir::_Module_::buffers)
@@ -750,7 +750,7 @@ auto PackedFuncCall(lang::PackedFunc &self, py::args args) {  // NOLINT
     } else {
       std::stringstream ss;
       ss << "unsupported type: " << std::string(py::str(handle.get_type()));
-      PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+      PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
     }
   }
   lang::RetValue ret_value;
@@ -863,9 +863,8 @@ void BindIrContext(py::module *m) {
   ir_builder.def(py::init<>())
       .def("EnterWithContext", &IRBuilder::EnterWithContext)
       .def("ExitWithContext", &IRBuilder::ExitWithContext)
-      .def("get_result", [](IRBuilder &self) {
-        return self.data_->GetResult().as_lowered_func_ref();
-      });
+      .def("get_result",
+           [](IRBuilder &self) { return self.data_->GetResult(); });
 
   m->def("AxisMap", &AxisMap);
   m->def("TensorStore", &TensorStore);

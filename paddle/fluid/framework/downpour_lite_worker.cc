@@ -13,28 +13,26 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #if defined(PADDLE_WITH_PSCORE)
+#include "paddle/common/enforce.h"
 #include "paddle/fluid/framework/device_worker.h"
 #include "paddle/fluid/framework/fleet/metrics.h"
 #include "paddle/fluid/operators/isfinite_op.h"
-#include "paddle/fluid/platform/cpu_helper.h"
+#include "paddle/phi/core/platform/cpu_helper.h"
 
 namespace phi {
 class DenseTensor;
 }  // namespace phi
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Variable;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
 #if defined _WIN32 || defined __APPLE__
 #else
 #define _LINUX
 #endif
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 void DownpourLiteWorker::Initialize(const TrainerDesc& desc) {
   param_ = desc.downpour_param();
   for (int i = 0; i < param_.sparse_table_size(); ++i) {
@@ -203,22 +201,33 @@ void DownpourLiteWorker::CopyDenseVars() {
     VLOG(3) << "copy dense var from " << src_var_name << " to "
             << dest_var_name;
     Variable* src_var = thread_scope_->FindVar(src_var_name);
-    CHECK(src_var != nullptr) << src_var_name << " not found";  // NOLINT
+    PADDLE_ENFORCE_EQ(src_var != nullptr,
+                      true,
+                      common::errors::NotFound("%s not found", src_var_name));
     phi::DenseTensor* src_tensor = src_var->GetMutable<phi::DenseTensor>();
-    CHECK(src_tensor != nullptr)
-        << src_var_name << " tensor is null";  // NOLINT
+    PADDLE_ENFORCE_EQ(
+        src_tensor != nullptr,
+        true,
+        common::errors::InvalidArgument("%s tensor is null", src_var_name));
     float* src_data = src_tensor->data<float>();
 
     Variable* dest_var = thread_scope_->FindVar(dest_var_name);
-    CHECK(dest_var != nullptr) << dest_var_name << " not found";  // NOLINT
+    PADDLE_ENFORCE_EQ(dest_var != nullptr,
+                      true,
+                      common::errors::NotFound("%s not found", dest_var_name));
     phi::DenseTensor* dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
-    CHECK(dest_tensor != nullptr)
-        << dest_var_name << " tensor is null";  // NOLINT
+    PADDLE_ENFORCE_EQ(
+        dest_tensor != nullptr,
+        true,
+        common::errors::InvalidArgument("%s tensor is null", dest_var_name));
     float* dest_data = dest_tensor->data<float>();
 
-    CHECK(src_tensor->numel() == dest_tensor->numel())
-        << "tensor numel not equal," << src_tensor->numel() << " vs "
-        << dest_tensor->numel();
+    PADDLE_ENFORCE_EQ(
+        src_tensor->numel(),
+        dest_tensor->numel(),
+        common::errors::InvalidArgument("tensor numel not equal, %d vs %d",
+                                        src_tensor->numel(),
+                                        dest_tensor->numel()));
     for (int i = 0; i < src_tensor->numel(); i++) {
       dest_data[i] = src_data[i];
     }
@@ -313,11 +322,11 @@ void DownpourLiteWorker::TrainFilesWithProfiler() {
       }
       PADDLE_ENFORCE_EQ(framework::TensorContainsInf(*tensor),
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains Inf.", var_name));
       PADDLE_ENFORCE_EQ(framework::TensorContainsNAN(*tensor),
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains NAN.", var_name));
     }
 
@@ -502,7 +511,7 @@ void DownpourLiteWorker::TrainFiles() {
               continue;
             }
             s += param + ":" + std::to_string(len) + ":";
-            s += PrintLodTensor(tensor, 0, len);
+            s += PrintDenseTensor(tensor, 0, len);
             fprintf(stderr, "%s\n", s.c_str());
             fflush(stderr);
             s = "";
@@ -534,11 +543,11 @@ void DownpourLiteWorker::TrainFiles() {
       }
       PADDLE_ENFORCE_EQ(framework::TensorContainsInf(*tensor),
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains Inf.", var_name));
       PADDLE_ENFORCE_EQ(framework::TensorContainsNAN(*tensor),
                         false,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "phi::DenseTensor %s contains NAN.", var_name));
     }
 
@@ -585,6 +594,5 @@ void DownpourLiteWorker::TrainFiles() {
   }
 }
 
-}  // end namespace framework
-}  // end namespace paddle
+}  // namespace paddle::framework
 #endif

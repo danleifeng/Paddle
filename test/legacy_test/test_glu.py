@@ -20,7 +20,6 @@ import paddle
 import paddle.base.dygraph as dg
 from paddle import base, nn
 from paddle.nn import functional as F
-from paddle.pir_utils import test_with_pir_api
 
 
 def sigmoid(x):
@@ -59,7 +58,6 @@ class TestGlu(unittest.TestCase):
         x = paddle.static.data(name='x', shape=[1, 2, 3], dtype='float32')
         paddle.nn.functional.glu(x, axis=256)
 
-    @test_with_pir_api
     def test_errors(self):
         self.assertRaises(ValueError, self.glu_axis_size)
 
@@ -94,7 +92,6 @@ class TestnnGLUerror(unittest.TestCase):
         act = nn.GLU(256)
         act(x)
 
-    @test_with_pir_api
     def test_errors(self):
         self.assertRaises(ValueError, self.glu_axis_size)
         act = nn.GLU(256)
@@ -104,6 +101,30 @@ class TestnnGLUerror(unittest.TestCase):
             name='x_int32', shape=[10, 18], dtype='int32'
         )
         self.assertRaises(TypeError, act, x_int32)
+
+
+class TestGLU_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.x = np.random.randn(5, 0, 20)
+        self.dim = -1
+        self.out = glu(self.x, self.dim)
+
+    def check_dygraph(self, place):
+        with dg.guard(place):
+            x_var = paddle.to_tensor(self.x)
+            x_var.stop_gradient = False
+            y_var = F.glu(x_var, self.dim)
+            y_np = y_var.numpy()
+            np.testing.assert_allclose(y_np, self.out)
+
+            loss = paddle.sum(y_var)
+            loss.backward()
+            np.testing.assert_allclose(x_var.grad.shape, x_var.shape)
+
+    def test_case(self):
+        self.check_dygraph(base.CPUPlace())
+        if base.is_compiled_with_cuda():
+            self.check_dygraph(base.CUDAPlace(0))
 
 
 if __name__ == '__main__':

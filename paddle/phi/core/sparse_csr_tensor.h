@@ -110,6 +110,14 @@ class SparseCsrTensor : public TensorBase,
   /// \return The data type of the tensor.
   DataType dtype() const noexcept override { return meta_.dtype; }
 
+  /// \brief get the sparse dim
+  /// \return The sparse dim of the tensor.
+  int32_t sparse_dim() const;
+
+  /// \brief get the dense dim
+  /// \return The dense dim of the tensor.
+  int32_t dense_dim() const;
+
 #ifndef PADDLE_WITH_CUSTOM_KERNEL
   void set_type(const DataType dtype);
 #endif
@@ -129,6 +137,10 @@ class SparseCsrTensor : public TensorBase,
   /// \brief Test whether the non_zero_elements_ metadata is valid.
   /// \return Whether the non_zero_elements_ metadata is valid.
   bool valid() const noexcept override { return non_zero_elements_.valid(); }
+
+  /// \brief Test whether the holder is created.
+  /// \return Whether the holder is created.
+  bool has_allocation() const override { return values().has_allocation(); }
 
   /// \brief Test whether the non_zero_elements_ storage is allocated.
   /// In special cases, when nnz=0, non_zero_elements_ will not need to be

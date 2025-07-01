@@ -84,10 +84,7 @@ class Binomial(distribution.Distribution):
         self.dtype = paddle.get_default_dtype()
         self.total_count, self.probs = self._to_tensor(total_count, probs)
 
-        if self.total_count.shape == []:
-            batch_shape = (1,)
-        else:
-            batch_shape = self.total_count.shape
+        batch_shape = self.total_count.shape
         super().__init__(batch_shape)
 
     def _to_tensor(
@@ -129,7 +126,7 @@ class Binomial(distribution.Distribution):
         """
         return self.total_count * self.probs * (1 - self.probs)
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate binomial samples of the specified shape. The final shape would be ``shape+batch_shape`` .
 
         Args:

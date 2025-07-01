@@ -30,7 +30,7 @@ class RNNEncoder(nn.Layer):
         direction="forward",
         dropout=0.0,
         pooling_type=None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
         self._input_size = input_size
@@ -44,7 +44,7 @@ class RNNEncoder(nn.Layer):
             num_layers=num_layers,
             direction=direction,
             dropout=dropout,
-            **kwargs
+            **kwargs,
         )
 
     def get_input_dim(self):
@@ -104,9 +104,10 @@ class RNNModel(nn.Layer):
 
 
 def rnn_pretrain_forward(train_program, start_program, topo=None):
-    with static.program_guard(
-        train_program, start_program
-    ), paddle.utils.unique_name.guard():
+    with (
+        static.program_guard(train_program, start_program),
+        paddle.utils.unique_name.guard(),
+    ):
         batch_size = 1
         tokens = static.data(
             name="tokens", shape=[batch_size, -1], dtype="int64"
@@ -138,9 +139,9 @@ def rnn_pretrain_forward(train_program, start_program, topo=None):
 class TestFleetMetaOptimizer(unittest.TestCase):
     def setUp(self):
         os.environ["PADDLE_TRAINER_ID"] = "1"
-        os.environ[
-            "PADDLE_TRAINER_ENDPOINTS"
-        ] = "127.0.0.1:36001,127.0.0.1:36002"
+        os.environ["PADDLE_TRAINER_ENDPOINTS"] = (
+            "127.0.0.1:36001,127.0.0.1:36002"
+        )
 
     def test_rnn_raw_optimizer(self):
         from paddle.distributed import fleet
@@ -157,9 +158,10 @@ class TestFleetMetaOptimizer(unittest.TestCase):
             optimizer,
             data_holders,
         ) = rnn_pretrain_forward(train_program, start_program)
-        with paddle.static.program_guard(
-            train_program, start_program
-        ), paddle.utils.unique_name.guard():
+        with (
+            paddle.static.program_guard(train_program, start_program),
+            paddle.utils.unique_name.guard(),
+        ):
             strategy = fleet.DistributedStrategy()
             strategy.without_graph_optimization = True
             strategy.fuse_all_reduce_ops = True

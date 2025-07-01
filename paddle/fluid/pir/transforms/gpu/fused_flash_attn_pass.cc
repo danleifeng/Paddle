@@ -17,11 +17,23 @@
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
 #include "paddle/fluid/pir/drr/include/drr_pattern_base.h"
 #include "paddle/fluid/pir/utils/general_functions.h"
+#ifdef PADDLE_WITH_CUDA
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
+#endif
 
 #include "paddle/pir/include/pass/pass.h"
 #include "paddle/pir/include/pass/pass_registry.h"
 
 namespace {
+
+int getSMVersion() {
+  int sm_version = -1;
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_CUTLASS)
+  sm_version = paddle::platform::GetGPUComputeCapability(
+      paddle::platform::GetCurrentDeviceId());
+#endif
+  return sm_version;
+}
 
 // 1. scale after q
 // 2. cast before and after softmax
@@ -29,10 +41,13 @@ namespace {
 class FlashAttnPatternQscaleWithMask : public paddle::drr::DrrPatternBase {
  private:
   bool softmax_with_cast_;
+  bool enable_gpu_mixed_;
 
  public:
-  explicit FlashAttnPatternQscaleWithMask(bool softmax_with_cast)
-      : softmax_with_cast_(softmax_with_cast) {}
+  explicit FlashAttnPatternQscaleWithMask(bool softmax_with_cast,
+                                          bool enable_gpu_mixed)
+      : softmax_with_cast_(softmax_with_cast),
+        enable_gpu_mixed_(enable_gpu_mixed) {}
 
   std::string name() const override { return "FlashAttnPatternQscaleWithMask"; }
 
@@ -99,53 +114,54 @@ class FlashAttnPatternQscaleWithMask : public paddle::drr::DrrPatternBase {
     src.Tensor("out") = o_transpose(src.Tensor("context_matmul_out"));
 
     // Constraints
-    src.AddConstraint([](const paddle::drr::MatchContext &match_ctx) -> bool {
-      auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
-      if (!q_dtype.isa<pir::Float16Type>() &&
-          !q_dtype.isa<pir::BFloat16Type>()) {
-        return false;
-      }
-      // softmax
-      const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
-      if (softmax_axis != -1 && softmax_axis != 3) return false;
-      // matmul transpose
-      bool matmul_qk_transpose_x =
-          match_ctx.Attr<bool>("matmul_qk_transpose_x");
-      bool matmul_qk_transpose_y =
-          match_ctx.Attr<bool>("matmul_qk_transpose_y");
-      if (matmul_qk_transpose_x || matmul_qk_transpose_y) return false;
+    src.AddConstraint(
+        [this](const paddle::drr::MatchContext &match_ctx) -> bool {
+          auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
+          if (!this->enable_gpu_mixed_ && !q_dtype.isa<pir::Float16Type>() &&
+              !q_dtype.isa<pir::BFloat16Type>()) {
+            return false;
+          }
+          // softmax
+          const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
+          if (softmax_axis != -1 && softmax_axis != 3) return false;
+          // matmul transpose
+          bool matmul_qk_transpose_x =
+              match_ctx.Attr<bool>("matmul_qk_transpose_x");
+          bool matmul_qk_transpose_y =
+              match_ctx.Attr<bool>("matmul_qk_transpose_y");
+          if (matmul_qk_transpose_x || matmul_qk_transpose_y) return false;
 
-      bool matmul_o_transpose_x =
-          match_ctx.Attr<bool>("context_matmul_transpose_x");
-      bool matmul_o_transpose_y =
-          match_ctx.Attr<bool>("context_matmul_transpose_y");
-      if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
-      // tensor shape
-      auto q_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("q_transpose_out"));
-      auto k_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("k_transpose_out"));
-      auto v_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("v_transpose_out"));
-      if (q_transpose_out.size() != 4 || k_transpose_out.size() != 4 ||
-          v_transpose_out.size() != 4 ||
-          !(q_transpose_out.at(0) == k_transpose_out.at(0) &&
-            k_transpose_out.at(0) == v_transpose_out.at(0)) ||
-          !(q_transpose_out.at(1) == k_transpose_out.at(1) &&
-            k_transpose_out.at(1) == v_transpose_out.at(1)) ||
-          !(q_transpose_out.at(3) == k_transpose_out.at(3) &&
-            k_transpose_out.at(3) == v_transpose_out.at(3))) {
-        return false;
-      }
-      // mask's shape [bs, 1, seq_len, seq_len]
-      auto mask_add = pir::GetShapeFromValue(match_ctx.Tensor("mask"));
-      if (mask_add.size() != 4 || mask_add.at(1) != 1 ||
-          mask_add.at(0) != q_transpose_out.at(0)) {
-        return false;
-      }
+          bool matmul_o_transpose_x =
+              match_ctx.Attr<bool>("context_matmul_transpose_x");
+          bool matmul_o_transpose_y =
+              match_ctx.Attr<bool>("context_matmul_transpose_y");
+          if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
+          // tensor shape
+          auto q_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("q_transpose_out"));
+          auto k_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("k_transpose_out"));
+          auto v_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("v_transpose_out"));
+          if (q_transpose_out.size() != 4 || k_transpose_out.size() != 4 ||
+              v_transpose_out.size() != 4 ||
+              !(q_transpose_out.at(0) == k_transpose_out.at(0) &&
+                k_transpose_out.at(0) == v_transpose_out.at(0)) ||
+              !(q_transpose_out.at(1) == k_transpose_out.at(1) &&
+                k_transpose_out.at(1) == v_transpose_out.at(1)) ||
+              !(q_transpose_out.at(3) == k_transpose_out.at(3) &&
+                k_transpose_out.at(3) == v_transpose_out.at(3))) {
+            return false;
+          }
+          // mask's shape [bs, 1, seq_len, seq_len]
+          auto mask_add = pir::GetShapeFromValue(match_ctx.Tensor("mask"));
+          if (mask_add.size() != 4 || mask_add.at(1) != 1 ||
+              mask_add.at(0) != q_transpose_out.at(0)) {
+            return false;
+          }
 
-      return true;
-    });
+          return true;
+        });
 
     //
     // Result Pattern.
@@ -175,10 +191,13 @@ class FlashAttnPatternQscaleWithMask : public paddle::drr::DrrPatternBase {
 class FlashAttnPatternOutscaleWithMask : public paddle::drr::DrrPatternBase {
  private:
   bool softmax_with_cast_;
+  bool enable_gpu_mixed_;
 
  public:
-  explicit FlashAttnPatternOutscaleWithMask(bool softmax_with_cast)
-      : softmax_with_cast_(softmax_with_cast) {}
+  explicit FlashAttnPatternOutscaleWithMask(bool softmax_with_cast,
+                                            bool enable_gpu_mixed)
+      : softmax_with_cast_(softmax_with_cast),
+        enable_gpu_mixed_(enable_gpu_mixed) {}
 
  public:
   std::string name() const override {
@@ -246,53 +265,54 @@ class FlashAttnPatternOutscaleWithMask : public paddle::drr::DrrPatternBase {
     src.Tensor("out") = o_transpose(src.Tensor("context_matmul_out"));
 
     // Constraints
-    src.AddConstraint([](const paddle::drr::MatchContext &match_ctx) -> bool {
-      auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
-      if (!q_dtype.isa<pir::Float16Type>() &&
-          !q_dtype.isa<pir::BFloat16Type>()) {
-        return false;
-      }
-      // softmax
-      const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
-      if (softmax_axis != -1 && softmax_axis != 3) return false;
-      // matmul transpose
-      bool matmul_qk_transpose_x =
-          match_ctx.Attr<bool>("matmul_qk_transpose_x");
-      bool matmul_qk_transpose_y =
-          match_ctx.Attr<bool>("matmul_qk_transpose_y");
-      if (matmul_qk_transpose_x || matmul_qk_transpose_y) return false;
+    src.AddConstraint(
+        [this](const paddle::drr::MatchContext &match_ctx) -> bool {
+          auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
+          if (!this->enable_gpu_mixed_ && !q_dtype.isa<pir::Float16Type>() &&
+              !q_dtype.isa<pir::BFloat16Type>()) {
+            return false;
+          }
+          // softmax
+          const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
+          if (softmax_axis != -1 && softmax_axis != 3) return false;
+          // matmul transpose
+          bool matmul_qk_transpose_x =
+              match_ctx.Attr<bool>("matmul_qk_transpose_x");
+          bool matmul_qk_transpose_y =
+              match_ctx.Attr<bool>("matmul_qk_transpose_y");
+          if (matmul_qk_transpose_x || matmul_qk_transpose_y) return false;
 
-      bool matmul_o_transpose_x =
-          match_ctx.Attr<bool>("context_matmul_transpose_x");
-      bool matmul_o_transpose_y =
-          match_ctx.Attr<bool>("context_matmul_transpose_y");
-      if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
-      // tensor shape
-      auto q_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("q_transpose_out"));
-      auto k_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("k_transpose_out"));
-      auto v_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("v_transpose_out"));
-      if (q_transpose_out.size() != 4 || k_transpose_out.size() != 4 ||
-          v_transpose_out.size() != 4 ||
-          !(q_transpose_out.at(0) == k_transpose_out.at(0) &&
-            k_transpose_out.at(0) == v_transpose_out.at(0)) ||
-          !(q_transpose_out.at(1) == k_transpose_out.at(1) &&
-            k_transpose_out.at(1) == v_transpose_out.at(1)) ||
-          !(q_transpose_out.at(3) == k_transpose_out.at(3) &&
-            k_transpose_out.at(3) == v_transpose_out.at(3))) {
-        return false;
-      }
-      // mask's shape [bs, 1, seq_len, seq_len]
-      auto mask_add = pir::GetShapeFromValue(match_ctx.Tensor("mask"));
-      if (mask_add.size() != 4 || mask_add.at(1) != 1 ||
-          mask_add.at(0) != q_transpose_out.at(0)) {
-        return false;
-      }
+          bool matmul_o_transpose_x =
+              match_ctx.Attr<bool>("context_matmul_transpose_x");
+          bool matmul_o_transpose_y =
+              match_ctx.Attr<bool>("context_matmul_transpose_y");
+          if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
+          // tensor shape
+          auto q_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("q_transpose_out"));
+          auto k_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("k_transpose_out"));
+          auto v_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("v_transpose_out"));
+          if (q_transpose_out.size() != 4 || k_transpose_out.size() != 4 ||
+              v_transpose_out.size() != 4 ||
+              !(q_transpose_out.at(0) == k_transpose_out.at(0) &&
+                k_transpose_out.at(0) == v_transpose_out.at(0)) ||
+              !(q_transpose_out.at(1) == k_transpose_out.at(1) &&
+                k_transpose_out.at(1) == v_transpose_out.at(1)) ||
+              !(q_transpose_out.at(3) == k_transpose_out.at(3) &&
+                k_transpose_out.at(3) == v_transpose_out.at(3))) {
+            return false;
+          }
+          // mask's shape [bs, 1, seq_len, seq_len]
+          auto mask_add = pir::GetShapeFromValue(match_ctx.Tensor("mask"));
+          if (mask_add.size() != 4 || mask_add.at(1) != 1 ||
+              mask_add.at(0) != q_transpose_out.at(0)) {
+            return false;
+          }
 
-      return true;
-    });
+          return true;
+        });
 
     //
     // Result Pattern.
@@ -322,10 +342,13 @@ class FlashAttnPatternOutscaleWithMask : public paddle::drr::DrrPatternBase {
 class FlashAttnPatternOutscaleNoMask : public paddle::drr::DrrPatternBase {
  private:
   bool softmax_with_cast_;
+  bool enable_gpu_mixed_;
 
  public:
-  explicit FlashAttnPatternOutscaleNoMask(bool softmax_with_cast)
-      : softmax_with_cast_(softmax_with_cast) {}
+  explicit FlashAttnPatternOutscaleNoMask(bool softmax_with_cast,
+                                          bool enable_gpu_mixed)
+      : softmax_with_cast_(softmax_with_cast),
+        enable_gpu_mixed_(enable_gpu_mixed) {}
 
  public:
   std::string name() const override { return "FlashAttnPatternOutscaleNoMask"; }
@@ -382,47 +405,48 @@ class FlashAttnPatternOutscaleNoMask : public paddle::drr::DrrPatternBase {
     src.Tensor("out") = o_transpose(src.Tensor("context_matmul_out"));
 
     // Constraints
-    src.AddConstraint([](const paddle::drr::MatchContext &match_ctx) -> bool {
-      auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
-      if (!q_dtype.isa<pir::Float16Type>() &&
-          !q_dtype.isa<pir::BFloat16Type>()) {
-        return false;
-      }
-      // softmax
-      const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
-      if (softmax_axis != -1 && softmax_axis != 3) return false;
-      // matmul transpose
-      bool matmul_qk_transpose_x =
-          match_ctx.Attr<bool>("matmul_qk_transpose_x");
-      bool matmul_qk_transpose_y =
-          match_ctx.Attr<bool>("matmul_qk_transpose_y");
-      if (matmul_qk_transpose_x || !matmul_qk_transpose_y) return false;
+    src.AddConstraint(
+        [this](const paddle::drr::MatchContext &match_ctx) -> bool {
+          auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
+          if (!this->enable_gpu_mixed_ && !q_dtype.isa<pir::Float16Type>() &&
+              !q_dtype.isa<pir::BFloat16Type>()) {
+            return false;
+          }
+          // softmax
+          const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
+          if (softmax_axis != -1 && softmax_axis != 3) return false;
+          // matmul transpose
+          bool matmul_qk_transpose_x =
+              match_ctx.Attr<bool>("matmul_qk_transpose_x");
+          bool matmul_qk_transpose_y =
+              match_ctx.Attr<bool>("matmul_qk_transpose_y");
+          if (matmul_qk_transpose_x || !matmul_qk_transpose_y) return false;
 
-      bool matmul_o_transpose_x =
-          match_ctx.Attr<bool>("context_matmul_transpose_x");
-      bool matmul_o_transpose_y =
-          match_ctx.Attr<bool>("context_matmul_transpose_y");
-      if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
-      // tensor shape
-      auto q_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("q_transpose_out"));
-      auto k_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("k_transpose_out"));
-      auto v_transpose_out =
-          pir::GetShapeFromValue(match_ctx.Tensor("v_transpose_out"));
-      if (q_transpose_out.size() != 4 || k_transpose_out.size() != 4 ||
-          v_transpose_out.size() != 4 ||
-          !(q_transpose_out.at(0) == k_transpose_out.at(0) &&
-            k_transpose_out.at(0) == v_transpose_out.at(0)) ||
-          !(q_transpose_out.at(1) == k_transpose_out.at(1) &&
-            k_transpose_out.at(1) == v_transpose_out.at(1)) ||
-          !(q_transpose_out.at(3) == k_transpose_out.at(3) &&
-            k_transpose_out.at(3) == v_transpose_out.at(3))) {
-        return false;
-      }
+          bool matmul_o_transpose_x =
+              match_ctx.Attr<bool>("context_matmul_transpose_x");
+          bool matmul_o_transpose_y =
+              match_ctx.Attr<bool>("context_matmul_transpose_y");
+          if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
+          // tensor shape
+          auto q_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("q_transpose_out"));
+          auto k_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("k_transpose_out"));
+          auto v_transpose_out =
+              pir::GetShapeFromValue(match_ctx.Tensor("v_transpose_out"));
+          if (q_transpose_out.size() != 4 || k_transpose_out.size() != 4 ||
+              v_transpose_out.size() != 4 ||
+              !(q_transpose_out.at(0) == k_transpose_out.at(0) &&
+                k_transpose_out.at(0) == v_transpose_out.at(0)) ||
+              !(q_transpose_out.at(1) == k_transpose_out.at(1) &&
+                k_transpose_out.at(1) == v_transpose_out.at(1)) ||
+              !(q_transpose_out.at(3) == k_transpose_out.at(3) &&
+                k_transpose_out.at(3) == v_transpose_out.at(3))) {
+            return false;
+          }
 
-      return true;
-    });
+          return true;
+        });
 
     //
     // Result Pattern.
@@ -448,7 +472,13 @@ class FlashAttnPatternOutscaleNoMask : public paddle::drr::DrrPatternBase {
 
 // slice qkv
 class TransposeSliceFlashAttnPattern : public paddle::drr::DrrPatternBase {
+ private:
+  bool enable_gpu_mixed_;
+
  public:
+  explicit TransposeSliceFlashAttnPattern(bool enable_gpu_mixed)
+      : enable_gpu_mixed_(enable_gpu_mixed) {}
+
   std::string name() const override { return "TransposeSliceFlashAttnPattern"; }
 
   void operator()(paddle::drr::DrrPatternContext *ctx) const override {
@@ -526,46 +556,47 @@ class TransposeSliceFlashAttnPattern : public paddle::drr::DrrPatternBase {
     src.Tensor("out") = o_transpose(src.Tensor("context_matmul_out"));
 
     // Constraints
-    src.AddConstraint([](const paddle::drr::MatchContext &match_ctx) -> bool {
-      auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
-      if (!q_dtype.isa<pir::Float16Type>() &&
-          !q_dtype.isa<pir::BFloat16Type>()) {
-        return false;
-      }
-      // softmax
-      const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
-      if (softmax_axis != -1 && softmax_axis != 3) return false;
-      // matmul transpose
-      bool matmul_qk_transpose_x =
-          match_ctx.Attr<bool>("matmul_qk_transpose_x");
-      bool matmul_qk_transpose_y =
-          match_ctx.Attr<bool>("matmul_qk_transpose_y");
-      if (matmul_qk_transpose_x || matmul_qk_transpose_y) return false;
+    src.AddConstraint(
+        [this](const paddle::drr::MatchContext &match_ctx) -> bool {
+          auto q_dtype = pir::GetDataTypeFromValue(match_ctx.Tensor("q"));
+          if (!this->enable_gpu_mixed_ && !q_dtype.isa<pir::Float16Type>() &&
+              !q_dtype.isa<pir::BFloat16Type>()) {
+            return false;
+          }
+          // softmax
+          const auto &softmax_axis = match_ctx.Attr<int>("softmax_axis");
+          if (softmax_axis != -1 && softmax_axis != 3) return false;
+          // matmul transpose
+          bool matmul_qk_transpose_x =
+              match_ctx.Attr<bool>("matmul_qk_transpose_x");
+          bool matmul_qk_transpose_y =
+              match_ctx.Attr<bool>("matmul_qk_transpose_y");
+          if (matmul_qk_transpose_x || matmul_qk_transpose_y) return false;
 
-      bool matmul_o_transpose_x =
-          match_ctx.Attr<bool>("context_matmul_transpose_x");
-      bool matmul_o_transpose_y =
-          match_ctx.Attr<bool>("context_matmul_transpose_y");
-      if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
-      // tensor shape
-      auto q = pir::GetShapeFromValue(match_ctx.Tensor("q"));
-      auto k = pir::GetShapeFromValue(match_ctx.Tensor("k"));
-      auto v = pir::GetShapeFromValue(match_ctx.Tensor("v"));
-      if (q.size() != 4 || k.size() != 4 || v.size() != 4 ||
-          !(q.at(0) == k.at(0) && k.at(0) == v.at(0)) ||
-          !(q.at(1) == k.at(1) && k.at(1) == v.at(1)) ||
-          !(q.at(3) == k.at(3) && k.at(3) == v.at(3))) {
-        return false;
-      }
-      // mask's shape [bs, 1, seq_len, seq_len]
-      auto mask_add = pir::GetShapeFromValue(match_ctx.Tensor("mask"));
-      if (mask_add.size() != 4 || mask_add.at(1) != 1 ||
-          mask_add.at(0) != q.at(0)) {
-        return false;
-      }
+          bool matmul_o_transpose_x =
+              match_ctx.Attr<bool>("context_matmul_transpose_x");
+          bool matmul_o_transpose_y =
+              match_ctx.Attr<bool>("context_matmul_transpose_y");
+          if (matmul_o_transpose_x || matmul_o_transpose_y) return false;
+          // tensor shape
+          auto q = pir::GetShapeFromValue(match_ctx.Tensor("q"));
+          auto k = pir::GetShapeFromValue(match_ctx.Tensor("k"));
+          auto v = pir::GetShapeFromValue(match_ctx.Tensor("v"));
+          if (q.size() != 4 || k.size() != 4 || v.size() != 4 ||
+              !(q.at(0) == k.at(0) && k.at(0) == v.at(0)) ||
+              !(q.at(1) == k.at(1) && k.at(1) == v.at(1)) ||
+              !(q.at(3) == k.at(3) && k.at(3) == v.at(3))) {
+            return false;
+          }
+          // mask's shape [bs, 1, seq_len, seq_len]
+          auto mask_add = pir::GetShapeFromValue(match_ctx.Tensor("mask"));
+          if (mask_add.size() != 4 || mask_add.at(1) != 1 ||
+              mask_add.at(0) != q.at(0)) {
+            return false;
+          }
 
-      return true;
-    });
+          return true;
+        });
 
     //
     // Result Pattern.
@@ -606,20 +637,34 @@ class FusedFlashAttnPass : public pir::PatternRewritePass {
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);
-    ps.Add(paddle::drr::Create<FlashAttnPatternQscaleWithMask>(context, true));
-    ps.Add(paddle::drr::Create<FlashAttnPatternQscaleWithMask>(context, false));
-    ps.Add(
-        paddle::drr::Create<FlashAttnPatternOutscaleWithMask>(context, true));
-    ps.Add(
-        paddle::drr::Create<FlashAttnPatternOutscaleWithMask>(context, false));
-    ps.Add(paddle::drr::Create<FlashAttnPatternOutscaleNoMask>(context, true));
-    ps.Add(paddle::drr::Create<FlashAttnPatternOutscaleNoMask>(context, false));
-    ps.Add(paddle::drr::Create<TransposeSliceFlashAttnPattern>(context));
+    bool enable_gpu_mixed = false;
+    if (Has("enable_gpu_mixed")) {
+      enable_gpu_mixed = Get<bool>("enable_gpu_mixed");
+    }
+
+    ps.Add(paddle::drr::Create<FlashAttnPatternQscaleWithMask>(
+        context, true, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<FlashAttnPatternQscaleWithMask>(
+        context, false, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<FlashAttnPatternOutscaleWithMask>(
+        context, true, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<FlashAttnPatternOutscaleWithMask>(
+        context, false, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<FlashAttnPatternOutscaleNoMask>(
+        context, true, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<FlashAttnPatternOutscaleNoMask>(
+        context, false, enable_gpu_mixed));
+    ps.Add(paddle::drr::Create<TransposeSliceFlashAttnPattern>(
+        context, enable_gpu_mixed));
     return ps;
   }
 
   bool CanApplyOn(pir::Operation *op) const override {
 #ifdef PADDLE_WITH_FLASHATTN
+    int sm_version = getSMVersion();
+    if (sm_version < 80) {
+      return false;
+    }
     return op->num_regions() > 0;
 #else
     return false;

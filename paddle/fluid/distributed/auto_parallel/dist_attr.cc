@@ -23,9 +23,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/var_desc.h"
 #include "paddle/phi/core/distributed/auto_parallel/proto_helper.h"
 
-namespace paddle {
-namespace distributed {
-namespace auto_parallel {
+namespace paddle::distributed::auto_parallel {
 
 using phi::distributed::auto_parallel::str_join;
 
@@ -33,7 +31,7 @@ std::vector<int64_t> get_tensor_shape(const VarDesc* tensor) {
   if (tensor == nullptr) return std::vector<int64_t>();
   switch (tensor->GetType()) {
     case framework::proto::VarType::READER:
-    case framework::proto::VarType::LOD_TENSOR_ARRAY:
+    case framework::proto::VarType::DENSE_TENSOR_ARRAY:
     case framework::proto::VarType::STEP_SCOPES:
     case framework::proto::VarType::FEED_MINIBATCH:
     case framework::proto::VarType::FETCH_LIST:
@@ -430,7 +428,7 @@ std::string OperatorDistAttr::serialize_to_string() {
   proto.SerializeToString(&data);
   PADDLE_ENFORCE_EQ(to_proto().SerializeToString(&data),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Failed to serialize op dist attr to string."));
   return data;
 }
@@ -439,7 +437,7 @@ void OperatorDistAttr::parse_from_string(const std::string& data) {
   OperatorDistAttrProto proto;
   PADDLE_ENFORCE_EQ(proto.ParseFromString(data),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Failed to parse op dist attr from string."));
   from_proto(proto);
 }
@@ -487,6 +485,4 @@ bool operator==(const OperatorDistAttr& lhs, const OperatorDistAttr& rhs) {
   return true;
 }
 
-}  // namespace auto_parallel
-}  // namespace distributed
-}  // namespace paddle
+}  // namespace paddle::distributed::auto_parallel

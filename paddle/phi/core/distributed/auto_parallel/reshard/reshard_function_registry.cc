@@ -30,8 +30,7 @@
 #include "paddle/phi/core/distributed/auto_parallel/reshard/same_status_reshard_function.h"
 #include "paddle/phi/core/distributed/auto_parallel/reshard/x_to_r_reshard_function.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 ReshardFunction* ChooseProperReshardFunction(
     const DistTensor& in, const TensorDistAttr& out_dist_attr) {
@@ -41,7 +40,7 @@ ReshardFunction* ChooseProperReshardFunction(
       return func.get();
     }
   }
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Can not reshard from in_dist_attr=%s to out_dist_attr=%s.",
       in.dist_attr().to_string(),
       out_dist_attr.to_string()));
@@ -79,5 +78,4 @@ REGISTER_RESHARD_FUNC(CrossNdMeshReshardFunction);
 REGISTER_RESHARD_FUNC(GlobalToSubMeshReshardFunction);
 REGISTER_RESHARD_FUNC(SubMeshToGlobalReshardFunction);
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

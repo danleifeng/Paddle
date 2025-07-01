@@ -21,9 +21,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class ReduceOpConverter : public OpConverter {
  public:
@@ -77,7 +75,6 @@ class ReduceOpConverter : public OpConverter {
           if (x < 0) {
             res |= 1 << (x + input_dims);
           } else {
-            if (!engine_->with_dynamic_shape()) x = x - 1;
             res |= 1 << x;
           }
         }
@@ -193,7 +190,6 @@ class ReduceAnyOpConverter : public ReduceOpConverter {
           if (x < 0) {
             res |= 1 << (x + input_dims);
           } else {
-            if (!engine_->with_dynamic_shape()) x = x - 1;
             res |= 1 << x;
           }
         }
@@ -225,9 +221,7 @@ class ReduceAllOpConverter : public ReduceAnyOpConverter {
   ReduceAllOpConverter() { op_type = "reduce_all"; }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(reduce_sum, ReduceSumOpConverter);
 REGISTER_TRT_OP_CONVERTER(reduce_mean, ReduceMeanOpConverter);

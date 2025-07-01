@@ -16,6 +16,7 @@ limitations under the License. */
 #include <gtest/gtest.h>
 #include "paddle/common/flags.h"
 
+#include "paddle/common/enforce.h"
 #include "paddle/fluid/inference/tensorrt/helper.h"
 #include "test/cpp/inference/api/trt_test_helper.h"
 
@@ -147,7 +148,7 @@ TEST(AnalysisPredictor, no_fp16) {
 }
 
 TEST(AnalysisPredictor, fp16) {
-#ifdef TRT_PLUGIN_FP16_AVALIABLE
+#ifdef TRT_PLUGIN_FP16_AVAILABLE
   std::vector<float> result = {0.598, 0.219, 0.182};
   trt_ernie(true, result, 4e-3);
 #endif
@@ -160,7 +161,7 @@ TEST(AnalysisPredictor, no_fp16_bs2) {
 }
 
 TEST(AnalysisPredictor, fp16_bs2) {
-#ifdef TRT_PLUGIN_FP16_AVALIABLE
+#ifdef TRT_PLUGIN_FP16_AVAILABLE
   std::vector<float> result = {0.598, 0.219, 0.182, 0.598, 0.219, 0.182};
   trt_ernie(true, result, 4e-3, 2);
 #endif
@@ -407,7 +408,9 @@ void run(paddle_infer::Predictor* predictor, std::vector<float>* out_data) {
   input_t4->Reshape({1, max_seq_len, 1});
   input_t4->CopyFromCpu(i4.data());
 
-  CHECK(predictor->Run());
+  PADDLE_ENFORCE(
+      predictor->Run(),
+      common::errors::PreconditionNotMet("Predictor is not runnable"));
 
   auto output_names = predictor->GetOutputNames();
   auto output_t = predictor->GetOutputHandle(output_names[0]);

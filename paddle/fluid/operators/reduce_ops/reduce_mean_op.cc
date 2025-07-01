@@ -23,8 +23,7 @@
 #include "paddle/phi/infermeta/unary.h"
 
 namespace ops = paddle::operators;
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 class ReduceBaseOp : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
@@ -37,7 +36,7 @@ class ReduceBaseOp : public framework::OperatorWithKernel {
     auto dims = ctx->Attrs().Get<std::vector<int>>("dim");
     PADDLE_ENFORCE_GT(dims.size(),
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The input dim dimensions of ReduceBaseOp "
                           "should be greater than 0. But received the dim "
                           "dimensions of Reduce = %d.",
@@ -47,7 +46,7 @@ class ReduceBaseOp : public framework::OperatorWithKernel {
       PADDLE_ENFORCE_LT(
           dims[i],
           x_rank,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The reduce dim index %d should be in the "
               "range [-dimension(X), dimension(X)] "
               "which dimension = %d. But received dim index = %d.",
@@ -57,7 +56,7 @@ class ReduceBaseOp : public framework::OperatorWithKernel {
       PADDLE_ENFORCE_GE(
           dims[i],
           -x_rank,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The reduce dim index %d should be in the "
               "range [-dimension(X), dimension(X)] "
               "which dimension = %d. But received dim index = %d.",
@@ -155,7 +154,7 @@ class ReduceBaseOp : public framework::OperatorWithKernel {
               ctx.GetPlace().GetType() == phi::AllocationType::XPU ||
               ctx.GetPlace().GetType() == phi::AllocationType::CUSTOM,
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "float16 can only be used on GPU or XPU place"));
     }
     return phi::KernelKey(input_data_type, ctx.GetPlace());
@@ -183,7 +182,7 @@ class ReduceGradOp : public framework::OperatorWithKernel {
         PADDLE_ENFORCE_LT(
             dims[i],
             x_rank,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "The reduce dim index %d should be in the "
                 "range [-dimension(X), dimension(X)], "
                 "which dimension = %d. But received dim index = %d.",
@@ -223,7 +222,7 @@ class ReduceGradOp : public framework::OperatorWithKernel {
 };
 
 // NOTE(dengkaipeng): Input(Out) is unnecessary in reduce_mean_grad
-// calcualtion, but will incur a reduce_mean_grad op after
+// calculation, but will incur a reduce_mean_grad op after
 // reduce_mean_grad_grad, delete Input(Out) here.
 // This change has no effect on reduce_mean_grad calculations.
 template <typename T>
@@ -318,7 +317,7 @@ class ReduceBaseOpMaker : public paddle::framework::OpProtoAndCheckerMaker {
     AddAttr<int>(
         "out_dtype",
         "(int, default -1)"
-        "The dtype of output, default value is -1, the dtype is same as intput")
+        "The dtype of output, default value is -1, the dtype is same as input")
         .SetDefault(-1);
     AddComment(string::Sprintf(R"DOC(
 %s Operator.
@@ -336,8 +335,7 @@ If reduce_all is true, just reduce along all dimensions and output a scalar.
   virtual std::string GetName() const = 0;
   virtual std::string GetOpType() const = 0;
 };
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 class __reduce_meanMaker__ : public ops::ReduceBaseOpMaker {
  protected:

@@ -77,13 +77,13 @@ const TCValue& TranslationContext::at(const TCKey& key) const {
   }
   PADDLE_ENFORCE_NE(it,
                     container_.end(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "param %s should exists in TranslationContext", key));
   const auto& values = it->second;
   PADDLE_ENFORCE_NE(
       values.size(),
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "param %s should have size > 0, but get:%d", key, values.size()));
   return values.back();
 }
@@ -103,7 +103,7 @@ size_t TranslationContext::count(const TCKey& key) const {
   PADDLE_ENFORCE_NE(
       values.size(),
       0u,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "param %s should have size > 0, but get:%d", key, values.size()));
   return values.size();
 }
@@ -199,7 +199,7 @@ void ProgramTranslator::TranslateBlock(const BlockDesc& src_block,
   VLOG(8) << "=============>start to translate a block: " << &src_block;
   PADDLE_ENFORCE(
       (src_block.OpSize() >= end_id) && (start_id <= end_id),
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "Translation of Block needs to meet the requirements of start_id <= "
           "end_id <= block_size, but get start_id=%d, end_id=%d, block_size=%d",
           start_id,
@@ -213,7 +213,7 @@ void ProgramTranslator::TranslateBlock(const BlockDesc& src_block,
 
     PADDLE_ENFORCE_EQ(unsupported_ops.count(op->Type()),
                       0,
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "Not support translated %s op", op->Type()));
 
     if (op->Type() == "conditional_block") {
@@ -350,7 +350,7 @@ void ProgramTranslator::TranslateIfOperation(
   std::vector<pir::Type> if_op_output_types;
   for (auto var_desc : cond_op_output_vars) {
     PADDLE_ENFORCE_NOT_NULL(var_desc,
-                            phi::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "[control flow] Output should not be null"));
     pir::Type translated_var_type =
         type_translator[var_desc->GetType()](ctx_, *var_desc);
@@ -453,7 +453,7 @@ void ProgramTranslator::TranslateIfOperation(
             InsertInitOpOrCreateArrayToBlock(&false_region.front(), true_type);
         PADDLE_ENFORCE_NOT_NULL(
             init_op,
-            phi::errors::PreconditionNotMet(
+            common::errors::PreconditionNotMet(
                 "Only support insert full or data op for DenseTensor or "
                 "DenseTensorArray to false block failed."));
         false_block_context->PushValue(
@@ -548,7 +548,7 @@ void ProgramTranslator::TranslateGeneralOperation(
   VLOG(10) << "[op translated][general]" << operation << "end";
 }
 
-inline pir::Operation* InsertGetParamaterOp(pir::IrContext* ctx,
+inline pir::Operation* InsertGetParameterOp(pir::IrContext* ctx,
                                             const VarDesc* var) {
   auto& type_translator = TypeTranslator::instance();
   std::string parameter_op_name(pir::ParameterOp::name());
@@ -563,7 +563,7 @@ inline pir::Operation* InsertGetParamaterOp(pir::IrContext* ctx,
   return operation;
 }
 
-inline pir::Operation* InsertSetParamaterOp(pir::IrContext* ctx,
+inline pir::Operation* InsertSetParameterOp(pir::IrContext* ctx,
                                             pir::Value defining_op_result,
                                             const VarDesc* var) {
   std::string set_parameter_op_name(pir::SetParameterOp::name());
@@ -625,9 +625,9 @@ void ProgramTranslator::GetParameterForSingleBlock(const BlockDesc& block) {
         if (need_parameter_op) {
           PADDLE_ENFORCE_NOT_NULL(
               var_desc,
-              phi::errors::PreconditionNotMet(
+              common::errors::PreconditionNotMet(
                   "VarDesc of [%s] can not be nullptr", var_name));
-          pir::Operation* op = InsertGetParamaterOp(ctx_, var_desc);
+          pir::Operation* op = InsertGetParameterOp(ctx_, var_desc);
           program_->block()->push_back(op);
           param_map_.PushValue(var_name, VariableDefiningInfo(op->result(0)));
           VLOG(10) << "[op translated][get parameter]" << var_name;
@@ -683,7 +683,7 @@ void ProgramTranslator::SetParameterFromSingleBlock(const BlockDesc& block) {
                 param_map_.at(var_name).value.dyn_cast<pir::OpResult>();
           }
 
-          pir::Operation* op = InsertSetParamaterOp(
+          pir::Operation* op = InsertSetParameterOp(
               ctx_, defining_op_result, parameter_name_mappings_[var_name]);
 
           pir::Block* block = program_->block();
@@ -692,7 +692,7 @@ void ProgramTranslator::SetParameterFromSingleBlock(const BlockDesc& block) {
 
           PADDLE_ENFORCE_NE(insert_pos,
                             block->end(),
-                            phi::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "Parameter %s must have corresponding its "
                                 "defining operation",
                                 var_name));
@@ -726,7 +726,7 @@ void ProgramTranslator::SetStopGradientAttributeForAllValue(
       auto* defining_op = value.owner();
       PADDLE_ENFORCE_NOT_NULL(
           defining_op,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "Defining operator of [%s] can not be nullptr", var_name));
       VLOG(8) << "[op translated][stop gradient]" << var_name
               << " from: " << defining_op->name();
@@ -761,7 +761,7 @@ const VariableDefiningInfo& ProgramTranslator::CreateUndefinedVariable(
   auto dtype = ::phi::TransToPhiDataType(var_desc->GetDataType());
   auto val = pir::Value(nullptr);
   if (var_desc->GetType() ==
-      paddle::framework::proto::VarType::LOD_TENSOR_ARRAY) {
+      paddle::framework::proto::VarType::DENSE_TENSOR_ARRAY) {
     val = builder.Build<dialect::CreateArrayOp>(dtype).result(0);
     VLOG(10) << "[undefined variable] " << var_name << " " << val.type();
   } else {
@@ -793,7 +793,7 @@ void ProgramTranslator::SetIsPersistableAttributeForAllValue(
       auto* defining_op = value.owner();
       PADDLE_ENFORCE_NOT_NULL(
           defining_op,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "Defining operator of [%s] can not be nullptr", var_name));
       VLOG(8) << "[op translated][is persistable]" << var_name
               << " from: " << defining_op->name();

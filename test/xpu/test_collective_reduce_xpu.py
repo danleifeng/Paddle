@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
+os.environ['FLAGS_enable_pir_api'] = '0'
+
 import unittest
 
 from get_test_cover_info import get_xpu_op_support_types
@@ -33,7 +37,7 @@ class TestCollectiveReduceAPI(TestDistBase):
         "run test when having at least 2 XPUs.",
     )
     def test_reduce(self):
-        support_types = get_xpu_op_support_types('c_reduce_sum')
+        support_types = get_xpu_op_support_types('reduce')
         for dtype in support_types:
             self.check_with_place(
                 "collective_reduce_api.py",
@@ -46,7 +50,7 @@ class TestCollectiveReduceAPI(TestDistBase):
         "run test when having at least 2 XPUs.",
     )
     def test_reduce_dygraph(self):
-        support_types = get_xpu_op_support_types('c_reduce_sum')
+        support_types = get_xpu_op_support_types('reduce')
         for dtype in support_types:
             self.check_with_place(
                 "collective_reduce_api_dygraph.py",

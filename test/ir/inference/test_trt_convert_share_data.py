@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import List
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -90,24 +91,20 @@ class TrtConvertShareDataTest(TrtLayerAutoScanTest):
 
                 yield program_config
 
+    def generate_dynamic_shape(self, attrs):
+        if self.dims == 1:
+            self.dynamic_shape.min_input_shape = {"input_data": [1]}
+            self.dynamic_shape.max_input_shape = {"input_data": [1]}
+            self.dynamic_shape.opt_input_shape = {"input_data": [1]}
+        else:
+            self.dynamic_shape.min_input_shape = {"input_data": [1, 3, 64, 64]}
+            self.dynamic_shape.max_input_shape = {"input_data": [1, 3, 64, 64]}
+            self.dynamic_shape.opt_input_shape = {"input_data": [1, 3, 64, 64]}
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape(attrs):
-            if self.dims == 1:
-                self.dynamic_shape.min_input_shape = {"input_data": [1]}
-                self.dynamic_shape.max_input_shape = {"input_data": [1]}
-                self.dynamic_shape.opt_input_shape = {"input_data": [1]}
-            else:
-                self.dynamic_shape.min_input_shape = {
-                    "input_data": [1, 3, 64, 64]
-                }
-                self.dynamic_shape.max_input_shape = {
-                    "input_data": [1, 3, 64, 64]
-                }
-                self.dynamic_shape.opt_input_shape = {
-                    "input_data": [1, 3, 64, 64]
-                }
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
 
         def clear_dynamic_shape():
             self.dynamic_shape.min_input_shape = {}
@@ -125,19 +122,20 @@ class TrtConvertShareDataTest(TrtLayerAutoScanTest):
 
         # for static_shape
         clear_dynamic_shape()
-        self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-5
-        self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-2
+        if not run_pir:
+            self.trt_param.precision = paddle_infer.PrecisionType.Float32
+            program_config.set_input_type(np.float32)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                attrs, False
+            ), 1e-5
+            self.trt_param.precision = paddle_infer.PrecisionType.Half
+            program_config.set_input_type(np.float16)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                attrs, False
+            ), 1e-2
 
         # for dynamic_shape
-        generate_dynamic_shape(attrs)
+        self.generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
@@ -150,7 +148,7 @@ class TrtConvertShareDataTest(TrtLayerAutoScanTest):
         ), 1e-2
 
     def test(self):
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 if __name__ == "__main__":

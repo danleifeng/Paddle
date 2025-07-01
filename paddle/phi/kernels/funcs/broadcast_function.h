@@ -359,8 +359,8 @@ __global__ void VectorizedBroadcastKernel(
     int read_lens,
     Functor func) {
 #ifdef PADDLE_WITH_XPU_KP
-  int block_offset = BLOCK_ID_X * BLOCK_NUM_X * read_lens;
-  int stride = BLOCK_NUM_X * GRID_NUM_X * read_lens;
+  int64_t block_offset = BLOCK_ID_X * BLOCK_NUM_X * read_lens;
+  int64_t stride = BLOCK_NUM_X * GRID_NUM_X * read_lens;
   for (; block_offset < main_offset; block_offset += stride) {
     VectorizedBroadcastKernelImpl<OutT,
                                   Functor,
@@ -378,7 +378,7 @@ __global__ void VectorizedBroadcastKernel(
                                             read_lens,
                                             func);
   }
-  int num = numel - block_offset;
+  int64_t num = numel - block_offset;
   if (num > 0) {
     VectorizedBroadcastKernelImpl<OutT,
                                   Functor,
@@ -397,7 +397,7 @@ __global__ void VectorizedBroadcastKernel(
                                             func);
   }
 #else
-  int block_offset = BLOCK_ID_X * BLOCK_NUM_X * VecSize;
+  int64_t block_offset = BLOCK_ID_X * BLOCK_NUM_X * VecSize;
   if (block_offset < main_offset) {
     VectorizedBroadcastKernelImpl<OutT,
                                   Functor,
@@ -459,7 +459,7 @@ void LaunchBroadcastKernel(
                                        read_lens,
                                        func);
 #else
-  const auto &numel = classifier.numel;
+  const int &numel = classifier.numel;
   auto gpu_config =
       phi::backends::gpu::GetGpuLaunchConfig1D(ctx, numel, VecSize);
   auto stream = ctx.stream();
@@ -559,7 +559,7 @@ BroadcastKernelForDifferentVecSize(const KPDevice &ctx,
       break;
     }
     default: {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unsupported vectorized size: %d!", vec_size));
       break;
     }
@@ -739,12 +739,13 @@ void BroadcastKernelApply(const KPDevice &ctx,
                           int axis,
                           Functor func) {
 #ifndef PADDLE_WITH_XPU_KP
-  constexpr bool kEnabledInt64IndexKernel = (NumOuts == 1 && kArity <= 3);
-  // check whether need broadcast
   auto compute_size = std::numeric_limits<int32_t>::max();
-  bool use_int64_index_kernel =
-      kEnabledInt64IndexKernel && (*outs)[0]->numel() >= compute_size;
-
+  bool use_int64_index_kernel = false;
+  for (auto *out : *outs) {
+    if (out->numel() >= compute_size) {
+      use_int64_index_kernel = true;
+    }
+  }
   if (use_int64_index_kernel) {  // use_int64_index_kernel
     BroadcastKernelSplit<OutT, Functor, kArity, NumOuts>(
         ctx, ins, outs, axis, func, compute_size);
@@ -770,43 +771,45 @@ void BroadcastKernel(const KPDevice &ctx,
   PADDLE_ENFORCE_EQ(
       ins.size(),
       2,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "XPU only support inputs is 2, but received %d", ins.size()));
 #endif
 
   PADDLE_ENFORCE_EQ(
       ins.size(),
       kArity,
-      phi::errors::InvalidArgument("The number of inputs is expected to be "
-                                   "equal to the "
-                                   "arity of functor. But received: the "
-                                   "number of inputs "
-                                   "is %d, the arity of functor is %d.",
-                                   ins.size(),
-                                   kArity));
+      common::errors::InvalidArgument("The number of inputs is expected to be "
+                                      "equal to the "
+                                      "arity of functor. But received: the "
+                                      "number of inputs "
+                                      "is %d, the arity of functor is %d.",
+                                      ins.size(),
+                                      kArity));
   PADDLE_ENFORCE_EQ(
       outs->size(),
       NumOuts,
-      phi::errors::InvalidArgument("Number of outputs shall equal to number "
-                                   "of functions, "
-                                   "but number of outputs is %d, of "
-                                   "functions is %d.",
-                                   outs->size(),
-                                   NumOuts));
+      common::errors::InvalidArgument("Number of outputs shall equal to number "
+                                      "of functions, "
+                                      "but number of outputs is %d, of "
+                                      "functions is %d.",
+                                      outs->size(),
+                                      NumOuts));
 
   for (auto i = 0; i < outs->size(); ++i) {
     if (i > 0) {
       PADDLE_ENFORCE_EQ(
           (*outs)[i]->dims(),
           (*outs)[0]->dims(),
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The shape of each output tensor shall be identical yet, but "
               "%d-th output tensor`s shape is not.",
               i));
     }
     ctx.template Alloc<OutT>((*outs)[i]);
   }
-
+  if ((*outs)[0]->numel() == 0) {
+    return;
+  }
   int max_rank = 0;
   int min_rank = phi::DDim::kMaxRank;
   for (auto *in : ins) {

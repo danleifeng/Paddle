@@ -23,17 +23,14 @@ limitations under the License. */
 #include "paddle/phi/infermeta/spmd_rules/spmd_rule_macro_define.h"
 #include "paddle/phi/infermeta/spmd_rules/utils.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 using phi::distributed::auto_parallel::str_join;
 
 ////////////////// Utils Functions //////////////////
-
-SpmdInfo ScatterInferSpmd(const DistMetaTensor& x,
-                          const DistMetaTensor& index,
-                          const DistMetaTensor& updates,
-                          bool overwrite) {
+SpmdInfo ScatterBaseInferSpmd(const DistMetaTensor& x,
+                              const DistMetaTensor& index,
+                              const DistMetaTensor& updates) {
   // Step0: Verify Input Args Based on Scatter Logic
   // extract and check x_ndim, x_shape, x_dist_attr_src and
   // x_dims_mapping_src with the macro
@@ -43,7 +40,7 @@ SpmdInfo ScatterInferSpmd(const DistMetaTensor& x,
   PADDLE_ENFORCE_LE(
       index_ndim,
       updates_ndim,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "%s (%d): The Index's rank [%d] should be less or equal "
           "to Updates' rank [%d].",
           __FILE__,
@@ -60,7 +57,7 @@ SpmdInfo ScatterInferSpmd(const DistMetaTensor& x,
   std::string out_axes = GetBroadcastAxes(x_ndim, x_ndim, alphabet);
   out_axes[0] = '1';
 
-  // Step2: Sharding Propogation
+  // Step2: Sharding Propagation
   // Step2.1: Merge input shardings
   std::unordered_map<std::string, int64_t> axis_to_dim_map =
       ShardingMergeForTensors({{index_axes, index_dims_mapping_src},
@@ -108,11 +105,23 @@ SpmdInfo ScatterInferSpmd(const DistMetaTensor& x,
           {out_dist_attr}};
 }
 
-SpmdInfo ScatterInferSpmdReverse(const DistMetaTensor& x,
-                                 const DistMetaTensor& index,
-                                 const DistMetaTensor& updates,
-                                 const DistMetaTensor& out,
-                                 bool overwrite) {
+SpmdInfo ScatterInferSpmd(const DistMetaTensor& x,
+                          const DistMetaTensor& index,
+                          const DistMetaTensor& updates,
+                          bool overwrite) {
+  return ScatterBaseInferSpmd(x, index, updates);
+}
+
+SpmdInfo ScatterNdAddInferSpmd(const DistMetaTensor& x,
+                               const DistMetaTensor& index,
+                               const DistMetaTensor& updates) {
+  return ScatterBaseInferSpmd(x, index, updates);
+}
+
+SpmdInfo ScatterBaseInferSpmdReverse(const DistMetaTensor& x,
+                                     const DistMetaTensor& index,
+                                     const DistMetaTensor& updates,
+                                     const DistMetaTensor& out) {
   // Step0: Verify Input Args Based on Scatter Logic
   // extract and check out_ndim, out_shape, out_dist_attr_src and
   // out_dims_mapping_src with the macro
@@ -130,7 +139,7 @@ SpmdInfo ScatterInferSpmdReverse(const DistMetaTensor& x,
       GetBroadcastAxes(updates_ndim, updates_ndim, alphabet);
   std::string out_axes = GetBroadcastAxes(out_ndim, out_ndim, alphabet);
 
-  // Step2: Sharding Propogation
+  // Step2: Sharding Propagation
   // Step2.1: Merge output shardings
   // the batch axis of output must be replicated
   // TODO(zhangyichen): consider the case when the output is partial
@@ -167,6 +176,21 @@ SpmdInfo ScatterInferSpmdReverse(const DistMetaTensor& x,
           {out_dist_attr_dst}};
 }
 
+SpmdInfo ScatterInferSpmdReverse(const DistMetaTensor& x,
+                                 const DistMetaTensor& index,
+                                 const DistMetaTensor& updates,
+                                 const DistMetaTensor& out,
+                                 bool overwrite) {
+  return ScatterBaseInferSpmdReverse(x, index, updates, out);
+}
+
+SpmdInfo ScatterNdAddInferSpmdReverse(const DistMetaTensor& x,
+                                      const DistMetaTensor& index,
+                                      const DistMetaTensor& updates,
+                                      const DistMetaTensor& out) {
+  return ScatterBaseInferSpmdReverse(x, index, updates, out);
+}
+
 SpmdInfo ScatterGradInferSpmd(const DistMetaTensor& index,
                               const DistMetaTensor& updates,
                               const DistMetaTensor& out_grad,
@@ -178,12 +202,17 @@ SpmdInfo ScatterGradInferSpmd(const DistMetaTensor& index,
   // the batch axis of index, updates, out_grad must be replicated
   std::vector<int64_t> index_dims_mapping(index_dims_mapping_src);
   index_dims_mapping[0] = -1;
+  std::vector<int64_t> updates_dims_mapping(updates_dims_mapping_src);
+  updates_dims_mapping[0] = -1;
   std::vector<int64_t> out_grad_dims_mapping(out_grad_dims_mapping_src);
   out_grad_dims_mapping[0] = -1;
 
   TensorDistAttr index_dist_attr_dst =
       CopyTensorDistAttrForOutput(index_dist_attr_src);
   index_dist_attr_dst.set_dims_mapping(index_dims_mapping);
+  TensorDistAttr updates_dist_attr_dst =
+      CopyTensorDistAttrForOutput(updates_dist_attr_src);
+  updates_dist_attr_dst.set_dims_mapping(updates_dims_mapping);
   TensorDistAttr out_grad_dist_attr_dst =
       CopyTensorDistAttrForOutput(out_grad_dist_attr_src);
   out_grad_dist_attr_dst.set_dims_mapping(out_grad_dims_mapping);
@@ -199,9 +228,8 @@ SpmdInfo ScatterGradInferSpmd(const DistMetaTensor& index,
   TensorDistAttr updates_grad_dist_attr =
       PADDLE_GET_CONST(TensorDistAttr, spmd_info.second[0]);
 
-  return {{index_dist_attr_dst, updates_dist_attr_src, out_grad_dist_attr_dst},
+  return {{index_dist_attr_dst, updates_dist_attr_dst, out_grad_dist_attr_dst},
           {x_grad_dist_attr, updates_grad_dist_attr}};
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

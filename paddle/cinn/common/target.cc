@@ -24,6 +24,7 @@
 
 #include "paddle/cinn/backends/cuda_util.h"
 #include "paddle/cinn/common/arch_util.h"
+#include "paddle/cinn/common/macros.h"
 #include "paddle/cinn/common/target.h"
 #include "paddle/cinn/runtime/backend_api.h"
 #include "paddle/cinn/runtime/cinn_runtime.h"
@@ -38,7 +39,30 @@ Target::Target(OS o,
                Bit b,
                const std::vector<Feature> &features,
                const std::vector<Lib> &libs)
-    : os(o), arch(a), bits(b), features(features), libs(libs) {}
+    : os(o), arch(a), bits(b), features(features), libs(libs) {
+  // check compile option
+  arch.Match([&](UnknownArch) {},
+             [&](X86Arch) {},
+             [&](ARMArch) {},
+             [&](NVGPUArch) {
+#ifndef CINN_WITH_CUDA
+               PADDLE_THROW(::common::errors::Unimplemented(
+                   "Please recompile with flag WITH_GPU and WITH_CINN."));
+#endif
+             },
+             [&](HygonDCUArchHIP) {
+#ifndef CINN_WITH_HIP
+               PADDLE_THROW(::common::errors::Unimplemented(
+                   "Please recompile with flag WITH_ROCM and WITH_CINN."));
+#endif
+             },
+             [&](HygonDCUArchSYCL) {
+#ifndef CINN_WITH_SYCL
+               PADDLE_THROW(::common::errors::Unimplemented(
+                   "Please recompile with flag CINN_WITH_SYCL and WITH_CINN."));
+#endif
+             });
+}
 
 bool Target::operator==(const Target &other) const {
   return os == other.os &&      //
@@ -54,13 +78,12 @@ int GetRuntimeArchImpl(X86Arch) { return cinn_x86_device; }
 int GetRuntimeArchImpl(ARMArch) { return cinn_arm_device; }
 
 int GetRuntimeArchImpl(NVGPUArch) {
-  PADDLE_THROW(phi::errors::InvalidArgument("Not supported arch"));
+  PADDLE_THROW(::common::errors::InvalidArgument("Not supported arch"));
 }
 
-int GetRuntimeArchImpl(HygonDCUArchHIP) {
-  PADDLE_THROW(phi::errors::InvalidArgument(
-      "HygonDCUArchHIP not supported GetRuntimeArch!"));
-}
+int GetRuntimeArchImpl(HygonDCUArchHIP) { CINN_NOT_IMPLEMENTED }
+
+int GetRuntimeArchImpl(HygonDCUArchSYCL) { CINN_NOT_IMPLEMENTED }
 
 int GetRuntimeArch(Arch arch) {
   return std::visit([](const auto &impl) { return GetRuntimeArchImpl(impl); },
@@ -84,6 +107,8 @@ int GetMaxNumThreadsImpl(ARMArch arch) {
 int GetMaxNumThreadsImpl(NVGPUArch arch) { return 1024; }
 
 int GetMaxNumThreadsImpl(HygonDCUArchHIP arch) { return 1024; }
+
+int GetMaxNumThreadsImpl(HygonDCUArchSYCL arch) { return 1024; }
 
 int GetMaxNumThreads(Arch arch) {
   return std::visit([](const auto &impl) { return GetMaxNumThreadsImpl(impl); },
@@ -114,6 +139,11 @@ int GetMultiProcessCountImpl(NVGPUArch arch) {
 }
 
 int GetMultiProcessCountImpl(HygonDCUArchHIP arch) {
+  return BackendAPI::get_backend(arch)->get_device_property(
+      BackendAPI::DeviceProperty::MultiProcessorCount);
+}
+
+int GetMultiProcessCountImpl(HygonDCUArchSYCL arch) {
   return BackendAPI::get_backend(arch)->get_device_property(
       BackendAPI::DeviceProperty::MultiProcessorCount);
 }
@@ -157,6 +187,11 @@ int GetMaxThreadsPerSmImpl(HygonDCUArchHIP arch) {
       BackendAPI::DeviceProperty::MaxThreadsPerSM);
 }
 
+int GetMaxThreadsPerSmImpl(HygonDCUArchSYCL arch) {
+  return BackendAPI::get_backend(arch)->get_device_property(
+      BackendAPI::DeviceProperty::MaxThreadsPerSM);
+}
+
 int GetMaxThreadsPerSm(Arch arch) {
   return std::visit(
       [](const auto &impl) { return GetMaxThreadsPerSmImpl(impl); },
@@ -194,6 +229,11 @@ int GetMaxBlocksPerSmImpl(HygonDCUArchHIP arch) {
       BackendAPI::DeviceProperty::MaxBlocksPerSM);
 }
 
+int GetMaxBlocksPerSmImpl(HygonDCUArchSYCL arch) {
+  return BackendAPI::get_backend(arch)->get_device_property(
+      BackendAPI::DeviceProperty::MaxBlocksPerSM);
+}
+
 int GetMaxBlocksPerSm(Arch arch) {
   return std::visit(
       [](const auto &impl) { return GetMaxBlocksPerSmImpl(impl); },
@@ -213,7 +253,7 @@ int Target::get_target_bits() const {
     case Bit::Unk:
       return 0;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument("Not supported Bit"));
+      PADDLE_THROW(::common::errors::InvalidArgument("Not supported Bit"));
   }
   return -1;
 }
@@ -225,6 +265,7 @@ std::string Target::arch_str() const {
 }
 
 std::string Target::device_name_str() const {
+#ifdef CINN_WITH_CUDA
   int device_idx = 0;
   cudaError_t result = cudaGetDevice(&device_idx);
   if (result != cudaSuccess) {
@@ -248,6 +289,9 @@ std::string Target::device_name_str() const {
   std::string device_name = properties.name;
   device_name = std::regex_replace(device_name, std::regex(" "), "_");
   return std::regex_replace(device_name, std::regex("-"), "_");
+#else
+  CINN_NOT_IMPLEMENTED
+#endif
 }
 
 std::ostream &operator<<(std::ostream &os, const Target &target) {
@@ -306,9 +350,17 @@ const Target &DefaultHygonDcuHipTarget() {
   return target;
 }
 
+const Target &DefaultHygonDcuSyclTarget() {
+  static Target target(
+      Target::OS::Linux, HygonDCUArchSYCL{}, Target::Bit::k64, {}, {});
+  return target;
+}
+
 const Target &DefaultDeviceTarget() {
 #ifdef CINN_WITH_CUDA
   return DefaultNVGPUTarget();
+#elif defined(CINN_WITH_SYCL)
+  return DefaultHygonDcuSyclTarget();
 #elif defined(CINN_WITH_HIP)
   return DefaultHygonDcuHipTarget();
 #endif
@@ -348,11 +400,58 @@ int GetMaxBlocks() {
 const Target &DefaultTarget() {
 #ifdef CINN_WITH_CUDA
   return DefaultNVGPUTarget();
+#elif defined(CINN_WITH_SYCL)
+  return DefaultHygonDcuSyclTarget();
 #elif defined(CINN_WITH_HIP)
   return DefaultHygonDcuHipTarget();
 #else
   return DefaultHostTarget();
 #endif
+}
+
+bool GetSupportsCooperativeLaunchImpl(UnknownArch) {
+  LOG(FATAL)
+      << "The target is not GPU! Cannot get supports cooperative launch.";
+}
+
+bool GetSupportsCooperativeLaunchImpl(X86Arch) {
+  LOG(FATAL)
+      << "The target is not GPU! Cannot get supports cooperative launch.";
+}
+
+bool GetSupportsCooperativeLaunchImpl(ARMArch) {
+  LOG(FATAL)
+      << "The target is not GPU! Cannot get supports cooperative launch.";
+}
+
+bool GetSupportsCooperativeLaunchImpl(NVGPUArch) {
+  int supportsCoopLaunch = 0;
+#ifdef CINN_WITH_CUDA
+  cudaDeviceGetAttribute(&supportsCoopLaunch, cudaDevAttrCooperativeLaunch, 0);
+#endif
+  return supportsCoopLaunch != 0;
+}
+
+bool GetSupportsCooperativeLaunchImpl(HygonDCUArchHIP) {
+  CINN_NOT_IMPLEMENTED
+  LOG(FATAL)
+      << "The target is not GPU! Cannot get supports cooperative launch.";
+}
+
+bool GetSupportsCooperativeLaunchImpl(HygonDCUArchSYCL) {
+  CINN_NOT_IMPLEMENTED
+  LOG(FATAL)
+      << "The target is not GPU! Cannot get supports cooperative launch.";
+}
+
+bool GetSupportsCooperativeLaunch(Arch arch) {
+  return std::visit(
+      [](const auto &impl) { return GetSupportsCooperativeLaunchImpl(impl); },
+      arch.variant());
+}
+
+bool Target::get_supports_cooperative_launch() const {
+  return GetSupportsCooperativeLaunch(arch);
 }
 
 }  // namespace common

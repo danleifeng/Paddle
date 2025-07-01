@@ -52,7 +52,7 @@ struct BroadcastDimsSimplifier {
     }
     ExtendInputDimensions(axis);
 
-    // To Merge the dimensions of input_tensors while the consequtive
+    // To Merge the dimensions of input_tensors while the consecutive
     // equal-dimensions appears. Example below :
     //   in_1.shape = [2, 3, 4, 5]    in_1.shape = [2, 12, 5]
     //   in_2.shape = [1, 3, 4, 5] -> in_2.shape = [1, 12, 5]
@@ -113,7 +113,7 @@ struct BroadcastDimsSimplifier {
             extended_in_dim[out_idx] = in_dim[in_idx];
             out_idx++;
           } else {
-            PADDLE_THROW(phi::errors::InvalidArgument(
+            PADDLE_THROW(common::errors::InvalidArgument(
                 "The %d-th dimension of input tensor is expected to be equal "
                 "with the %d-th dimension of output tensor %d or 1, but "
                 "received %d. The input's shape is {%s}, the output's shape is "
@@ -134,7 +134,7 @@ struct BroadcastDimsSimplifier {
           PADDLE_ENFORCE_EQ(
               in_dim[in_idx] == out_dims[in_idx] || in_dim[in_idx] == 1,
               true,
-              phi::errors::InvalidArgument(
+              common::errors::InvalidArgument(
                   "The %d-th dimension of input tensor is expected to be equal "
                   "with the %d-th dimension of output tensor %d or 1, but "
                   "received %d.",
@@ -156,7 +156,7 @@ struct BroadcastDimsSimplifier {
     auto VectorReorganise = [](DimVector *vec, int l_idx, int m_idx) {
       (*vec)[m_idx - 1] = std::accumulate(vec->begin() + l_idx,
                                           vec->begin() + m_idx,
-                                          1,
+                                          int64_t{1},
                                           std::multiplies<int64_t>());
       vec->erase(vec->begin() + l_idx, vec->begin() + m_idx - 1);
     };

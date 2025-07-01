@@ -15,10 +15,6 @@ limitations under the License. */
 #include "paddle/fluid/pybind/communication.h"
 
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
 #include <pybind11/chrono.h>
 #include <pybind11/complex.h>
 #include <pybind11/functional.h>
@@ -34,8 +30,7 @@ limitations under the License. */
 
 namespace py = pybind11;
 
-namespace paddle {
-namespace pybind {
+namespace paddle::pybind {
 
 void BindCommContextManager(py::module *m) {
   auto P2POption = py::class_<phi::distributed::P2POption>(*m, "P2POption")
@@ -142,5 +137,4 @@ void BindTCPStore(py::module *m) {
          &phi::distributed::CreateOrGetGlobalTCPStore);
 }
 
-}  // namespace pybind
-}  // namespace paddle
+}  // namespace paddle::pybind

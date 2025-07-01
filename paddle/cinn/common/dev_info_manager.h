@@ -20,6 +20,7 @@
 #include "paddle/cinn/common/macros.h"
 #include "paddle/cinn/common/nvgpu_dev_info.h"
 #include "paddle/cinn/common/target.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace common {
@@ -54,11 +55,17 @@ class DevInfoMgr final {
   using RetType = typename GetDevType<arch>::DevType;
 
   const RetType* operator->() const {
-    CHECK(!std::is_void<RetType>()) << "Current device can't be recognized!\n";
+    PADDLE_ENFORCE_EQ(!std::is_void<RetType>(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "Current device can't be recognized!"));
     return dynamic_cast<const RetType*>(impl_.get());
   }
   RetType* operator->() {
-    CHECK(!std::is_void<RetType>()) << "Current device can't be recognized!\n";
+    PADDLE_ENFORCE_EQ(!std::is_void<RetType>(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "Current device can't be recognized!"));
     return dynamic_cast<RetType*>(impl_.get());
   }
 };

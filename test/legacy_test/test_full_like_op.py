@@ -22,7 +22,6 @@ import paddle.framework.dtype as dtypes
 from paddle.base import core
 from paddle.base.framework import convert_np_dtype_to_dtype_
 from paddle.framework import in_pir_mode
-from paddle.pir_utils import test_with_pir_api
 
 
 def fill_any_like_wrapper(x, value, out_dtype=None, name=None):
@@ -45,7 +44,6 @@ def fill_any_like_wrapper(x, value, out_dtype=None, name=None):
 class TestFullOp(unittest.TestCase):
     """Test fill_any_like op(whose API is full_like) for attr out."""
 
-    @test_with_pir_api
     def test_attr_tensor_API(self):
         paddle.enable_static()
         startup_program = paddle.static.Program()
@@ -97,7 +95,7 @@ class TestFullOp(unittest.TestCase):
 
 
 class TestFullOpError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -218,6 +216,57 @@ class TestFullLikeBF16Op(TestFullLikeOp1):
         self.fill_value = 6666
         self.shape = [10, 10]
         self.dtype = np.uint16
+
+
+class TestFullKernelZeroSize(unittest.TestCase):
+    def test_full_kernel_cpu_zero_size(self):
+        paddle.disable_static()
+        value = 5
+        dtype = "int32"
+        shape = [0, 3]
+        tensor = paddle.full(shape, value, dtype=dtype)
+        expected = np.full(shape, value, dtype=dtype)
+        self.assertTrue(np.array_equal(tensor.numpy(), expected))
+        paddle.enable_static()
+
+    @unittest.skipIf(
+        not core.is_compiled_with_cuda(), "Paddle is not compiled with CUDA"
+    )
+    def test_full_kernel_gpu_zero_size(self):
+        paddle.disable_static()
+        paddle.set_device("gpu:0")
+        value = 5.5
+        dtype = "float32"
+        shape = [0, 3]
+        tensor = paddle.full(shape, value, dtype=dtype)
+        expected = np.full(shape, value, dtype=dtype)
+        self.assertTrue(np.array_equal(tensor.numpy(), expected))
+        paddle.enable_static()
+
+
+class TestFullLikeKernelZeroSize(unittest.TestCase):
+    def test_full_like_kernel_cpu_zero_size(self):
+        paddle.disable_static()
+        base_tensor = paddle.to_tensor(np.empty((0, 2), dtype=np.float32))
+        value = 10.0
+        result = paddle.full_like(base_tensor, value, dtype="float32")
+        expected = np.full_like(base_tensor.numpy(), value)
+        self.assertTrue(np.array_equal(result.numpy(), expected))
+        paddle.enable_static()
+
+    @unittest.skipIf(
+        not core.is_compiled_with_cuda(), "Paddle is not compiled with CUDA"
+    )
+    def test_full_like_kernel_gpu_zero_size(self):
+        paddle.disable_static()
+        base_tensor = paddle.to_tensor(
+            np.empty((0, 3), dtype=np.float32), place=paddle.CUDAPlace(0)
+        )
+        value = 20.0
+        result = paddle.full_like(base_tensor, value, dtype="float32")
+        expected = np.full_like(base_tensor.numpy(), value)
+        self.assertTrue(np.array_equal(result.numpy(), expected))
+        paddle.enable_static()
 
 
 if __name__ == "__main__":

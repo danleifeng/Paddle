@@ -23,7 +23,6 @@ import paddle
 from paddle import base
 from paddle.base import core
 from paddle.base.backward import _as_list
-from paddle.pir_utils import test_with_pir_api
 
 
 @skip_check_grad_ci(
@@ -42,7 +41,8 @@ class TestCholeskyOp(OpTest):
         self._input_shape = (2, 32, 32)
         self._upper = True
         self.init_config()
-        self.trans_dims = list(range(len(self._input_shape) - 2)) + [
+        self.trans_dims = [
+            *range(len(self._input_shape) - 2),
             len(self._input_shape) - 1,
             len(self._input_shape) - 2,
         ]
@@ -69,7 +69,6 @@ class TestCholeskyOp(OpTest):
         for p in places:
             self.func(p)
 
-    @test_with_pir_api
     @prog_scope()
     def func(self, place):
         # use small size since Jacobian gradients is time consuming
@@ -107,8 +106,8 @@ class TestCholeskyOp(OpTest):
             if x_init:
                 if len(x_init) != len(root):
                     raise ValueError(
-                        'len(x_init) (=%d) is not the same'
-                        ' as len(x) (= %d)' % (len(x_init), len(root))
+                        f'len(x_init) (={len(x_init)}) is not the same'
+                        f' as len(x) (={len(root)})'
                     )
                 # init variable in main program
                 for var, arr in zip(root, x_init):
@@ -154,6 +153,11 @@ class TestCholeskyOp2D(TestCholeskyOp):
         self._input_shape = (32, 32)
 
 
+class TestCholeskyOpZeroSize(TestCholeskyOp):
+    def init_config(self):
+        self._input_shape = (0, 0)
+
+
 class TestDygraph(unittest.TestCase):
     def test_dygraph(self):
         if core.is_compiled_with_rocm():
@@ -173,17 +177,16 @@ class TestCholeskySingularAPI(unittest.TestCase):
         if core.is_compiled_with_cuda() and (not core.is_compiled_with_rocm()):
             self.places.append(base.CUDAPlace(0))
 
-    @test_with_pir_api
-    def check_static_result(self, place, with_out=False):
+    def check_static_result(self, place, input_shape, with_out=False):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
         ):
             input = paddle.static.data(
-                name="input", shape=[4, 4], dtype="float64"
+                name="input", shape=input_shape, dtype="float64"
             )
             result = paddle.cholesky(input)
 
-            input_np = np.zeros([4, 4]).astype("float64")
+            input_np = np.zeros(input_shape).astype("float64")
 
             exe = base.Executor(place)
             try:
@@ -198,7 +201,9 @@ class TestCholeskySingularAPI(unittest.TestCase):
 
     def test_static(self):
         for place in self.places:
-            self.check_static_result(place=place)
+            self.check_static_result(place=place, input_shape=[4, 4])
+            self.check_static_result(place=place, input_shape=[0, 0])
+            self.check_static_result(place=place, input_shape=[5, 0, 0])
 
     def test_dygraph(self):
         for place in self.places:
@@ -209,9 +214,12 @@ class TestCholeskySingularAPI(unittest.TestCase):
                         [[10, 11, 12], [13, 14, 15], [16, 17, 18]],
                     ]
                 ).astype("float64")
+                input_np_zero = np.zeros((0, 3, 3), dtype="float64")
                 input = paddle.to_tensor(input_np)
+                input_zero = paddle.to_tensor(input_np_zero)
                 try:
                     result = paddle.cholesky(input)
+                    result_zero = paddle.cholesky(input_zero)
                 except RuntimeError as ex:
                     print("The mat is singular")
                 except ValueError as ex:

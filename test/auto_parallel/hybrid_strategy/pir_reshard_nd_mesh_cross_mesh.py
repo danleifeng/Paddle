@@ -17,8 +17,10 @@ import os
 import paddle
 import paddle.distributed as dist
 from paddle.distributed.auto_parallel.static.pir_pass import (
-    apply_reshard_pass,
+    ReshardPasses,
 )
+from paddle.distributed.auto_parallel.static.utils import set_all_ops_op_role
+from paddle.distributed.fleet.meta_optimizers.common import OpRole
 
 
 class TestReshardNdMeshCrossMesh:
@@ -80,13 +82,14 @@ class TestReshardNdMeshCrossMesh:
                     dist_input, self._mesh1, output_placements
                 )
             dist_program = main_program.clone()
-            apply_reshard_pass(dist_program)
+            set_all_ops_op_role(dist_program.global_block(), OpRole.Forward)
+            ReshardPasses.apply_reshard_pass(dist_program)
 
         return main_program, dist_program
 
     def run_pp_to_rr_case(self):
         # [Partial(), Partial()] --> [Replicate(), Replicate()]
-        # ops: c_allreduce_sum + c_allreduce_sum
+        # ops: all_reduce sum + all_reduce sum
         main_program, dist_program = self.create_program(
             [self.BATCH_SIZE, self.SEQ_LEN, self.HIDDEN_SIZE],
             [
@@ -102,11 +105,23 @@ class TestReshardNdMeshCrossMesh:
 
         rank_id = dist.get_rank()
         if rank_id in self._mesh0.process_ids:
-            assert new_ops_name[2] == "pd_op.send_v2"
+            assert dist_program.global_block().ops[2].name() == "pd_op.send_v2"
         else:
-            assert new_ops_name[2] == "pd_op.recv_v2"
-            assert new_ops_name[-2] == "pd_op.c_allreduce_sum"
-            assert new_ops_name[-1] == "pd_op.c_allreduce_sum"
+            assert dist_program.global_block().ops[2].name() == "pd_op.recv_v2"
+            assert (
+                dist_program.global_block().ops[-2].name() == "pd_op.all_reduce"
+            )
+            assert (
+                dist_program.global_block().ops[-2].int_attr("reduce_type")
+                == dist.ReduceOp.SUM
+            )
+            assert (
+                dist_program.global_block().ops[-1].name() == "pd_op.all_reduce"
+            )
+            assert (
+                dist_program.global_block().ops[-1].int_attr("reduce_type")
+                == dist.ReduceOp.SUM
+            )
 
             # check the first allreduce_sum
             op = new_ops[-2]

@@ -26,8 +26,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/softmax_grad_kernel.h"
 #include "paddle/phi/kernels/sparse/empty_kernel.h"
 
-namespace phi {
-namespace sparse {
+namespace phi::sparse {
 
 template <typename T, typename Context>
 void SoftmaxCsrGradKernel(const Context& dev_ctx,
@@ -37,7 +36,7 @@ void SoftmaxCsrGradKernel(const Context& dev_ctx,
                           SparseCsrTensor* dx) {
   PADDLE_ENFORCE_EQ(axis,
                     -1,
-                    phi::errors::Unimplemented(
+                    common::errors::Unimplemented(
                         "SparseCsrTensor only support axis=-1 for softmax, "
                         "which is faster when reading data by row (axis=-1)"));
   EmptyLikeCsrKernel<T, Context>(dev_ctx, dout, dx);
@@ -121,7 +120,7 @@ void SoftmaxCooGradCPUKernel(const Context& dev_ctx,
     PADDLE_ENFORCE_EQ(
         is_same_offset,
         true,
-        phi::errors::Unimplemented(
+        common::errors::Unimplemented(
             "SparseCooTensor only support same offsets for softmax."));
 
     SoftmaxGradKernel<T, Context>(
@@ -203,8 +202,7 @@ void SoftmaxCooGradKernel(const Context& dev_ctx,
       }));
 }
 
-}  // namespace sparse
-}  // namespace phi
+}  // namespace phi::sparse
 
 PD_REGISTER_KERNEL(softmax_csr_grad,
                    CPU,

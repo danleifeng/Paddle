@@ -23,16 +23,17 @@ import paddle
 import paddle.nn.functional as F
 from paddle import base
 from paddle.base import core
+from paddle.nn.functional import sdp_kernel
 from paddle.nn.functional.flash_attention import (
     calc_reduced_attention_scores,
     flash_attention,
-    flash_attention_with_sparse_mask,
+    flash_attention_v3_varlen,
     flash_attn_qkvpacked,
     flash_attn_unpadded,
     flash_attn_varlen_qkvpacked,
+    flashmask_attention,
     scaled_dot_product_attention,
 )
-from paddle.pir_utils import test_with_pir_api
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -75,6 +76,12 @@ def attention_naive_with_mask(q, k, v, attn_bias):
     o = paddle.matmul(p, vt)
     return paddle.transpose(o, [0, 2, 1, 3])
 
+
+is_sm80 = (
+    core.is_compiled_with_cuda()
+    and paddle.device.cuda.get_device_capability()[0] == 8
+    and paddle.device.cuda.get_device_capability()[1] == 0
+)
 
 is_sm8x = (
     core.is_compiled_with_cuda()
@@ -143,19 +150,33 @@ class TestFlashAttentionAPI(unittest.TestCase):
         cu_q = paddle.arange(0, (bs + 1) * ms, ms, dtype='int32')
 
         qq = paddle.reshape(q, [bs * ms, nh, hd])
-        out, _ = flash_attn_unpadded(
-            qq,
-            qq,
-            qq,
-            cu_q,
-            cu_q,
-            ms,
-            ms,
-            scale,
-            self.dropout,
-            self.causal,
-            self.return_softmax,
-        )
+        if is_sm90:
+            out, _ = flash_attention_v3_varlen(
+                qq,
+                qq,
+                qq,
+                cu_q,
+                cu_q,
+                self.dropout,
+                self.causal,
+                self.return_softmax,
+                max_seqlen_q=ms,
+                max_seqlen_k=ms,
+            )
+        else:
+            out, _ = flash_attn_unpadded(
+                qq,
+                qq,
+                qq,
+                cu_q,
+                cu_q,
+                ms,
+                ms,
+                scale,
+                self.dropout,
+                self.causal,
+                self.return_softmax,
+            )
         out_ = paddle.reshape(out_, [bs * ms, nh, hd])
 
         np.testing.assert_allclose(out.numpy(), out_, rtol=5e-03, atol=1e-03)
@@ -208,7 +229,6 @@ class TestFlashAttentionAPI(unittest.TestCase):
 
         paddle.disable_static()
 
-    @test_with_pir_api
     def test_all(self):
         print(
             f"Test case shape {self.shape} dtype {self.dtype} causal {self.causal}"
@@ -431,7 +451,9 @@ class TestFlashAttentionAPITest4(TestFlashAttentionAPI):
 class TestFlashAttentionAPITest5(TestFlashAttentionAPI):
     def setUp(self):
         self.place = paddle.CUDAPlace(0)
-        self.shape = (8, 1024, 16, 256)
+        self.shape = (
+            (8, 1024, 16, 256) if (is_sm80 or is_sm90) else (8, 1024, 16, 192)
+        )
         self.dtype = 'float16'
         self.dropout = 0.0
         self.causal = False
@@ -469,7 +491,42 @@ class TestSDPAttentionAPITest(TestFlashAttentionAPI):
         self.enable_mem_efficient = False
 
 
-class TestFlashAttenionWithMaskAPITest(TestFlashAttentionWithMaskAPI):
+class TestFlashAttentionWithMaskAPITest(TestFlashAttentionWithMaskAPI):
+    def setUp(self):
+        self.place = paddle.CUDAPlace(0)
+        self.shape = (8, 1024, 16, 128)
+        self.dtype = 'float16'
+        self.dropout = 0.0
+        self.causal = False
+
+
+# cpu case
+class TestSDPAttentionWithMaskAPITest(TestFlashAttentionWithMaskAPI):
+    def setUp(self):
+        self.place = paddle.CPUPlace()
+        self.shape = (8, 1024, 16, 128)
+        self.dtype = 'float32'
+        self.dropout = 0.0
+        self.causal = False
+
+
+# fp32 case
+class TestSDPAttentionWithMaskAPITest2(TestFlashAttentionWithMaskAPI):
+    def setUp(self):
+        self.place = paddle.CUDAPlace(0)
+        self.shape = (8, 1024, 16, 128)
+        self.dtype = 'float32'
+        self.dropout = 0.0
+        self.causal = False
+
+
+# low sm case
+@unittest.skipIf(
+    is_sm_supported,
+    "core is not compiled with CUDA and cuda version need larger than or equal to 11.4"
+    "and device's compute capability must be 7.5 or 8.x",
+)
+class TestSDPAttentionWithMaskAPITest3(TestFlashAttentionWithMaskAPI):
     def setUp(self):
         self.place = paddle.CUDAPlace(0)
         self.shape = (8, 1024, 16, 128)
@@ -567,10 +624,10 @@ class TestFlashAttentionGQA(unittest.TestCase):
             low=1, high=self.seq_len, size=[self.batch_size]
         )
         cu_seqlen_q = paddle.to_tensor(
-            [0] + np.cumsum(seq_len_q).tolist(), dtype=paddle.int32
+            [0, *np.cumsum(seq_len_q).tolist()], dtype=paddle.int32
         )
         cu_seqlen_k = paddle.to_tensor(
-            [0] + np.cumsum(seq_len_k).tolist(), dtype=paddle.int32
+            [0, *np.cumsum(seq_len_k).tolist()], dtype=paddle.int32
         )
 
         qs, ks, vs = [], [], []
@@ -772,7 +829,7 @@ class TestFlashAttentionGQA(unittest.TestCase):
 
             tmp_shape = tmp_xs[i].shape
             tmp_pad = paddle.zeros(
-                [max_seqlen - tmp_shape[0]] + list(tmp_shape[1:]), dtype=x.dtype
+                [max_seqlen - tmp_shape[0], *tmp_shape[1:]], dtype=x.dtype
             )
             tmp_x = paddle.concat([tmp_xs[i], tmp_pad]).unsqueeze(0)
             tmp_x_pads.append(tmp_x)
@@ -792,6 +849,9 @@ class TestFlashAttentionGQA(unittest.TestCase):
         return unpad_x
 
     def test_main(self):
+        # test dynamic
+        paddle.disable_static()
+
         for causal in [False, True]:
             for use_unpadded in [False, True]:
                 (
@@ -861,7 +921,6 @@ def generate_mask_matrix_from_mask_indices(start_rows):
             for j in range(seq_len):
                 start_row = start_rows[bz_idx, head_idx, j]
                 matrix[bz_idx, head_idx, start_row:, j] = -np.inf
-                matrix[bz_idx, head_idx, j, j] = 0.0
     return matrix
 
 
@@ -921,15 +980,15 @@ class TestFlashAttentionWithSparseMaskAPI(unittest.TestCase):
         attn_mask_start_row_indices = paddle.to_tensor(
             start_row_indices, dtype=paddle.int32
         )
+        startend_row_indices = paddle.unsqueeze(attn_mask_start_row_indices, -1)
 
-        out = flash_attention_with_sparse_mask(
+        out = flashmask_attention(
             q,
             k,
             v,
-            attn_mask_start_row_indices=attn_mask_start_row_indices,
-            attn_mask_start_row=attn_mask_start_row,
-            dropout_p=self.dropout,
-            is_causal=self.causal,
+            startend_row_indices=startend_row_indices,
+            dropout=self.dropout,
+            causal=self.causal,
         )
         out_ = attention_naive_with_mask(q_, k_, v_, m)
         out.backward()
@@ -937,7 +996,7 @@ class TestFlashAttentionWithSparseMaskAPI(unittest.TestCase):
         np.testing.assert_allclose(out.numpy(), out_, rtol=5e-03, atol=1e-03)
 
 
-class TestFlashAttenionWithSparseMaskAPITest(
+class TestFlashAttentionWithSparseMaskAPITest(
     TestFlashAttentionWithSparseMaskAPI
 ):
     def setUp(self):
@@ -948,7 +1007,7 @@ class TestFlashAttenionWithSparseMaskAPITest(
         self.causal = True
 
 
-class TestFlashAttenionWithSparseMaskBF16APITest(
+class TestFlashAttentionWithSparseMaskBF16APITest(
     TestFlashAttentionWithSparseMaskAPI
 ):
     def setUp(self):
@@ -966,7 +1025,7 @@ class TestFlashAttentionVarlenQKVPackedGQA(TestFlashAttentionGQA):
         )
         seq_len_k = seq_len_q
         cu_seqlen_q = paddle.to_tensor(
-            [0] + np.cumsum(seq_len_q).tolist(), dtype=paddle.int32
+            [0, *np.cumsum(seq_len_q).tolist()], dtype=paddle.int32
         )
         cu_seqlen_k = cu_seqlen_q
 
@@ -1542,6 +1601,261 @@ class TestCalcReducedAttentionScoresNotEvenMN(TestCalcReducedAttentionScores):
         self.head_dim = 128
         self.num_group = 1
         self.dtype = 'bfloat16'
+
+
+@unittest.skipIf(
+    not is_flashattn_supported(),
+    "core is not compiled with CUDA and cuda version need larger than or equal to 11.4"
+    "and device's compute capability must be 7.5 or 8.x",
+)
+class TestFlashAttentionAlignment(unittest.TestCase):
+    def setUp(self):
+        paddle.disable_static()
+        self.bs = 1
+        self.seq_len = 8
+        self.num_head = 1
+        self.head_dim = 8
+        self.dtype = 'float16'
+        self.query = np.array(
+            [  # batch_size = 1
+                [[0.3, -0.7, 0.2, 0.5, -0.4, 0.8, -0.2, 0.1]],  # seq position 0
+                [
+                    [-0.5, 0.4, 0.7, -0.3, 0.6, -0.8, 0.3, -0.1]
+                ],  # seq position 1
+                [[0.2, 0.8, -0.4, 0.1, -0.6, 0.3, 0.7, -0.5]],  # seq position 2
+                [[-0.8, 0.1, 0.6, 0.4, -0.2, -0.7, 0.5, 0.3]],  # seq position 3
+                [[0.7, -0.3, -0.5, 0.8, 0.2, 0.4, -0.6, 0.1]],  # seq position 4
+                [[-0.2, 0.5, 0.3, -0.7, 0.8, 0.1, -0.4, 0.6]],  # seq position 5
+                [[0.4, -0.6, 0.8, -0.1, 0.3, 0.5, -0.8, 0.2]],  # seq position 6
+                [[-0.4, 0.2, -0.8, 0.6, 0.1, -0.3, 0.7, 0.5]],  # seq position 7
+            ],
+            dtype=np.float16,
+        ).reshape(1, 8, 1, 8)
+        self.key = np.array(
+            [  # batch_size = 1
+                [[0.6, -0.2, 0.8, -0.4, 0.3, 0.1, -0.7, 0.5]],  # seq position 0
+                [[-0.3, 0.7, 0.1, 0.5, -0.8, 0.4, -0.2, 0.6]],  # seq position 1
+                [[0.8, -0.5, 0.3, -0.1, 0.6, 0.2, -0.4, 0.7]],  # seq position 2
+                [[-0.6, 0.4, -0.2, 0.7, 0.1, -0.8, 0.3, 0.5]],  # seq position 3
+                [[0.2, 0.8, -0.6, 0.3, 0.5, -0.1, 0.7, -0.4]],  # seq position 4
+                [[-0.7, 0.3, 0.5, 0.1, -0.4, 0.8, -0.2, 0.6]],  # seq position 5
+                [[0.5, -0.8, 0.2, 0.6, -0.3, 0.7, 0.1, -0.5]],  # seq position 6
+                [[-0.1, 0.6, 0.4, -0.7, 0.2, 0.5, -0.8, 0.3]],  # seq position 7
+            ],
+            dtype=np.float16,
+        ).reshape(1, 8, 1, 8)
+        self.value = np.array(
+            [  # batch_size = 1
+                [[-0.4, 0.8, -0.1, 0.3, 0.6, -0.5, 0.2, 0.7]],  # seq position 0
+                [[0.5, -0.3, 0.7, 0.2, -0.6, 0.4, -0.8, 0.1]],  # seq position 1
+                [[-0.2, 0.6, 0.4, -0.7, 0.3, 0.8, -0.1, 0.5]],  # seq position 2
+                [[0.7, -0.4, 0.1, 0.5, -0.8, 0.2, 0.6, -0.3]],  # seq position 3
+                [[-0.5, 0.3, 0.8, -0.2, 0.4, 0.1, -0.7, 0.6]],  # seq position 4
+                [[0.2, -0.6, 0.3, 0.7, -0.1, 0.5, -0.4, 0.8]],  # seq position 5
+                [[-0.8, 0.1, 0.5, -0.3, 0.7, 0.4, -0.2, 0.6]],  # seq position 6
+                [[0.3, -0.7, 0.2, 0.6, -0.4, 0.8, -0.5, 0.1]],  # seq position 7
+            ],
+            dtype=np.float16,
+        ).reshape(1, 8, 1, 8)
+        self.mask = paddle.zeros(
+            [1, 1, self.seq_len, self.seq_len], dtype='float16'
+        )
+        for i in range(self.bs):
+            seq_len = self.seq_len
+            mask = (
+                paddle.tril(
+                    paddle.ones(shape=(seq_len, seq_len), dtype=paddle.float32)
+                )
+                - 1
+            )
+            self.mask[i, 0, :seq_len, :seq_len] = mask * 1e4
+        self.rtol = 1e-3
+        self.atol = 1e-3
+
+        self.expected_output = np.array(
+            [
+                [
+                    [
+                        [
+                            -3.9990e-01,
+                            7.9980e-01,
+                            -9.9976e-02,
+                            3.0005e-01,
+                            6.0010e-01,
+                            -5.0000e-01,
+                            1.9995e-01,
+                            7.0020e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            -6.1798e-03,
+                            3.1860e-01,
+                            2.5000e-01,
+                            2.5610e-01,
+                            7.5012e-02,
+                            -1.0626e-01,
+                            -2.3743e-01,
+                            4.3750e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            1.0028e-01,
+                            1.9958e-01,
+                            4.2505e-01,
+                            5.3787e-04,
+                            -7.5317e-02,
+                            2.7441e-01,
+                            -3.7524e-01,
+                            3.4985e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            2.9224e-01,
+                            1.6373e-02,
+                            2.7368e-01,
+                            1.8188e-01,
+                            -3.0298e-01,
+                            2.2412e-01,
+                            3.4210e-02,
+                            1.2610e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            -1.6998e-02,
+                            2.5220e-01,
+                            3.7939e-01,
+                            -3.7048e-02,
+                            3.0151e-02,
+                            2.3108e-01,
+                            -1.6772e-01,
+                            3.5327e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            1.1948e-02,
+                            1.2378e-01,
+                            3.2935e-01,
+                            1.2390e-01,
+                            2.6123e-02,
+                            2.3279e-01,
+                            -1.6919e-01,
+                            4.4019e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            -1.6162e-01,
+                            1.9812e-01,
+                            3.2544e-01,
+                            1.8021e-02,
+                            2.0081e-01,
+                            2.5586e-01,
+                            -1.5466e-01,
+                            5.0635e-01,
+                        ]
+                    ],
+                    [
+                        [
+                            5.0873e-02,
+                            -7.4219e-02,
+                            3.9502e-01,
+                            1.5466e-01,
+                            -8.6182e-02,
+                            3.1958e-01,
+                            -2.1179e-01,
+                            3.1714e-01,
+                        ]
+                    ],
+                ]
+            ],
+            dtype=np.float16,
+        )
+
+    def test_flash_attention(self):
+        paddle.disable_static()
+        query = paddle.to_tensor(self.query)
+        key = paddle.to_tensor(self.key)
+        value = paddle.to_tensor(self.value)
+        mask = paddle.to_tensor(self.mask)
+
+        with sdp_kernel(
+            enable_flash=True, enable_math=False, enable_mem_efficient=False
+        ):
+            output = paddle.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+
+        np.testing.assert_allclose(
+            output.numpy(),
+            self.expected_output,
+            rtol=self.rtol,
+            atol=self.atol,
+            err_msg='Flash attention output does not match expected values',
+        )
+
+    def test_math_attention(self):
+        paddle.disable_static()
+        query = paddle.to_tensor(self.query)
+        key = paddle.to_tensor(self.key)
+        value = paddle.to_tensor(self.value)
+        mask = paddle.to_tensor(self.mask)
+
+        with sdp_kernel(
+            enable_flash=False, enable_math=True, enable_mem_efficient=False
+        ):
+            output = paddle.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+
+        np.testing.assert_allclose(
+            output.numpy(),
+            self.expected_output,
+            rtol=self.rtol,
+            atol=self.atol,
+            err_msg='Math attention output does not match expected values',
+        )
+
+    def test_mem_efficient_attention(self):
+        paddle.disable_static()
+        query = paddle.to_tensor(self.query)
+        key = paddle.to_tensor(self.key)
+        value = paddle.to_tensor(self.value)
+        mask = paddle.to_tensor(self.mask)
+
+        with sdp_kernel(
+            enable_flash=False, enable_math=False, enable_mem_efficient=True
+        ):
+            output = paddle.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+
+        np.testing.assert_allclose(
+            output.numpy(),
+            self.expected_output,
+            rtol=self.rtol,
+            atol=self.atol,
+            err_msg='Memory efficient attention output does not match expected values',
+        )
 
 
 if __name__ == '__main__':

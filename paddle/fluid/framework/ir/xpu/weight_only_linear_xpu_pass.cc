@@ -44,20 +44,20 @@ PermuteINT8WeightOnlyPattern::PermuteINT8WeightOnlyPattern(
     PDPattern* pattern, const std::string& name_scope)
     : PatternBase(pattern, name_scope, name_scope) {
   auto* input = pattern->NewNode(input_repr())
-                    ->assert_is_op_input("weight_only_linear_xpu", "x")
+                    ->assert_is_op_input("weight_only_linear", "x")
                     ->AsInput();
   auto* weight = pattern->NewNode(weight_repr())
-                     ->assert_is_op_input("weight_only_linear_xpu", "weight")
+                     ->assert_is_op_input("weight_only_linear", "weight")
                      ->AsInput();
   auto* weight_scale =
       pattern->NewNode(weight_scale_repr())
-          ->assert_is_op_input("weight_only_linear_xpu", "weight_scale")
+          ->assert_is_op_input("weight_only_linear", "weight_scale")
           ->AsInput();
   auto* out = pattern->NewNode(out_repr())
-                  ->assert_is_op_output("weight_only_linear_xpu", "out")
+                  ->assert_is_op_output("weight_only_linear", "out")
                   ->AsOutput();
   auto* weight_only_linear = pattern->NewNode(weight_only_linear_repr())
-                                 ->assert_is_op("weight_only_linear_xpu");
+                                 ->assert_is_op("weight_only_linear");
 
   std::vector<PDNode*> input_vars{input, weight, weight_scale};
   std::vector<PDNode*> output_vars{out};
@@ -119,7 +119,7 @@ void PermuteINT8WeightOnlyPass::ApplyPermuteINT8WeightOnly(
             scope->Var(scale_names[id])->GetMutable<phi::DenseTensor>();
         PADDLE_ENFORCE_NOT_NULL(
             scale_tensor,
-            phi::errors::Fatal(
+            common::errors::Fatal(
                 "weight_scale tensor node should not be nullptr"));
 
         size_t dst_hash = HashTensor<phi::dtype::float16>(*scale_tensor);
@@ -131,7 +131,7 @@ void PermuteINT8WeightOnlyPass::ApplyPermuteINT8WeightOnly(
               scope->Var(name)->GetMutable<phi::DenseTensor>();
           PADDLE_ENFORCE_NOT_NULL(
               curr_tensor,
-              phi::errors::Fatal("tensor node should not be nullptr"));
+              common::errors::Fatal("tensor node should not be nullptr"));
           // Create dst node
           // Update dst var_desc in block
           VarDesc dst_desc(dst_name);
@@ -220,10 +220,12 @@ void PermuteINT8WeightOnlyPass::ApplyPermuteINT8WeightOnly(
 
 void PermuteINT8WeightOnlyPass::ApplyImpl(ir::Graph* graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   Init(name_scope_, graph);
-
-  ApplyPermuteINT8WeightOnly(graph);
+  auto version = phi::backends::xpu::get_xpu_version(-1);
+  if (version == phi::backends::xpu::XPUVersion::XPU2) {
+    ApplyPermuteINT8WeightOnly(graph);
+  }
 }
 
 }  // namespace ir
@@ -236,4 +238,4 @@ REGISTER_PASS(weight_only_linear_xpu_pass,
 REGISTER_PASS_CAPABILITY(weight_only_linear_xpu_pass)
     .AddCombination(
         paddle::framework::compatible::OpVersionComparatorCombination().EQ(
-            "weight_only_linear_xpu", 0));
+            "weight_only_linear", 0));

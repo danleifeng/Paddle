@@ -52,6 +52,14 @@ void MinimumGradKernel(const Context& dev_ctx,
                        DenseTensor* dy);
 
 template <typename T, typename Context>
+void RemainderGradKernel(const Context& dev_ctx,
+                         const DenseTensor& x,
+                         const DenseTensor& y,
+                         const DenseTensor& dout,
+                         DenseTensor* dx,
+                         DenseTensor* dy);
+
+template <typename T, typename Context>
 void HeavisideGradKernel(const Context& dev_ctx,
                          const DenseTensor& x,
                          const DenseTensor& y,

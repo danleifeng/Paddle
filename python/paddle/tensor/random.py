@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import paddle
-from paddle import _C_ops, _legacy_C_ops
+from paddle import _C_ops
 from paddle.base.framework import _current_expected_place
 from paddle.base.libpaddle import DataType
 from paddle.common_ops_import import Variable
@@ -50,10 +50,14 @@ if TYPE_CHECKING:
 __all__ = []
 
 
-def bernoulli(x: Tensor, name: str | None = None) -> Tensor:
+def bernoulli(
+    x: Tensor, p: float | None = None, name: str | None = None
+) -> Tensor:
     r"""
 
-    For each element :math:`x_i` in input ``x``, take a sample from the Bernoulli distribution, also called two-point distribution, with success probability :math:`x_i`. The Bernoulli distribution with success probability :math:`x_i` is a discrete probability distribution with probability mass function
+    For each element :math:`x_i` in input ``x``, take a sample from the Bernoulli distribution, also called two-point distribution,
+    with success probability :math:`x_i`. The Bernoulli distribution with success probability :math:`x_i` is a discrete probability
+    distribution with probability mass function
 
     .. math::
         p(y)=\begin{cases}
@@ -63,6 +67,8 @@ def bernoulli(x: Tensor, name: str | None = None) -> Tensor:
 
     Args:
         x (Tensor): The input Tensor, it's data type should be float32, float64.
+        p (float|None, optional): If ``p`` is given, the success probability will always be ``p``. Default is None, which means
+            to use the success probability specified by input ``x``.
         name (str|None, optional): For details, please refer to :ref:`api_guide_Name`. Generally, no setting is required. Default: None.
 
     Returns:
@@ -92,7 +98,15 @@ def bernoulli(x: Tensor, name: str | None = None) -> Tensor:
              [0., 1., 0.]])
             >>> # doctest: -SKIP
 
+            >>> out = paddle.bernoulli(x, p=0)
+            >>> print(out)
+            Tensor(shape=[2, 3], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[0., 0., 0.],
+             [0., 0., 0.]])
     """
+
+    if p is not None:
+        x = paddle.full_like(x, p)
 
     if in_dynamic_or_pir_mode():
         return _C_ops.bernoulli(x)
@@ -158,8 +172,8 @@ def bernoulli_(
              [0., 0., 0., 0.]])
     """
     x.uniform_(0.0, 1.0)
-    ones_mask = x > p
-    zeros_mask = x < p
+    ones_mask = x < p
+    zeros_mask = x > p
     x.masked_fill_(ones_mask, 1.0)
     x.masked_fill_(zeros_mask, 0.0)
     return x
@@ -352,7 +366,7 @@ def log_normal(
         std (float|Tensor, optional): The standard deviation of the output Tensor's underlying normal distribution.
             If ``std`` is float, all elements of the output Tensor share the same standard deviation.
             If ``std`` is a Tensor(data type supports float32, float64), it has per-element standard deviations.
-            Defaule is 2.0
+            Default is 2.0
         shape (tuple|list|Tensor|None, optional): Shape of the Tensor to be created. The data type is ``int32`` or ``int64`` .
             If ``shape`` is a list or tuple, each element of it should be integer or 0-D Tensor with shape [].
             If ``shape`` is an Tensor, it should be an 1-D Tensor which represents a list. If ``mean`` or ``std``
@@ -803,7 +817,7 @@ def standard_normal(
             If ``shape`` is a list or tuple, each element of it should be integer or 0-D Tensor with shape [].
             If ``shape`` is an Tensor, it should be an 1-D Tensor which represents a list.
         dtype (str|np.dtype|paddle.dtype|None, optional): The data type of the output Tensor.
-            Supported data types: float32, float64, complex64, complex128.
+            Supported data types: float16, bfloat16, float32, float64, complex64, complex128.
             Default is None, use global default dtype (see ``get_default_dtype``
             for details).
         name (str|None, optional): Name for the operation (optional, default is None).
@@ -900,7 +914,7 @@ def randn(
             If ``shape`` is a list or tuple, each element of it should be integer or 0-D Tensor with shape [].
             If ``shape`` is an Tensor, it should be an 1-D Tensor which represents a list.
         dtype (str|np.dtype|paddle.dtype|None, optional): The data type of the output Tensor.
-            Supported data types: float32, float64, complex64, complex128.
+            Supported data types: float16, bfloat16, float32, float64, complex64, complex128.
             Default is None, use global default dtype (see ``get_default_dtype``
             for details).
         name (str|None, optional): Name for the operation (optional, default is None).
@@ -963,6 +977,78 @@ def randn(
                (0.16270922124385834-1.3086302280426025j),
                (0.9428746104240417+0.06869460642337799j)]])
     """
+    return standard_normal(shape, dtype, name)
+
+
+def randn_like(
+    x: Tensor,
+    dtype: DTypeLike | None = None,
+    name: str | None = None,
+) -> Tensor:
+    """
+    Returns a tensor with the same size as input that is filled with random numbers from a normal distribution with mean 0 and variance 1.
+
+    Args:
+        x (Tensor): The input multi-dimensional tensor which specifies shape. The dtype of ``x``
+            can be float16, bfloat16, float32, float64, complex64, complex128.
+        dtype (str|np.dtype|paddle.dtype|None, optional): The data type of the
+            output tensor. Supported data types: float16, bfloat16, float32, float64, complex64, complex128. If ``dtype`` is None, the data type is the
+            same as x's data type. Default is None.
+        name (str|None, optional): The default value is None.  Normally there is no
+            need for user to set this property.  For more information, please
+            refer to :ref:`api_guide_Name`.
+
+    Returns:
+        Tensor, A Tensor with the same size as input that is filled with random numbers from a normal distribution with mean 0 and variance 1.
+
+    Examples:
+        .. code-block:: python
+
+            >>> import paddle
+
+            >>> # example 1:
+            >>> # dtype is None and the dtype of x is float32
+            >>> x = paddle.zeros((1,2)).astype("float32")
+            >>> out1 = paddle.randn_like(x)
+            >>> print(out1)
+            >>> # doctest: +SKIP("Random output")
+            Tensor(shape=[1, 2], dtype=float32, place=Place(cpu), stop_gradient=True,
+            [[ 0.51785558, -0.10632933]])
+            >>> # doctest: -SKIP
+            >>> print(out1.dtype)
+            paddle.float32
+
+            >>> # example 2:
+            >>> # dtype is None and the dtype of x is float64
+            >>> x = paddle.zeros((1,2)).astype("float64")
+            >>> out2 = paddle.randn_like(x)
+            >>> print(out2)
+            >>> # doctest: +SKIP("Random output")
+            Tensor(shape=[1, 2], dtype=float64, place=Place(cpu), stop_gradient=True,
+            [[ 0.64437317, -1.26898670]])
+            >>> # doctest: -SKIP
+            >>> print(out2.dtype)
+            paddle.float64
+
+            >>> # example 3:
+            >>> # dtype is float64 and the dtype of x is float32
+            >>> x = paddle.zeros((1,2)).astype("float32")
+            >>> out3 = paddle.randn_like(x, dtype="float64")
+            >>> print(out3)
+            >>> # doctest: +SKIP("Random output")
+            Tensor(shape=[1, 2], dtype=float64, place=Place(cpu), stop_gradient=True,
+            [[ 1.45264642, -1.33133914]])
+            >>> # doctest: -SKIP
+            >>> print(out3.dtype)
+            paddle.float64
+    """
+    if dtype is None:
+        dtype = x.dtype
+    else:
+        if not isinstance(dtype, (core.VarDesc.VarType, core.DataType)):
+            dtype = convert_np_dtype_to_dtype_(dtype)
+    shape = paddle.shape(x)
+
     return standard_normal(shape, dtype, name)
 
 
@@ -1371,7 +1457,7 @@ def uniform_(
 
 def randint(
     low: int = 0,
-    high: int = None,
+    high: int | None = None,
     shape: ShapeLike = [1],
     dtype: DTypeLike | None = None,
     name: str | None = None,
@@ -1514,7 +1600,7 @@ def randint(
 def randint_like(
     x: Tensor,
     low: int = 0,
-    high: int = None,
+    high: int | None = None,
     dtype: DTypeLike | None = None,
     name: str | None = None,
 ) -> Tensor:
@@ -1553,13 +1639,13 @@ def randint_like(
             >>> # example 1:
             >>> # dtype is None and the dtype of x is float32
             >>> x = paddle.zeros((1,2)).astype("float32")
-            >>> out2 = paddle.randint_like(x, low=-5, high=5)
-            >>> print(out2)
+            >>> out1 = paddle.randint_like(x, low=-5, high=5)
+            >>> print(out1)
             >>> # doctest: +SKIP("Random output")
             Tensor(shape=[1, 2], dtype=float32, place=Place(cpu), stop_gradient=True,
             [[0., 0.]])
             >>> # doctest: -SKIP
-            >>> print(out2.dtype)
+            >>> print(out1.dtype)
             paddle.float32
 
             >>> # example 2:
@@ -1682,17 +1768,8 @@ def randint_like(
     if in_dynamic_or_pir_mode():
         if in_dynamic_mode():
             shape = paddle.utils.convert_shape_to_list(shape)
-            out = _legacy_C_ops.randint(
-                'shape',
-                shape,
-                'low',
-                low,
-                'high',
-                high,
-                'seed',
-                0,
-                'dtype',
-                core.VarDesc.VarType.INT64,
+            out = _C_ops.randint(
+                low, high, shape, DataType.INT64, _current_expected_place()
             )
         else:
             check_type(

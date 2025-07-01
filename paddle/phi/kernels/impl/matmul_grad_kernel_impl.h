@@ -26,6 +26,7 @@ limitations under the License. */
 #include "paddle/phi/kernels/impl/dot_grad_kernel_impl.h"
 #include "paddle/phi/kernels/impl/matmul_kernel_impl.h"
 #include "paddle/phi/kernels/reduce_sum_kernel.h"
+#include "paddle/phi/kernels/scale_kernel.h"
 
 #if defined(__NVCC__) || defined(__HIPCC__)
 #include "paddle/phi/kernels/gpu/reduce.h"
@@ -228,6 +229,21 @@ void MatmulGradKernel(const Context& dev_ctx,
                       bool transpose_y,
                       DenseTensor* dx,
                       DenseTensor* dy) {
+  if (x.numel() == 0) {
+    dev_ctx.template Alloc<T>(dx);
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(y.dims())), 0, dy);
+    return;
+  }
+  if (y.numel() == 0) {
+    dev_ctx.template Alloc<T>(dy);
+    phi::Full<T, Context>(
+        dev_ctx, phi::IntArray(common::vectorize(x.dims())), 0, dx);
+    return;
+  }
+  if (!transpose_x && transpose_y && y.dims().size() < 2) {
+    transpose_y = false;
+  }
   // get dims
   std::vector<std::int64_t> x_dims = common::vectorize(x.dims());
   std::vector<std::int64_t> y_dims = common::vectorize(y.dims());
@@ -2015,6 +2031,24 @@ void MatmulWithFlattenDoubleGradKernel(
                   &ddout_mat,
                   static_cast<T>(ddout_flag));
     }
+  }
+}
+
+template <typename T, typename Context>
+void LegacyMatmulGradKernel(const Context& dev_ctx,
+                            const DenseTensor& x,
+                            const DenseTensor& y,
+                            const DenseTensor& out_grad,
+                            bool transpose_x,
+                            bool transpose_y,
+                            float alpha,
+                            DenseTensor* dx,
+                            DenseTensor* dy) {
+  MatmulGradKernel<T, Context>(
+      dev_ctx, x, y, out_grad, transpose_x, transpose_y, dx, dy);
+  if (std::fabs(alpha - 1.f) > 1e-6f) {
+    ScaleKernel<T, Context>(dev_ctx, *dx, Scalar(alpha), Scalar(0), false, dx);
+    ScaleKernel<T, Context>(dev_ctx, *dy, Scalar(alpha), Scalar(0), false, dy);
   }
 }
 

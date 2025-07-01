@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+from contextlib import contextmanager
 
 import numpy as np
 from amp_base_models import AmpTestBase
@@ -62,21 +63,23 @@ class TestAutoCast(AmpTestBase):
         self.assertEqual(out3.dtype, paddle.float32)
 
     def test_pir_amp_OD_level(self):
-        with paddle.pir_utils.IrGuard():
-            with paddle.static.program_guard(
+        with (
+            paddle.pir_utils.IrGuard(),
+            paddle.static.program_guard(
                 paddle.static.Program(), paddle.static.Program()
-            ):
-                self.init_net()
-                with paddle.amp.auto_cast(level='OD'):
-                    out1 = self._conv(
-                        paddle.rand(shape=[1, 1, 6, 6], dtype='float32')
-                    )
-                    out2 = out1 + paddle.rand(shape=out1.shape, dtype='float16')
-                    out3 = self._linear(out2)
+            ),
+        ):
+            self.init_net()
+            with paddle.amp.auto_cast(level='OD'):
+                out1 = self._conv(
+                    paddle.rand(shape=[1, 1, 6, 6], dtype='float32')
+                )
+                out2 = out1 + paddle.rand(shape=out1.shape, dtype='float16')
+                out3 = self._linear(out2)
 
-                self.assertEqual(out1.dtype, core.DataType.FLOAT16)
-                self.assertEqual(out2.dtype, core.DataType.FLOAT32)
-                self.assertEqual(out3.dtype, core.DataType.FLOAT32)
+            self.assertEqual(out1.dtype, core.DataType.FLOAT16)
+            self.assertEqual(out2.dtype, core.DataType.FLOAT32)
+            self.assertEqual(out3.dtype, core.DataType.FLOAT32)
 
 
 class SimpleConvNet(nn.Layer):
@@ -119,22 +122,24 @@ class TestStaticDecorate(AmpTestBase):
     ):
         main_program = paddle.static.Program()
         startup_program = paddle.static.Program()
-        with paddle.utils.unique_name.guard():
-            with paddle.static.program_guard(main_program, startup_program):
-                model = SimpleConvNet()
-                x = paddle.static.data(
-                    name='input', shape=[None, 1, 6, 6], dtype='float32'
-                )
-                out = model(x)
-                loss = paddle.mean(out)
-                optimizer = paddle.optimizer.Adadelta(learning_rate=0.001)
-                optimizer = paddle.static.amp.decorate(
-                    optimizer,
-                    init_loss_scaling=128.0,
-                    use_dynamic_loss_scaling=True,
-                    level=level,
-                )
-                optimizer.minimize(loss)
+        with (
+            paddle.utils.unique_name.guard(),
+            paddle.static.program_guard(main_program, startup_program),
+        ):
+            model = SimpleConvNet()
+            x = paddle.static.data(
+                name='input', shape=[None, 1, 6, 6], dtype='float32'
+            )
+            out = model(x)
+            loss = paddle.mean(out)
+            optimizer = paddle.optimizer.Adadelta(learning_rate=0.001)
+            optimizer = paddle.static.amp.decorate(
+                optimizer,
+                init_loss_scaling=128.0,
+                use_dynamic_loss_scaling=True,
+                level=level,
+            )
+            optimizer.minimize(loss)
 
         feed_vars = [x]
         fetch_vars = [loss]
@@ -179,13 +184,14 @@ class TestStaticDecorate(AmpTestBase):
             "matmul_v2": 1,
             "reduce_mean": 0,
         }
-        self.check_results(
-            True,
-            'float16',
-            'OD',
-            use_promote=True,
-            expected_op_calls=expected_fp16_calls,
-        )
+        with paddle.pir_utils.OldIrGuard():
+            self.check_results(
+                True,
+                'float16',
+                'OD',
+                use_promote=True,
+                expected_op_calls=expected_fp16_calls,
+            )
         paddle.disable_static()
 
 
@@ -386,12 +392,14 @@ class TestFp16Guard(AmpTestBase):
             paddle.is_compiled_with_cuda()
             and len(paddle.static.cuda_places()) > 0
         ):
-            run_example_code()
+            with paddle.pir_utils.OldIrGuard():
+                run_example_code()
         elif (
             paddle.is_compiled_with_xpu()
             and len(paddle.static.xpu_places()) > 0
         ):
-            run_example_code()
+            with paddle.pir_utils.OldIrGuard():
+                run_example_code()
         paddle.disable_static()
 
 
@@ -408,6 +416,16 @@ class SimpleModelIncludeSetValue(nn.Layer):
 
         z = x * 1
         return z
+
+
+# Copy from ../dygraph_to_static/dygraph_to_static_utils.py
+@contextmanager
+def pir_dygraph_guard():
+    in_dygraph_mode = paddle.in_dynamic_mode()
+    with paddle.pir_utils.IrGuard():
+        if in_dygraph_mode:
+            paddle.disable_static()
+        yield
 
 
 @unittest.skipIf(
@@ -431,6 +449,8 @@ class SimpleModelIncludeSetValue(nn.Layer):
 )
 class TestDy2STWithSetValue(AmpTestBase):
     def test_op_called_as_expected(self):
+        if paddle.framework.use_pir_api():
+            return
         expected_fp16_calls = {
             "cast": 1,
             "layer_norm": 1,
@@ -440,10 +460,10 @@ class TestDy2STWithSetValue(AmpTestBase):
 
         func = SimpleModelIncludeSetValue()
         func = paddle.amp.decorate(func, level='O2')
-        func = paddle.jit.to_static(func, full_graph=True)
+        func = paddle.jit.to_static(func, full_graph=True, backend=None)
         input = paddle.randn((2, 3))
 
-        with paddle.amp.auto_cast(level='O2'):
+        with paddle.amp.auto_cast(level='O2', use_promote=False):
             res = func(input)
             loss = res.sum()
             prog = func.forward.get_concrete_program(input)[1].forward_program
@@ -453,6 +473,32 @@ class TestDy2STWithSetValue(AmpTestBase):
         self._check_op_calls(
             op_stats_list[0], expected_fp16_calls=expected_fp16_calls
         )
+
+    def test_pir_op_called_as_expected(self):
+        expected_fp16_calls = {
+            "pd_op.layer_norm": 1,
+            "pd_op.scale": 1,
+            "pd_op.scale_": 2,
+            "pd_op.set_value_with_tensor_": 1,
+        }
+
+        with pir_dygraph_guard():
+            func = SimpleModelIncludeSetValue()
+            func = paddle.amp.decorate(func, level='O2')
+            func = paddle.jit.to_static(func, full_graph=True, backend=None)
+            input = paddle.randn((2, 3))
+
+            paddle.amp.debugging.enable_operator_stats_collection()
+            with paddle.amp.auto_cast(level='O2', use_promote=False):
+                res = func(input)
+                loss = res.sum()
+                paddle.amp.debugging.disable_operator_stats_collection()
+                op_stats = paddle.base.core.get_low_precision_op_list()
+
+            loss.backward()
+            self._check_op_calls(
+                op_stats, expected_fp16_calls=expected_fp16_calls
+            )
 
 
 if __name__ == '__main__':

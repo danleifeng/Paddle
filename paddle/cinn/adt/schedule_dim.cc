@@ -52,7 +52,11 @@ std::shared_ptr<IndexExprInferContext> InitIndexExprInferContext(
     const List<Iterator>& input_iterators) {
   std::unordered_map<Variable, const Value> init_var2value;
   for (const auto& iterator : *input_iterators) {
-    CHECK(init_var2value.emplace(iterator, iterator).second);
+    PADDLE_ENFORCE_EQ(
+        init_var2value.emplace(iterator, iterator).second,
+        true,
+        ::common::errors::InvalidArgument(
+            "Insertion failed in init_var2value map. The key already exists."));
   }
 
   return std::make_shared<IndexExprInferContext>(init_var2value);
@@ -86,16 +90,16 @@ void FilterReducedIterator(
     const List<Iterator>& input_iterators,
     std::unordered_set<Iterator>* unused_input_iterators) {
   std::unordered_set<Iterator> used{};
-  bool is_output_infered = true;
+  bool is_output_inferred = true;
   VisitEachOutputIterator(op_ctx, [&](const Iterator& output_iterator) {
     if (infer_ctx->HasValue(output_iterator)) {
       const auto& iterator_expr = infer_ctx->GetValue(output_iterator);
       CollectTensorIndexIterators(iterator_expr, &used);
     } else {
-      is_output_infered = false;
+      is_output_inferred = false;
     }
   });
-  if (!is_output_infered) {
+  if (!is_output_inferred) {
     return;
   }
   for (const auto& input_iterator : *input_iterators) {
@@ -188,7 +192,7 @@ List<int> GetReduceAxis(const List<ScheduleDim>& loop_sizes) {
     } else if (sched_dim.Has<tInjective<LoopSize>>()) {
       // do nothing
     } else {
-      PADDLE_THROW(phi::errors::Fatal("Dead code"));
+      PADDLE_THROW(::common::errors::Fatal("Dead code"));
     }
   }
   return reduce_axis;
@@ -203,7 +207,7 @@ List<int> GetInjectiveAxis(const List<ScheduleDim>& loop_sizes) {
     } else if (sched_dim.Has<tInjective<LoopSize>>()) {
       injective_axis->emplace_back(i);
     } else {
-      PADDLE_THROW(phi::errors::Fatal("Dead code"));
+      PADDLE_THROW(::common::errors::Fatal("Dead code"));
     }
   }
   return injective_axis;

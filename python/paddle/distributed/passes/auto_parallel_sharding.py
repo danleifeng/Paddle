@@ -16,6 +16,7 @@ import logging
 from functools import reduce
 
 import paddle
+import paddle.distributed as dist
 from paddle.distributed.auto_parallel.static.operators.common import (
     ParallelMode,
     is_data_parallel_reduce_op,
@@ -195,7 +196,7 @@ class ShardingPass(PassBase):
         # NOTE Multi / Sub-Block Support
         # we assume that only parameter are present and partitioned in main_block,
         # there is NO new param in sub_block, and all params in sub_block follows the same
-        # partition as main_block. the above constraint fullfill the 3 most common use-cases in Paddle sub_block:
+        # partition as main_block. the above constraint fulfill the 3 most common use-cases in Paddle sub_block:
         # 1. subblock for lr scheduler
         # 2. sub-block uses the same or partial network of main-block, e.g. GPT3 generation model
         # 3. sub-block used for double backward
@@ -404,13 +405,13 @@ class ShardingPass(PassBase):
                 for i, sharding_info in enumerate(self.sharding_infos):
                     new_op = main_block._insert_op(
                         idx + i + 1,
-                        type='c_allreduce_sum',
-                        inputs={'X': [sum_op_output]},
-                        outputs={'Out': [sum_op_output]},
+                        type='all_reduce',
+                        inputs={'x': [sum_op_output]},
+                        outputs={'out': [sum_op_output]},
                         attrs={
                             'ring_id': sharding_info.group.id,
                             'op_namescope': "/gradient_clip_model_parallelism",
-                            'use_calc_stream': True,
+                            'reduce_type': paddle.distributed.ReduceOp.SUM,
                             OP_ROLE_KEY: OpRole.Optimize,
                         },
                     )
@@ -490,13 +491,12 @@ class ShardingPass(PassBase):
                 assert startup_block.has_var(param.name)
 
                 new_op = main_block.append_op(
-                    type='c_broadcast',
-                    inputs={'X': param},
-                    outputs={'Out': param},
+                    type='broadcast',
+                    inputs={'x': param},
+                    outputs={'out': param},
                     attrs={
                         'ring_id': sharding_info.group.id,
                         'root': sharding_info.get_var_rank(param.name),
-                        'use_calc_stream': True,
                         OP_ROLE_KEY: OpRole.Optimize,
                     },
                 )
@@ -535,11 +535,18 @@ class ShardingPass(PassBase):
         dp_ring_ids = [group.id for group in self.dp_groups]
         for idx, op in reversed(list(enumerate(main_block.ops))):
             if _is_param_grad_allreduce_op(op, main_block):
-                reduce_op_type = (
-                    "c_reduce_sum"
-                    if op.type in ["c_allreduce_sum", "c_reduce_sum"]
-                    else "c_reduce_avg"
-                )
+                if (
+                    op.type == "all_reduce"
+                    and op.attr("reduce_type") == dist.ReduceOp.SUM
+                ) or (
+                    op.type == "reduce"
+                    and op.attr("reduce_type") == dist.ReduceOp.SUM
+                ):
+                    reduce_op_type = "reduce"
+                    reduce_type = dist.ReduceOp.SUM
+                else:
+                    reduce_op_type = "reduce"
+                    reduce_type = dist.ReduceOp.AVG
                 input_name = op.input_arg_names[0]
                 base_name = _get_base_name_from_grad_name(input_name)
                 sharding_info = self.varname_to_sharding_info[base_name]
@@ -551,6 +558,7 @@ class ShardingPass(PassBase):
                     sharding_info.group.id,
                     sharding_info.get_var_rank(base_name),
                     self._dist_context,
+                    reduce_type,
                 )
                 if (
                     not self.sharding_hybrid_dp
@@ -674,7 +682,7 @@ class ShardingPass(PassBase):
                 assert len(op.output_arg_names) == 1
                 output_name = op.output_arg_names[0]
 
-                if op.type == "c_broadcast":
+                if op.type == "broadcast":
                     if op.attr("ring_id") in dp_ring_ids:
                         if (
                             self.outer_dp_group
@@ -684,7 +692,7 @@ class ShardingPass(PassBase):
                             op._set_attr("ring_id", self.outer_dp_group.id)
                         else:
                             startup_block._remove_op(idx, sync=False)
-                    else:  # We should remove the `c_broadcast` between `TensorParallel` mesh dim.
+                    else:  # We should remove the `broadcast` between `TensorParallel` mesh dim.
                         if (
                             sharding_info.get_var_rank(output_name)
                             != sharding_info.local_rank
@@ -693,7 +701,7 @@ class ShardingPass(PassBase):
                     continue
 
                 if (
-                    op.type != "c_broadcast"
+                    op.type != "broadcast"
                     and output_name in param_usage
                     and sharding_info.get_var_rank(output_name)
                     != sharding_info.local_rank
@@ -832,9 +840,9 @@ class ShardingPass(PassBase):
                 f"Bucket[{i}] parameters: {[p.name for p in param_group.vars]}."
             )
 
-            broadcast_var_to_group_map[
-                param_group.coalesce_var.name
-            ] = param_group
+            broadcast_var_to_group_map[param_group.coalesce_var.name] = (
+                param_group
+            )
 
             # TODO revise me to manager stream and comm
             comm_stream_idx = i % self.param_comm_stream_num
@@ -845,13 +853,12 @@ class ShardingPass(PassBase):
                 'comm_stream'
             ]
             new_op = main_block.append_op(
-                type='c_broadcast',
-                inputs={'X': param_group.coalesce_var},
-                outputs={'Out': param_group.coalesce_var},
+                type='broadcast',
+                inputs={'x': param_group.coalesce_var},
+                outputs={'out': param_group.coalesce_var},
                 attrs={
                     'ring_id': comm_group.id,
                     'root': param_group.rank,
-                    'use_calc_stream': True,
                     OP_ROLE_KEY: OpRole.Optimize,
                 },
             )
@@ -991,10 +998,13 @@ class ShardingPass(PassBase):
         while i < len(ops):
             op = ops[i]
             if is_data_parallel_reduce_op(op):
-                assert op.type in [
-                    "c_reduce_avg",
-                    "c_reduce_sum",
-                ], "Sharding should reduce grad first and than allreduce if Hybrid Sharding with Data-Parallel"
+                is_reduce = op.type == "reduce" and op.attr("reduce_type") in [
+                    dist.ReduceOp.AVG,
+                    dist.ReduceOp.SUM,
+                ]
+                assert (
+                    is_reduce
+                ), "Sharding should reduce grad first and than allreduce if Hybrid Sharding with Data-Parallel"
 
                 grad_name = op.output_arg_names[0]
                 param_name = _get_base_name_from_grad_name(grad_name)
@@ -1027,9 +1037,10 @@ class ShardingPass(PassBase):
                     param_name
                 ):
                     cur_group.is_in_local_shard = True
-                    assert ops[i + 1].type in [
-                        "c_allreduce_avg",
-                        "c_allreduce_sum",
+                    assert ops[i + 1].type == 'all_reduce' and ops[i + 1].attr(
+                        'reduce_type'
+                    ) in [
+                        paddle.distributed.ReduceOp.SUM,
                     ], "Sharding should reduce grad first and than allreduce if Hybrid Sharding with Data-Parallel"
                     assert (
                         ops[i + 1].output_arg_names[0] == grad_name
@@ -1230,7 +1241,9 @@ class ShardingPass(PassBase):
         grad_comm_op_to_stream_idx = {}
         for idx, op in enumerate(ops):
             if is_data_parallel_reduce_op(op):
-                if op.type in ["c_allreduce_avg", "c_allreduce_sum"]:
+                if op.type == 'all_reduce' and op.attr('reduce_type') in [
+                    paddle.distributed.ReduceOp.SUM,
+                ]:
                     continue
                 stream_idx = reduce_op_count % self.grad_comm_stream_num
                 grad_comm_op_to_stream_idx[op] = stream_idx
@@ -1283,9 +1296,10 @@ class ShardingPass(PassBase):
                 op._set_attr("ring_id", comm_group.id)
                 if self.sharding_hybrid_dp and grad_group.is_in_local_shard:
                     next_op = ops[idx + 1]
-                    assert next_op.type in [
-                        "c_allreduce_avg",
-                        "c_allreduce_sum",
+                    assert next_op.type == 'all_reduce' and next_op.attr(
+                        'reduce_type'
+                    ) in [
+                        paddle.distributed.ReduceOp.SUM,
                     ]
                     assert next_op.output("Out")[0] == reduce_varname
                     # FIXME hybrid sharding-dp support multi comm & stream in feature
@@ -1296,19 +1310,20 @@ class ShardingPass(PassBase):
                     )
                     idx += 1
 
-                # NOTE(Ruibiao): Why add dependecy here?
+                # NOTE(Ruibiao): Why add dependency here?
                 # It is hack to delay GC for coalesce_var, which significantly reduce memory usage.
                 # With the pattern of reduce_sum + scale, the coalesce_var is used by the reduce_sum
                 # op on the comm-stream, and then released by the scale op on the comp-stream. Since
                 # the generated and released op are both in comp-stream, the allocation of the
                 # coalesce_var can be fast-GC and reused by subsequent comp-op. However in reduce_avg
-                # parrent, the coalesce_var is released on the reduce_avg op in comm-stream,
+                # parent, the coalesce_var is released on the reduce_avg op in comm-stream,
                 # triggering a cross-stream GC. In such case, an event is recorded on the underlying
                 # allocation, and the memory is unable to reused by other comp-ops, resulting in an
                 # increase in memory usage. For more details, see the code of StreamSafeCUDAAllocator.
                 # This issue should be fixed using CUDAMallocAsyncAllocator in the future.
                 if (
-                    op.type == "c_reduce_avg"
+                    op.type == "reduce"
+                    and op.attr("reduce_type") == dist.ReduceOp.AVG
                     and not grad_group.is_in_local_shard
                     and not self.get_attr("gradient_sync_after_accumulate")
                 ):
@@ -1419,7 +1434,10 @@ class ShardingPass(PassBase):
             # update program
             for idx, op in reversed(list(enumerate(block.ops))):
                 if is_data_parallel_reduce_op(op):
-                    assert op.type == "c_reduce_sum"
+                    assert (
+                        op.type == "reduce"
+                        and op.attr("reduce_type") == dist.ReduceOp.SUM
+                    )
                     grad_comm_stream_idx = grad_comm_op_to_stream_idx[op]
                     inter_node_group = inter_node_groups[grad_comm_stream_idx]
                     intra_node_group = intra_node_groups[grad_comm_stream_idx]
@@ -1441,15 +1459,15 @@ class ShardingPass(PassBase):
                         inter_node_dst = dst_rank // nranks_per_node
                         new_op = block._insert_op_without_sync(
                             idx + 1,
-                            type='c_reduce_sum',
-                            inputs={"X": reduce_varname},
+                            type='reduce',
+                            inputs={"x": reduce_varname},
                             outputs={
-                                "Out": reduce_varname,
+                                "out": reduce_varname,
                             },
                             attrs={
                                 'ring_id': inter_node_group.id,
                                 'root_id': inter_node_dst,
-                                'use_calc_stream': True,
+                                'reduce_type': dist.ReduceOp.SUM,
                                 OP_ROLE_KEY: OpRole.Backward,
                             },
                         )
@@ -1494,13 +1512,12 @@ def _insert_init_and_broadcast_op(
 
     new_op = block._insert_op_without_sync(
         insert_idx,
-        type='c_broadcast',
-        inputs={'X': varname},
-        outputs={'Out': varname},
+        type='broadcast',
+        inputs={'x': varname},
+        outputs={'out': varname},
         attrs={
             'ring_id': ring_id,
             'root': root_rank,
-            'use_calc_stream': True,
             OP_ROLE_KEY: op_role,
         },
     )
@@ -1540,8 +1557,8 @@ def _insert_reduce_op(
     ring_id,
     root_id,
     dist_context,
+    reduce_type,
     op_role=OpRole.Backward,
-    use_calc_stream=True,
 ):
     assert (
         root_id >= 0
@@ -1549,12 +1566,12 @@ def _insert_reduce_op(
     new_op = block._insert_op_without_sync(
         insert_idx,
         type=op_type,
-        inputs={'X': [reduce_var]},
-        outputs={'Out': [reduce_var]},
+        inputs={'x': [reduce_var]},
+        outputs={'out': [reduce_var]},
         attrs={
             'ring_id': ring_id,
             'root_id': root_id,
-            'use_calc_stream': use_calc_stream,
+            'reduce_type': reduce_type,
             OP_ROLE_KEY: op_role,
         },
     )
@@ -1683,7 +1700,7 @@ def _is_param_grad_sum_op(op, block):
 
 def is_sharding_param_broadcast_op(op):
     return (
-        op.type == "c_broadcast"
+        op.type == "broadcast"
         and op.desc.has_attr("op_namescope")
         and ParallelMode.DataParallel in op.desc.attr("op_namescope")
     )
@@ -1916,7 +1933,7 @@ class ShardingInfo:
         fp16_params = set()
         fp16_to_fp32 = {}
 
-        param_usage = {x: 0 for x in self.param_names}
+        param_usage = dict.fromkeys(self.param_names, 0)
         for op in block.ops:
             if is_optimize_op(op):
                 continue

@@ -17,9 +17,7 @@ limitations under the License. */
 #include <unordered_set>
 #include "paddle/fluid/framework/ir/onednn/onednn_pass_util.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 class Graph;
 
@@ -64,7 +62,7 @@ void CPUQuantizePlacementPass::ApplyImpl(ir::Graph* graph) const {
       PADDLE_ENFORCE_NE(
           supported_op_types.count(op),
           0,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Pass attribute quantize_enabled_op_types contains operator %s "
               "that is not supported by OneDNN quantization.",
               op));
@@ -96,9 +94,7 @@ void CPUQuantizePlacementPass::ApplyImpl(ir::Graph* graph) const {
   gpd(graph, handler);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(cpu_quantize_placement_pass,
               paddle::framework::ir::CPUQuantizePlacementPass)

@@ -29,7 +29,7 @@ class DynamicShapeGroupScheduler : public GroupScheduler {
       ir::IRSchedule* ir_sch,
       const std::unordered_set<std::string>& output_tensor_names,
       const cinn::common::Target& target,
-      const std::shared_ptr<hlir::framework::pir::GroupInfo>& group_info)
+      const std::shared_ptr<FusionGroupInfo>& group_info)
       : GroupScheduler(ir_sch, output_tensor_names, target, group_info) {
     Init();
   }
@@ -58,7 +58,8 @@ class DynamicShapeGroupScheduler : public GroupScheduler {
   ir::ScheduleBlockNode* FindGlobalMasterNode(
       const std::unique_ptr<ir::ScheduleBlockGraph>& schedule_block_graph);
 
-  IterativeSpaceInfo ConstructIterSpaceInfo(ScheduleBlockNode* node);
+  SymbolicPredicate MakeBucketPredicate(const BucketInfo& bucket_info,
+                                        ScheduleBlockNode* node);
 
  private:
   std::vector<BucketContext> bucket_contexts_;

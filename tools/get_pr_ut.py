@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" For the PR that only modified the unit test, get cases in pull request. """
+"""For the PR that only modified the unit test, get cases in pull request."""
 
 import json
 import os
@@ -117,10 +117,12 @@ class PRChecker:
             except Exception as e:
                 print(e)
                 print(
-                    f'PREC download {url} error, retry {ix} time(s) after {ix * 10} secs.[proxy_option={cur_proxy}]'
+                    f'PREC download {url} error, retry {ix} time(s) after {ix * 10} secs.[proxy_option={"Without proxy" if ix // 2 == 0 else "With proxy"}]'
                 )
-                continue
             else:
+                print(
+                    f'PREC download {url} success[proxy_option={"Without proxy" if ix // 2 == 0 else "With proxy"}]'
+                )
                 return True
             time.sleep(ix * 10)
             ix += 1
@@ -276,7 +278,7 @@ class PRChecker:
                 all_counts = line.split()[-1]
         return int(all_counts)
 
-    def file_is_unnit_test(self, unittest_path):
+    def file_is_unit_test(self, unittest_path):
         # get all testcases by ctest-N
         all_ut_file = PADDLE_ROOT + 'build/all_ut_list'
         # all_ut_file = '%s/build/all_ut_file' % PADDLE_ROOT
@@ -320,7 +322,7 @@ class PRChecker:
         filterFiles = []
         file_list = []
         file_dict = self.get_pr_files()
-        if len(file_dict) == 30:  # if pr file count = 31, nend to run all case
+        if len(file_dict) == 30:  # if pr file count = 31, need to run all case
             return ''
         for filename in file_dict:
             if filename.startswith(PADDLE_ROOT + 'python/'):
@@ -425,17 +427,19 @@ class PRChecker:
                             if self.is_only_comment(f):
                                 ut_list.append('comment_placeholder')
                                 onlyCommentsFilesOrXpu.append(f_judge)
-                            if self.file_is_unnit_test(f_judge):
+                            if self.file_is_unit_test(f_judge):
                                 ut_list.append(
                                     os.path.split(f_judge)[1].split(".")[0]
                                 )
                             else:
                                 notHitMapFiles.append(f_judge)
                     else:
-                        notHitMapFiles.append(f_judge) if file_dict[
-                            f
-                        ] != 'removed' else print(
-                            f"remove file not hit mapFiles: {f_judge}"
+                        (
+                            notHitMapFiles.append(f_judge)
+                            if file_dict[f] != 'removed'
+                            else print(
+                                f"remove file not hit mapFiles: {f_judge}"
+                            )
                         )
                 else:
                     if file_dict[f] not in ['removed']:

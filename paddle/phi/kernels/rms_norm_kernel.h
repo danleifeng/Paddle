@@ -15,8 +15,6 @@
 #pragma once
 
 #include "paddle/phi/core/dense_tensor.h"
-#include "paddle/phi/core/selected_rows.h"
-
 namespace phi {
 
 template <typename T, typename Context>
@@ -37,7 +35,7 @@ void RmsNormKernel(const Context& dev_ctx,
                    DenseTensor* inv_var);
 
 template <typename T, typename Context>
-void ResidualAddRmsNormWrapper(const Context& ctx,
+void ResidualAddRmsNormWrapper(const Context& dev_ctx,
                                const T* x,
                                const T* residual,
                                const T* bias,
@@ -50,7 +48,7 @@ void ResidualAddRmsNormWrapper(const Context& ctx,
                                T* output);
 
 template <typename T, typename Context>
-void RmsNormWrapper(const Context& ctx,
+void RmsNormWrapper(const Context& dev_ctx,
                     const T* x,
                     const T* weight,
                     const T* bias,

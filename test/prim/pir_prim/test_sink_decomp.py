@@ -105,9 +105,9 @@ class TestPrimMode(unittest.TestCase):
         _ = self.base_net()
         for op in self.prog.global_block().ops:
             if op.name() == "pd_op.divide":
-                self.assertEqual(core.has_decomp(op), False)
+                self.assertEqual(core.has_decomp_rule(op), False)
             if op.name() == "pd_op.mean":
-                self.assertEqual(core.has_decomp(op), True)
+                self.assertEqual(core.has_decomp_rule(op), True)
 
 
 class TestReluSink(unittest.TestCase):

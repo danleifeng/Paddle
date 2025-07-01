@@ -19,10 +19,7 @@ namespace phi {
 KernelSignature CSplitOpArgumentMapping(
     const ArgumentMappingContext& ctx UNUSED) {
   return KernelSignature(
-      "c_split",
-      {"X"},
-      {"rank", "nranks", "ring_id", "use_calc_stream", "use_model_parallel"},
-      {"Out"});
+      "c_split", {"X"}, {"rank", "nranks", "use_model_parallel"}, {"Out"});
 }
 
 }  // namespace phi

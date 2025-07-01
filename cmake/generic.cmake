@@ -463,6 +463,8 @@ function(cc_test_run TARGET_NAME)
     set(multiValueArgs COMMAND ARGS)
     cmake_parse_arguments(cc_test "${options}" "${oneValueArgs}"
                           "${multiValueArgs}" ${ARGN})
+    string(REGEX MATCH "_deprecated$" DEPRECATED_TARGET_NAME "${TARGET_NAME}")
+
     if(cc_test_DIR STREQUAL "")
       set(cc_test_DIR ${CMAKE_CURRENT_BINARY_DIR})
     endif()
@@ -470,14 +472,26 @@ function(cc_test_run TARGET_NAME)
       NAME ${TARGET_NAME}
       COMMAND ${cc_test_COMMAND} ${cc_test_ARGS}
       WORKING_DIRECTORY ${cc_test_DIR})
-    set_property(
-      TEST ${TARGET_NAME}
-      PROPERTY
-        ENVIRONMENT
-        FLAGS_init_allocated_mem=true
-        FLAGS_cudnn_deterministic=true
-        LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${PADDLE_BINARY_DIR}/python/paddle/libs:${PADDLE_BINARY_DIR}/python/paddle/base
-    )
+    if(NOT "${DEPRECATED_TARGET_NAME}" STREQUAL "")
+      set_property(
+        TEST ${TARGET_NAME}
+        PROPERTY
+          ENVIRONMENT
+          FLAGS_init_allocated_mem=true
+          FLAGS_cudnn_deterministic=true
+          FLAGS_enable_pir_api=0
+          LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${PADDLE_BINARY_DIR}/python/paddle/libs:${PADDLE_BINARY_DIR}/python/paddle/base
+      )
+    else()
+      set_property(
+        TEST ${TARGET_NAME}
+        PROPERTY
+          ENVIRONMENT
+          FLAGS_init_allocated_mem=true
+          FLAGS_cudnn_deterministic=true
+          LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${PADDLE_BINARY_DIR}/python/paddle/libs:${PADDLE_BINARY_DIR}/python/paddle/base
+      )
+    endif()
     # No unit test should exceed 2 minutes.
     if(WIN32)
       set_tests_properties(${TARGET_NAME} PROPERTIES TIMEOUT 150)
@@ -548,7 +562,7 @@ function(cc_test_old TARGET_NAME)
     cmake_parse_arguments(cc_test "${options}" "${oneValueArgs}"
                           "${multiValueArgs}" ${ARGN})
     cc_test_build(${TARGET_NAME} SRCS ${cc_test_SRCS} DEPS ${cc_test_DEPS})
-    # we donot test hcom op, because it need complex configuration
+    # we do not test hcom op, because it need complex configuration
     # with more than one machine
     cc_test_run(${TARGET_NAME} COMMAND ${TARGET_NAME} ARGS ${cc_test_ARGS})
   elseif(WITH_TESTING AND NOT TEST ${TARGET_NAME})
@@ -575,6 +589,10 @@ function(paddle_test_build TARGET_NAME)
     endif()
     if(WITH_SHARED_PHI)
       target_link_libraries(${TARGET_NAME} phi)
+      if(WITH_GPU)
+        target_link_libraries(${TARGET_NAME} -Wl,--as-needed phi_core phi_gpu
+                              -Wl,--no-as-needed)
+      endif()
       add_dependencies(${TARGET_NAME} phi)
     endif()
     if(WITH_SHARED_IR)
@@ -585,8 +603,9 @@ function(paddle_test_build TARGET_NAME)
       target_link_libraries(${TARGET_NAME} ${PYTHON_LIBRARIES})
     endif()
     if(WITH_CINN)
-      target_link_libraries(${TARGET_NAME} $<TARGET_LINKER_FILE:cinnapi>
-                            cinn_transforms)
+      target_link_libraries(${TARGET_NAME} -Wl,--as-needed cinnapi
+                            -Wl,--no-as-needed)
+      target_link_libraries(${TARGET_NAME} cinn_transforms)
       add_dependencies(${TARGET_NAME} cinnapi)
     endif()
     if(WITH_XPU)
@@ -712,6 +731,10 @@ function(nv_test TARGET_NAME)
       target_link_libraries(${TARGET_NAME} ${PYTHON_LIBRARIES})
     else()
       target_link_libraries(${TARGET_NAME} python)
+      if(WITH_SHARED_PHI)
+        target_link_libraries(${TARGET_NAME} -Wl,--as-needed phi_core phi_gpu
+                              -Wl,--no-as-needed)
+      endif()
     endif()
     add_dependencies(${TARGET_NAME} ${nv_test_DEPS} paddle_gtest_main)
     common_link(${TARGET_NAME})
@@ -1147,14 +1170,21 @@ function(py_test TARGET_NAME)
     cmake_parse_arguments(py_test "${options}" "${oneValueArgs}"
                           "${multiValueArgs}" ${ARGN})
 
+    string(REGEX MATCH "_deprecated\.py$" DEPRECATED_MODULES "${py_test_SRCS}")
+    string(REGEX MATCH "_deprecated$" DEPRECATED_TARGET_NAME "${TARGET_NAME}")
+    set(FLAGS_PIR_MODE "")
+    if((NOT "${DEPRECATED_MODULES}" STREQUAL "")
+       OR (NOT "${DEPRECATED_TARGET_NAME}" STREQUAL ""))
+      set(FLAGS_PIR_MODE FLAGS_enable_pir_api=0)
+    endif()
     if(WITH_COVERAGE AND NOT (WITH_INCREMENTAL_COVERAGE
                               AND "$ENV{PADDLE_GIT_DIFF_PY_FILE}" STREQUAL ""))
       add_test(
         NAME ${TARGET_NAME}
         COMMAND
           ${CMAKE_COMMAND} -E env FLAGS_init_allocated_mem=true
-          FLAGS_cudnn_deterministic=true PYTHONPATH=${PADDLE_BINARY_DIR}/python
-          ${py_test_ENVS}
+          FLAGS_cudnn_deterministic=true ${FLAGS_PIR_MODE}
+          PYTHONPATH=${PADDLE_BINARY_DIR}/python ${py_test_ENVS}
           COVERAGE_FILE=${PADDLE_BINARY_DIR}/python-coverage.data
           ${PYTHON_EXECUTABLE} -m coverage run --branch -p ${py_test_SRCS}
           ${py_test_ARGS}
@@ -1164,8 +1194,8 @@ function(py_test TARGET_NAME)
         NAME ${TARGET_NAME}
         COMMAND
           ${CMAKE_COMMAND} -E env FLAGS_init_allocated_mem=true
-          FLAGS_cudnn_deterministic=true ${py_test_ENVS} ${PYTHON_EXECUTABLE} -u
-          ${py_test_SRCS} ${py_test_ARGS}
+          FLAGS_cudnn_deterministic=true ${FLAGS_PIR_MODE} ${py_test_ENVS}
+          ${PYTHON_EXECUTABLE} -u ${py_test_SRCS} ${py_test_ARGS}
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endif()
 
@@ -1312,7 +1342,7 @@ function(math_library TARGET)
   set(cc_srcs)
   set(cu_srcs)
   set(hip_srcs)
-  set(math_common_deps device_context framework_proto enforce)
+  set(math_common_deps device_context framework_proto phi common)
   if(WITH_GPU)
     if(${CMAKE_CUDA_COMPILER_VERSION} LESS 11.0)
       list(APPEND math_common_deps cub)

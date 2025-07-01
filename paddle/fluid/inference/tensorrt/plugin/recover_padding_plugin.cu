@@ -23,8 +23,8 @@ __global__ void RecoverPaddingKernel(const half* input0,
                                      const int32_t* input1,
                                      half* output) {
   int word_id = blockIdx.x * gridDim.y + blockIdx.y;
-  int32_t seqence_length = input1[blockIdx.x + 1] - input1[blockIdx.x];
-  if (blockIdx.y < seqence_length) {
+  int32_t sequence_length = input1[blockIdx.x + 1] - input1[blockIdx.x];
+  if (blockIdx.y < sequence_length) {
     output[word_id * gridDim.z * blockDim.x + blockIdx.z * blockDim.x +
            threadIdx.x] =
         input0[(input1[blockIdx.x] + blockIdx.y) * gridDim.z * blockDim.x +
@@ -64,14 +64,14 @@ bool RecoverPaddingPlugin::supportsFormatCombination(
     int nbOutputs) TRT_NOEXCEPT {
   PADDLE_ENFORCE_EQ(nbInputs,
                     3,
-                    phi::errors::InvalidArgument("Must have 3 inputs, "
-                                                 "but got %d input(s). ",
-                                                 nbInputs));
+                    common::errors::InvalidArgument("Must have 3 inputs, "
+                                                    "but got %d input(s). ",
+                                                    nbInputs));
   PADDLE_ENFORCE_EQ(nbOutputs,
                     getNbOutputs(),
-                    phi::errors::InvalidArgument("Must have 1 output, "
-                                                 "but got %d output(s). ",
-                                                 nbOutputs));
+                    common::errors::InvalidArgument("Must have 1 output, "
+                                                    "but got %d output(s). ",
+                                                    nbOutputs));
   if (pos == 1) {  // PosId
     return inOut[pos].type == nvinfer1::DataType::kINT32 &&
            inOut[pos].format == nvinfer1::TensorFormat::kLINEAR;
@@ -148,7 +148,7 @@ int RecoverPaddingPlugin::enqueue(const nvinfer1::PluginTensorDesc* inputDesc,
   const dim3 num_blocks(
       input1_desc.dims.d[0] - 1,
       input2_desc.dims.d[1],
-      vector_length / num_threads);  //  batches, max sequnce length
+      vector_length / num_threads);  //  batches, max sequence length
                                      //  (mask_id.dims.d[1]),
                                      //  input.dims.d[1]/***
   RecoverPaddingKernel<<<num_blocks, num_threads, 0, stream>>>(

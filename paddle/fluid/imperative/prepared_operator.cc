@@ -23,17 +23,25 @@
 #include "paddle/phi/common/scalar.h"
 #include "paddle/utils/small_vector.h"
 #ifdef PADDLE_WITH_XPU
-#include "paddle/fluid/platform/device/xpu/xpu_op_list.h"
+#include "paddle/phi/core/platform/device/xpu/xpu_op_list.h"
 #endif
 #ifdef PADDLE_WITH_DNNL
-#include "paddle/fluid/platform/onednn_op_list.h"
+#include "paddle/phi/core/platform/onednn_op_list.h"
+#endif
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include "paddle/fluid/distributed/collective/process_group.h"
+#include "paddle/fluid/distributed/collective/process_group_nccl.h"
+#include "paddle/phi/core/distributed/comm_context_manager.h"
+#elif defined(PADDLE_WITH_XPU_BKCL)
+#include "paddle/fluid/distributed/collective/process_group.h"
+#include "paddle/fluid/distributed/collective/process_group_bkcl.h"
 #endif
 #include "paddle/common/flags.h"
 #include "paddle/fluid/framework/library_type.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/fluid/platform/profiler/supplement_tracing.h"
 #include "paddle/phi/common/place.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 COMMON_DECLARE_bool(check_nan_inf);
 COMMON_DECLARE_bool(benchmark);
@@ -197,7 +205,7 @@ PreparedOp PrepareImpl(
 // 2. Whether this op has specific implementation;
 // 3. Whether onednn kernel can be used.
 #ifdef PADDLE_WITH_DNNL
-  if (!op.DnnFallback() && !paddle::platform::in_mkldnn_white_list(op.Type()) &&
+  if (!op.DnnFallback() && !paddle::platform::in_onednn_white_list(op.Type()) &&
       op.CanMKLDNNBeUsed(dygraph_exe_ctx, expected_kernel_key.dtype())) {
     expected_kernel_key.set_backend(phi::Backend::ONEDNN);
     expected_kernel_key.set_layout(phi::DataLayout::ONEDNN);
@@ -211,9 +219,10 @@ PreparedOp PrepareImpl(
 #endif
 
 #if defined(PADDLE_WITH_XPU)
-  bool is_xpu_unsupport = expected_kernel_key.backend() == phi::Backend::XPU &&
-                          !paddle::platform::is_xpu_support_op(
-                              op.Type(), expected_kernel_key.dtype());
+  bool is_xpu_unsupported =
+      expected_kernel_key.backend() == phi::Backend::XPU &&
+      !paddle::platform::is_xpu_support_op(op.Type(),
+                                           expected_kernel_key.dtype());
 #endif
 
   bool has_phi_kernel = false;
@@ -263,7 +272,7 @@ PreparedOp PrepareImpl(
       if (is_xpu_kp_support) {
         auto expected_kernel_key_backend = expected_kernel_key.backend();
         expected_kernel_key.set_backend(phi::Backend::KPS);
-        VLOG(3) << "modifing XPU KP kernel: " << phi_kernel_name
+        VLOG(3) << "modifying XPU KP kernel: " << phi_kernel_name
                 << ", using_kernel_key:" << expected_kernel_key;
 
         if (!phi_kernel_factory.HasKernel(phi_kernel_name,
@@ -284,7 +293,7 @@ PreparedOp PrepareImpl(
 
     if (phi_kernel.IsValid()
 #if defined(PADDLE_WITH_XPU) && !defined(PADDLE_WITH_XPU_KP)
-        && !is_xpu_unsupport
+        && !is_xpu_unsupported
 #endif
     ) {
       VLOG(6) << "Dynamic mode PrepareImpl - kernel name: " << phi_kernel_name
@@ -296,6 +305,88 @@ PreparedOp PrepareImpl(
               phi::TransToPhiBackend(dev_ctx->GetPlace()))) {
         dev_ctx = pool.Get(phi::TransToPhiPlace(expected_kernel_key.backend()));
       }
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+      if (attrs.find("ring_id") != attrs.end()) {
+        auto ring_id_attr = attrs.at("ring_id");
+        int ring_id = PADDLE_GET(int, ring_id_attr);
+        const auto& comm_context_manager =
+            phi::distributed::CommContextManager::GetInstance();
+        auto map = distributed::ProcessGroupMapFromGid::getInstance();
+        phi::distributed::CommContext* comm_context = nullptr;
+        if (comm_context_manager.Has(std::to_string(ring_id))) {
+          comm_context = comm_context_manager.Get(std::to_string(ring_id));
+        } else if (map->has(ring_id)) {
+          distributed::ProcessGroup* pg = map->get(ring_id);
+          comm_context = static_cast<paddle::distributed::ProcessGroupNCCL*>(pg)
+                             ->GetOrCreateCommContext(place);
+        }
+        if (comm_context) {
+          auto original_stream =
+              static_cast<phi::GPUContext*>(dev_ctx)->cuda_stream();
+          dev_ctx =
+              static_cast<phi::distributed::NCCLCommContext*>(comm_context)
+                  ->GetDevContext();
+          dev_ctx->SetCommContext(comm_context);
+          // Note(lizhenxing): In dynamic mode, c_softmax_with_cross_entropy
+          // need use global calculate stream (original_stream). Using the
+          // comm_ctx's stream will lead to synchronization issues, causing
+          // accuracy diff in test_parallel_dygraph_mp_layers.
+          if (phi::is_gpu_place(place) &&
+              ((attrs.find("use_calc_stream") != attrs.end() &&
+                PADDLE_GET_CONST(bool, attrs.at("use_calc_stream"))) ||
+               phi_kernel_name == "c_softmax_with_cross_entropy" ||
+               phi_kernel_name == "c_softmax_with_multi_label_cross_entropy")) {
+            static_cast<phi::GPUContext*>(dev_ctx)->SetCUDAStream(
+                original_stream, false);
+            auto& instance =
+                paddle::memory::allocation::AllocatorFacade::Instance();
+            dev_ctx->SetAllocator(
+                instance
+                    .GetAllocator(
+                        place, static_cast<phi::GPUContext*>(dev_ctx)->stream())
+                    .get());
+          }
+        }
+      }
+#endif
+#if defined(PADDLE_WITH_XPU_BKCL)
+      if (attrs.find("ring_id") != attrs.end()) {
+        auto ring_id_attr = attrs.at("ring_id");
+        int ring_id = PADDLE_GET(int, ring_id_attr);
+        auto map = distributed::ProcessGroupMapFromGid::getInstance();
+        if (map->has(ring_id)) {
+          distributed::ProcessGroup* pg = map->get(ring_id);
+          auto comm_context =
+              static_cast<paddle::distributed::ProcessGroupBKCL*>(pg)
+                  ->GetOrCreateCommContext(place);
+          auto original_stream =
+              static_cast<phi::XPUContext*>(dev_ctx)->stream();
+          dev_ctx =
+              static_cast<phi::distributed::BKCLCommContext*>(comm_context)
+                  ->GetDevContext();
+          dev_ctx->SetCommContext(comm_context);
+          // Note(lizhenxing): In dynamic mode, c_softmax_with_cross_entropy
+          // need use global calculate stream (original_stream). Using the
+          // comm_ctx's stream will lead to synchronization issues, causing
+          // accuracy diff in test_parallel_dygraph_mp_layers.
+          if (phi::is_xpu_place(place) &&
+              ((attrs.find("use_calc_stream") != attrs.end() &&
+                PADDLE_GET_CONST(bool, attrs.at("use_calc_stream"))) ||
+               phi_kernel_name == "c_softmax_with_cross_entropy" ||
+               phi_kernel_name == "c_softmax_with_multi_label_cross_entropy")) {
+            static_cast<phi::XPUContext*>(dev_ctx)->SetStream(original_stream,
+                                                              false);
+            auto& instance =
+                paddle::memory::allocation::AllocatorFacade::Instance();
+            dev_ctx->SetAllocator(
+                instance
+                    .GetAllocator(
+                        place, static_cast<phi::XPUContext*>(dev_ctx)->stream())
+                    .get());
+          }
+        }
+      }
+#endif
       return PreparedOp(op,
                         empty_ctx,
                         expected_kernel_key,
@@ -338,10 +429,10 @@ PreparedOp PrepareImpl(
        kernels_iter->second.find(fluid_kernel_type) ==
            kernels_iter->second.end())
 #if defined(PADDLE_WITH_XPU) && !defined(PADDLE_WITH_XPU_KP)
-      || is_xpu_unsupport
+      || is_xpu_unsupported
 #endif
 #if defined(PADDLE_WITH_XPU_KP)
-      || (is_xpu_unsupport && !is_xpu_kp_support)
+      || (is_xpu_unsupported && !is_xpu_kp_support)
 #endif
   ) {
     if (has_phi_kernel) {
@@ -368,7 +459,7 @@ PreparedOp PrepareImpl(
   PADDLE_ENFORCE_NE(
       kernels_iter,
       all_op_kernels.end(),
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "There are no kernels which are registered in the %s operator.",
           op.Type()));
 
@@ -377,7 +468,7 @@ PreparedOp PrepareImpl(
 
 #if defined(PADDLE_WITH_XPU) && !defined(PADDLE_WITH_XPU_KP)
   if (phi::is_xpu_place(fluid_kernel_type.place_) &&
-      (kernel_iter == kernels.end() || is_xpu_unsupport)) {
+      (kernel_iter == kernels.end() || is_xpu_unsupported)) {
     VLOG(3) << "fluid missing XPU kernel: " << op.Type()
             << ", expected_kernel_key:" << fluid_kernel_type
             << ", fallbacking to CPU one!";
@@ -401,7 +492,7 @@ PreparedOp PrepareImpl(
               << ", using_kernel_key:" << fluid_kernel_type;
     }
     if (!is_xpu_kp_support &&
-        (kernel_iter == kernels.end() || is_xpu_unsupport)) {
+        (kernel_iter == kernels.end() || is_xpu_unsupported)) {
       VLOG(3) << "fluid missing XPU kernel: " << op.Type()
               << ", expected_kernel_key:" << fluid_kernel_type
               << ", fallbacking to CPU one!";
@@ -435,9 +526,9 @@ PreparedOp PrepareImpl(
   PADDLE_ENFORCE_NE(
       kernel_iter,
       kernels.end(),
-      phi::errors::NotFound("Operator %s does not have kernel for %s.",
-                            op.Type(),
-                            KernelTypeToString(fluid_kernel_type)));
+      common::errors::NotFound("Operator %s does not have kernel for %s.",
+                               op.Type(),
+                               KernelTypeToString(fluid_kernel_type)));
 
   if (!phi::places_are_same_class(fluid_kernel_type.place_,
                                   dev_ctx->GetPlace())) {
@@ -519,10 +610,10 @@ static void PreparedOpRunImpl(
   // TODO(zjl): remove scope in dygraph
 
   {
-    platform::RecordEvent record_event("infer_shape",
-                                       platform::TracerEventType::OperatorInner,
-                                       1,
-                                       platform::EventRole::kInnerOp);
+    phi::RecordEvent record_event("infer_shape",
+                                  phi::TracerEventType::OperatorInner,
+                                  1,
+                                  phi::EventRole::kInnerOp);
     DygraphInferShapeContext<VarType> infer_shape_ctx(&ins,
                                                       &outs,
                                                       &attrs,
@@ -538,10 +629,10 @@ static void PreparedOpRunImpl(
   }
 
   {
-    platform::RecordEvent record_event("compute",
-                                       platform::TracerEventType::OperatorInner,
-                                       1,
-                                       platform::EventRole::kInnerOp);
+    phi::RecordEvent record_event("compute",
+                                  phi::TracerEventType::OperatorInner,
+                                  1,
+                                  phi::EventRole::kInnerOp);
 
     func(DygraphExecutionContext<VarType>(
         op, empty_scope, *dev_ctx, ctx, ins, outs, attrs, default_attrs));
@@ -592,10 +683,10 @@ static void PreparedOpRunPtImpl(
     const framework::AttributeMap& attrs,
     const framework::AttributeMap& default_attrs) {
   {
-    platform::RecordEvent record_event("infer_shape",
-                                       platform::TracerEventType::OperatorInner,
-                                       1,
-                                       platform::EventRole::kInnerOp);
+    phi::RecordEvent record_event("infer_shape",
+                                  phi::TracerEventType::OperatorInner,
+                                  1,
+                                  phi::EventRole::kInnerOp);
     DygraphInferShapeContext<VarType> infer_shape_ctx(&ins,
                                                       &outs,
                                                       &attrs,
@@ -611,10 +702,10 @@ static void PreparedOpRunPtImpl(
   }
 
   {
-    platform::RecordEvent record_event("compute",
-                                       platform::TracerEventType::OperatorInner,
-                                       1,
-                                       platform::EventRole::kInnerOp);
+    phi::RecordEvent record_event("compute",
+                                  phi::TracerEventType::OperatorInner,
+                                  1,
+                                  phi::EventRole::kInnerOp);
 
     if (phi_kernel.GetKernelRegisteredType() ==
         phi::KernelRegisteredType::FUNCTION) {

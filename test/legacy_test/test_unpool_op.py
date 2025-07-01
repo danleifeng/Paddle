@@ -23,7 +23,6 @@ import paddle
 import paddle.nn.functional as F
 from paddle.base import core
 from paddle.framework import in_pir_mode
-from paddle.pir_utils import test_with_pir_api
 
 
 def _unpool_output_size(x, kernel_size, stride, padding, output_size):
@@ -178,6 +177,17 @@ class TestUnpoolOpOutput(TestUnpoolOp):
         self.strides = [2, 2]
         self.paddings = [0, 0]
         self.output_size = [12, 12]
+
+
+class TestUnpoolOp_ZeroSize(TestUnpoolOp):
+    def init_test_case(self):
+        self.unpool2d_forward_naive = unpool2dmax_forward_naive
+        self.unpooling_type = "max"
+        self.shape = [3, 2, 5, 0]
+        self.ksize = [4, 4]
+        self.strides = [2, 2]
+        self.paddings = [0, 0]
+        self.output_size = None
 
 
 class TestUnpoolOpException(unittest.TestCase):
@@ -446,7 +456,7 @@ class TestUnpoolOpAPI_dy4(unittest.TestCase):
 
 
 class TestUnpoolOpAPI_st(unittest.TestCase):
-    @test_with_pir_api
+
     def test_case(self):
         import paddle
         import paddle.nn.functional as F
@@ -491,7 +501,6 @@ class TestOutputSizeTensor(UnittestBase):
         self.shapes = [[1, 3, 6, 6]]
         self.save_path = os.path.join(self.temp_dir.name, self.path_prefix())
 
-    @test_with_pir_api
     def test_static(self):
         paddle.enable_static()
         main_prog = paddle.static.Program()

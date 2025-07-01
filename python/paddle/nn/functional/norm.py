@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import numbers
-from typing import TYPE_CHECKING, Literal, Sequence
+from typing import TYPE_CHECKING
 
 import paddle
 from paddle import _C_ops, in_dynamic_mode
@@ -29,6 +29,9 @@ from ...base.data_feeder import check_type, check_variable_and_dtype
 from ...base.layer_helper import LayerHelper
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from typing import Literal
+
     from paddle import Tensor
     from paddle._typing import (
         DataLayout1D,
@@ -332,8 +335,8 @@ def layer_norm(
             size :math:`[*, normalized_shape[0], normalized_shape[1], ..., normalized_shape[-1]]`.
             If it is a single integer, this module will normalize over the last dimension
             which is expected to be of that specific size.
-        weight(Tensor, optional): The weight tensor of batch_norm. Default: None.
-        bias(Tensor, optional): The bias tensor of batch_norm. Default: None.
+        weight(Tensor, optional): The weight tensor of layer_norm. Default: None.
+        bias(Tensor, optional): The bias tensor of layer_norm. Default: None.
         epsilon(float, optional): The small value added to the variance to prevent
             division by zero. Default: 1e-05.
         name(str, optional): Name for the LayerNorm, default is None. For more information, please refer to :ref:`api_guide_Name` .

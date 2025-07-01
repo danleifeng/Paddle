@@ -118,10 +118,7 @@ class ContinuousBernoulli(distribution.Distribution):
         eps_prob = paddle.finfo(self.probs.dtype).eps
         self.probs = paddle.clip(self.probs, min=eps_prob, max=1 - eps_prob)
 
-        if self.probs.shape == []:
-            batch_shape = (1,)
-        else:
-            batch_shape = self.probs.shape
+        batch_shape = self.probs.shape
         super().__init__(batch_shape)
 
     def _to_tensor(self, probs: float | Tensor) -> Tensor:
@@ -248,7 +245,7 @@ class ContinuousBernoulli(distribution.Distribution):
             self._cut_support_region(), propose, taylor_expansion
         )
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate Continuous Bernoulli samples of the specified shape. The final shape would be ``sample_shape + batch_shape``.
 
         Args:
@@ -260,7 +257,7 @@ class ContinuousBernoulli(distribution.Distribution):
         with paddle.no_grad():
             return self.rsample(shape)
 
-    def rsample(self, shape: Sequence[int] = ()) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate Continuous Bernoulli samples of the specified shape. The final shape would be ``sample_shape + batch_shape``.
 
         Args:

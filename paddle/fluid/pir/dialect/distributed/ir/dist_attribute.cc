@@ -15,8 +15,7 @@
 #include "paddle/fluid/pir/dialect/distributed/ir/dist_attribute.h"
 #include "paddle/fluid/pir/dialect/distributed/ir/attribute_storage.h"
 #include "paddle/phi/core/enforce.h"
-namespace paddle {
-namespace dialect {
+namespace paddle::dialect {
 ///
 /// \brief ProcessMeshAttribute interface.
 ///
@@ -36,6 +35,23 @@ ProcessMeshAttribute ProcessMeshAttribute::get(
   return Base::get(ctx, shape, process_ids, dim_names);
 }
 
+const phi::distributed::Placements& PlacementsAttribute::placements() const {
+  return storage()->placements;
+}
+
+PlacementsAttribute PlacementsAttribute::get(
+    pir::IrContext* ctx, const phi::distributed::Placements& placements) {
+  return Base::get(ctx, placements);
+}
+
+std::string PlacementsAttribute::to_string() const {
+  return PlacementsAttrStorage::to_string(placements());
+}
+
+size_t PlacementsAttribute::hash() const {
+  return std::hash<std::string>()(to_string());
+}
+
 ///
 /// \brief TensorDistAttribute interface.
 ///
@@ -44,6 +60,10 @@ ProcessMeshAttribute TensorDistAttribute::process_mesh_attr() const {
 }
 const std::vector<int64_t>& TensorDistAttribute::dims_mapping() const {
   return storage()->dims_mapping;
+}
+std::optional<PlacementsAttribute> TensorDistAttribute::placements_attr()
+    const {
+  return storage()->placements_;
 }
 
 std::set<int64_t> TensorDistAttribute::partial_dims() const {
@@ -77,13 +97,13 @@ phi::distributed::Placements TensorDistAttribute::placements() const {
     if (mesh_id >= 0) {
       auto& p = placements[mesh_id];
       if (p->is_shard()) {
-        PADDLE_THROW(phi::errors::PreconditionNotMet(
-            "ProcessMesh dimension cann't be mapped to two  dimension of the "
+        PADDLE_THROW(common::errors::PreconditionNotMet(
+            "ProcessMesh dimension can't be mapped to two  dimension of the "
             "same tensor: {%d} and {%d}",
             i,
             dynamic_cast<phi::distributed::Shard&>(*p).get_dim()));
       } else if (p->is_partial()) {
-        PADDLE_THROW(phi::errors::PreconditionNotMet(
+        PADDLE_THROW(common::errors::PreconditionNotMet(
             "ProcessMesh dimension {%d} cannot be both shard and partial!",
             mesh_id));
       }
@@ -92,16 +112,30 @@ phi::distributed::Placements TensorDistAttribute::placements() const {
   }
   return placements;
 }
+
 TensorDistAttribute TensorDistAttribute::get(
     pir::IrContext* ctx,
     ProcessMeshAttribute mesh,
     const std::vector<int64_t>& dims_mapping,
-    const flat_hash_map<int64_t, phi::ReduceType>& partial_status) {
+    const flat_hash_map<int64_t, phi::ReduceType>& partial_status,
+    const std::optional<PlacementsAttribute>& placements) {
   PADDLE_ENFORCE_NOT_NULL(mesh,
                           common::errors::PreconditionNotMet(
                               "Building tensor_dist_attr through a nullptr "
                               "mesh attribute is currently not supported."));
-  return Base::get(ctx, mesh, dims_mapping, partial_status);
+
+  if (!placements.has_value() && !mesh.empty()) {
+    phi::distributed::Placements p =
+        phi::distributed::cvt_dim_map_to_placements(
+            mesh.process_mesh(), dims_mapping, partial_status);
+    return Base::get(ctx,
+                     mesh,
+                     dims_mapping,
+                     partial_status,
+                     PlacementsAttribute::get(ctx, p));
+  } else {
+    return Base::get(ctx, mesh, dims_mapping, partial_status, placements);
+  }
 }
 
 ///
@@ -126,15 +160,19 @@ uint32_t OperationDistAttribute::num_results() const {
   return results().size();
 }
 
+int64_t OperationDistAttribute::chunk_id() const { return storage()->chunk_id; }
+
 OperationDistAttribute OperationDistAttribute::get(
     pir::IrContext* ctx,
     ProcessMeshAttribute mesh,
     const std::vector<pir::Attribute>& operands,
-    const std::vector<pir::Attribute>& results) {
+    const std::vector<pir::Attribute>& results,
+    const int64_t& chunk_id) {
   auto check_dist_attr = [=](pir::Attribute attr) {
     auto dist_attr = attr.dyn_cast<TensorDistAttribute>();
     auto ids = mesh.process_ids();
-    for (const auto& id : dist_attr.process_mesh_attr().process_ids()) {
+    const ProcessMeshAttribute& dist_mesh = dist_attr.process_mesh_attr();
+    for (const auto& id : dist_mesh.process_ids()) {
       PADDLE_ENFORCE_EQ(std::find(ids.begin(), ids.end(), id) != ids.end(),
                         true,
                         common::errors::PreconditionNotMet(
@@ -156,11 +194,11 @@ OperationDistAttribute OperationDistAttribute::get(
       check_dist_attr(attr);
     }
   }
-  return Base::get(ctx, mesh, operands, results);
+  return Base::get(ctx, mesh, operands, results, chunk_id);
 }
 
-}  // namespace dialect
-}  // namespace paddle
+}  // namespace paddle::dialect
 IR_DEFINE_EXPLICIT_TYPE_ID(paddle::dialect::ProcessMeshAttribute)
+IR_DEFINE_EXPLICIT_TYPE_ID(paddle::dialect::PlacementsAttribute)
 IR_DEFINE_EXPLICIT_TYPE_ID(paddle::dialect::TensorDistAttribute)
 IR_DEFINE_EXPLICIT_TYPE_ID(paddle::dialect::OperationDistAttribute)

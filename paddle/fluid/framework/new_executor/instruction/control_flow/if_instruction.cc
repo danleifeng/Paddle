@@ -23,10 +23,10 @@
 #include "paddle/fluid/pir/dialect/operator/interface/op_yaml_info.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
-#include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/core/meta_tensor.h"
+#include "paddle/phi/core/platform/collective_helper.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/core/type_defs.h"
 
 #include "paddle/pir/include/core/builtin_attribute.h"
@@ -41,8 +41,9 @@
 #include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
-namespace paddle {
-namespace framework {
+COMMON_DECLARE_bool(check_cuda_error);
+
+namespace paddle::framework {
 
 IfInstruction::IfInstruction(size_t id,
                              const phi::Place& place,
@@ -58,9 +59,9 @@ IfInstruction::IfInstruction(size_t id,
       false_branch_inter_(nullptr),
       true_skip_gc_names_(),
       false_skip_gc_names_() {
-  PADDLE_ENFORCE(
-      op->isa<paddle::dialect::IfOp>(),
-      phi::errors::PreconditionNotMet("Cond instruction only support if op"));
+  PADDLE_ENFORCE(op->isa<paddle::dialect::IfOp>(),
+                 common::errors::PreconditionNotMet(
+                     "Cond instruction only support if op"));
   auto if_op = op->dyn_cast<paddle::dialect::IfOp>();
   op_ = op;
 
@@ -111,19 +112,20 @@ IfInstruction::IfInstruction(size_t id,
       PADDLE_ENFORCE_EQ(
           value_exec_info->HasValue(value),
           true,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "input should in name map, [%d] 'th input of [%s] op",
               i,
               "if op"));
       outputs.emplace(value, GetValueIds(value, *value_exec_info));
     }
     if (value.use_count() > 0) {
-      VLOG(0) << "value " << i << " use conutn != 0";
+      VLOG(6) << "value " << i << " use conutn != 0";
       is_last_op = false;
     }
   }
-  InsertTuplePushContinerToOuts(&true_branch_block, *value_exec_info, &outputs);
-  InsertTuplePushContinerToOuts(
+  InsertTuplePushContainerToOuts(
+      &true_branch_block, *value_exec_info, &outputs);
+  InsertTuplePushContainerToOuts(
       &if_op.false_block(), *value_exec_info, &outputs);
 
   InsertInplacedExternalInputsToOuts(
@@ -216,6 +218,10 @@ void IfInstruction::SetInputHooks(const std::vector<PirHookFunc>& hookfuncs) {
 }
 
 void IfInstruction::Run() {
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("IfInstruction begin");
+  }
+
   bool cond = true;
   if (cond_var_->IsType<phi::DenseTensor>()) {
     auto& cond_tensor = cond_var_->Get<phi::DenseTensor>();
@@ -226,13 +232,12 @@ void IfInstruction::Run() {
       // phi::is_xpu_place(cond.place()) is true
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
     defined(PADDLE_WITH_XPU) || defined(PADDLE_WITH_CUSTOM_DEVICE)
-      DeviceContext().Wait();
       phi::DenseTensor cpu_cond;
       paddle::framework::TensorCopySync(
           cond_tensor, phi::CPUPlace(), &cpu_cond);
       cond = cpu_cond.data<bool>()[0];
 #else
-      PADDLE_THROW(phi::errors::PreconditionNotMet(
+      PADDLE_THROW(common::errors::PreconditionNotMet(
           "This version of PaddlePaddle does NOT support GPU/XPU but got "
           "GPU/XPU tensor Cond in WhileOp. Please compile WITH_GPU or "
           "WITH_XPU option."));
@@ -264,7 +269,10 @@ void IfInstruction::Run() {
     false_branch_inter_->Run({}, false);
   }
   // copy output
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    CUDAErrorCheck("IfInstruction finish");
+  }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -20,7 +21,6 @@ from scipy import special
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(100)
 paddle.seed(100)
@@ -42,11 +42,16 @@ class TestI0API(unittest.TestCase):
     def setUp(self):
         self.x = np.array(self.DATA).astype(self.DTYPE)
         self.out_ref = output_i0(self.x)
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
-    @test_with_pir_api
     def test_api_static(self):
         def run(place):
             paddle.enable_static()
@@ -132,7 +137,7 @@ class TestI0Op(OpTest):
         self.target = output_i0(self.inputs['x'])
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -141,6 +146,27 @@ class TestI0Op(OpTest):
             user_defined_grads=[ref_i0_grad(self.case, 1 / self.case.size)],
             check_pir=True,
         )
+
+
+class TestI0Op_ZeroSize(OpTest):
+    def setUp(self) -> None:
+        self.__class__.op_type = "i0"
+        self.op_type = "i0"
+        self.python_api = paddle.i0
+        self.init_config()
+        x = np.random.randn(3, 4, 0)
+        self.inputs = {'x': x.astype(self.dtype)}
+        self.attrs = {}
+        self.outputs = {'out': special.i0(x)}
+
+    def init_config(self):
+        self.dtype = np.float32
+
+    def test_check_output(self):
+        self.check_output()
+
+    def test_check_grad(self):
+        self.check_grad(['x'], 'out')
 
 
 if __name__ == "__main__":

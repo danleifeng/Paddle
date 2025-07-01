@@ -25,7 +25,7 @@
 namespace phi {
 
 template <typename T, typename Context, size_t D>
-void SliceCompute(const Context& ctx,
+void SliceCompute(const Context& dev_ctx,
                   const DenseTensor& input,
                   const std::vector<int64_t>& axes,
                   const std::vector<int64_t>& starts_t,
@@ -71,11 +71,11 @@ void SliceCompute(const Context& ctx,
   }
 
   out->Resize(slice_dims);
-  ctx.template Alloc<T>(out);
+  dev_ctx.template Alloc<T>(out);
 
   auto in_t = EigenTensor<T, D>::From(*in, in_dims);
   auto out_t = EigenTensor<T, D>::From(*out, slice_dims);
-  auto& eigen_place = *ctx.eigen_device();
+  auto& eigen_place = *dev_ctx.eigen_device();
 
   if (in->numel() <= Eigen::NumTraits<int>::highest()) {
     // similar to tf.slice:
@@ -100,7 +100,7 @@ void SliceCompute(const Context& ctx,
 }
 
 template <typename T, typename Context>
-void SliceKernel(const Context& ctx,
+void SliceKernel(const Context& dev_ctx,
                  const DenseTensor& input,
                  const std::vector<int64_t>& axes,
                  const IntArray& starts_arr,
@@ -116,30 +116,30 @@ void SliceKernel(const Context& ctx,
   switch (rank) {
     case 1:
       SliceCompute<T, Context, 1>(
-          ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
+          dev_ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
       break;
     case 2:
       SliceCompute<T, Context, 2>(
-          ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
+          dev_ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
       break;
     case 3:
       SliceCompute<T, Context, 3>(
-          ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
+          dev_ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
       break;
     case 4:
       SliceCompute<T, Context, 4>(
-          ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
+          dev_ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
       break;
     case 5:
       SliceCompute<T, Context, 5>(
-          ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
+          dev_ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
       break;
     case 6:
       SliceCompute<T, Context, 6>(
-          ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
+          dev_ctx, input, axes, starts, ends, infer_flags, decrease_axis, out);
       break;
     default:
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "The rank of input should be less than 7, but received %d.", rank));
   }
 }
@@ -164,7 +164,7 @@ void SliceArrayKernel(const Context& dev_ctx,
 
   PADDLE_ENFORCE_GT(end,
                     start,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Attr(ends) should be greater than attr(starts) in "
                         "slice op. But received end = %d, start = %d.",
                         ends[0],

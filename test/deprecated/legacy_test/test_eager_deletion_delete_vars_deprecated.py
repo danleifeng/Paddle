@@ -70,21 +70,29 @@ def get_persistables_and_non_persistables(prog, fetch_list):
 
 class TestExecutor(unittest.TestCase):
     def test_executor_main(self):
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not base.core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if base.core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
 
         for p in places:
             self.place = p
-            with base.program_guard(base.Program(), base.Program()):
-                with base.scope_guard(base.Scope()):
-                    with base.unique_name.guard():
-                        self.executor_main()
+            with (
+                base.program_guard(base.Program(), base.Program()),
+                base.scope_guard(base.Scope()),
+                base.unique_name.guard(),
+            ):
+                self.executor_main()
 
     def prepare_feed(self, image, label, dev_cnt=1):
         batch_size = 32 * dev_cnt
-        image_shape = (batch_size,) + tuple(image.shape[1:])
-        label_shape = (batch_size,) + tuple(label.shape[1:])
+        image_shape = (batch_size, *image.shape[1:])
+        label_shape = (batch_size, *label.shape[1:])
 
         image_np = np.random.random(size=image_shape).astype('float32')
         label_np = np.random.random_integers(

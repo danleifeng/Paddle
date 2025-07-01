@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import abc
-from typing import TYPE_CHECKING, Any, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -27,6 +27,8 @@ from ..base.layer_helper import LayerHelper
 from ..framework import in_dynamic_mode
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy.typing as npt
 
     from paddle import Tensor
@@ -54,7 +56,7 @@ class Metric(metaclass=abc.ABCMeta):
     Advanced usage for :code:`compute`:
 
     Metric calculation can be accelerated by calculating metric states
-    from model outputs and labels by build-in operators not by Python/NumPy
+    from model outputs and labels by built-in operators not by Python/NumPy
     in :code:`compute`, metric states will be fetched as NumPy array and
     call :code:`update` with states in NumPy format.
     Metric calculated as follows (operations in Model and Metric are

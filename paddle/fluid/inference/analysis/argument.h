@@ -74,42 +74,42 @@ struct Argument {
     }
   }
 
-#define DECL_ARGUMENT_FIELD(field__, Field, type__)                 \
- public:                                                            \
-  type__& field__() {                                               \
-    PADDLE_ENFORCE_EQ(                                              \
-        Has(#field__),                                              \
-        true,                                                       \
-        phi::errors::PreconditionNotMet("There is no such field")); \
-    return field__##_;                                              \
-  }                                                                 \
-  void Set##Field(const type__& x) {                                \
-    field__##_ = x;                                                 \
-    valid_fields_.insert(#field__);                                 \
-  }                                                                 \
-  DECL_ARGUMENT_FIELD_VALID(field__);                               \
-  type__* field__##_ptr() { return &field__##_; }                   \
-                                                                    \
- private:                                                           \
+#define DECL_ARGUMENT_FIELD(field__, Field, type__)                    \
+ public:                                                               \
+  type__& field__() {                                                  \
+    PADDLE_ENFORCE_EQ(                                                 \
+        Has(#field__),                                                 \
+        true,                                                          \
+        common::errors::PreconditionNotMet("There is no such field")); \
+    return field__##_;                                                 \
+  }                                                                    \
+  void Set##Field(const type__& x) {                                   \
+    field__##_ = x;                                                    \
+    valid_fields_.insert(#field__);                                    \
+  }                                                                    \
+  DECL_ARGUMENT_FIELD_VALID(field__);                                  \
+  type__* field__##_ptr() { return &field__##_; }                      \
+                                                                       \
+ private:                                                              \
   type__ field__##_;
 
-#define DECL_POINTER_ARGUMENT_FIELD(field__, Field, type__)         \
- public:                                                            \
-  type__& field__() {                                               \
-    PADDLE_ENFORCE_EQ(                                              \
-        Has(#field__),                                              \
-        true,                                                       \
-        phi::errors::PreconditionNotMet("There is no such field")); \
-    return field__##_;                                              \
-  }                                                                 \
-  void Set##Field(type__ x) {                                       \
-    field__##_ = x;                                                 \
-    valid_fields_.insert(#field__);                                 \
-  }                                                                 \
-  DECL_ARGUMENT_FIELD_VALID(field__);                               \
-  type__* field__##_ptr() { return &field__##_; }                   \
-                                                                    \
- private:                                                           \
+#define DECL_POINTER_ARGUMENT_FIELD(field__, Field, type__)            \
+ public:                                                               \
+  type__& field__() {                                                  \
+    PADDLE_ENFORCE_EQ(                                                 \
+        Has(#field__),                                                 \
+        true,                                                          \
+        common::errors::PreconditionNotMet("There is no such field")); \
+    return field__##_;                                                 \
+  }                                                                    \
+  void Set##Field(type__ x) {                                          \
+    field__##_ = x;                                                    \
+    valid_fields_.insert(#field__);                                    \
+  }                                                                    \
+  DECL_ARGUMENT_FIELD_VALID(field__);                                  \
+  type__* field__##_ptr() { return &field__##_; }                      \
+                                                                       \
+ private:                                                              \
   type__ field__##_;
 
 #define DECL_ARGUMENT_FIELD_VALID(field__) \
@@ -120,11 +120,11 @@ struct Argument {
   type__& field__() {                                                     \
     PADDLE_ENFORCE_NOT_NULL(                                              \
         field__##_,                                                       \
-        phi::errors::PreconditionNotMet("filed should not be null."));    \
+        common::errors::PreconditionNotMet("filed should not be null.")); \
     PADDLE_ENFORCE_EQ(                                                    \
         Has(#field__),                                                    \
         true,                                                             \
-        phi::errors::PreconditionNotMet("There is no such field"));       \
+        common::errors::PreconditionNotMet("There is no such field"));    \
     return *static_cast<type__*>(field__##_.get());                       \
   }                                                                       \
   void Set##Field(type__* x) {                                            \
@@ -141,14 +141,14 @@ struct Argument {
     PADDLE_ENFORCE_EQ(                                                    \
         Has(#field__),                                                    \
         true,                                                             \
-        phi::errors::PreconditionNotMet("There is no such field"));       \
+        common::errors::PreconditionNotMet("There is no such field"));    \
     return static_cast<type__*>(field__##_.get());                        \
   }                                                                       \
   type__* Release##Field() {                                              \
     PADDLE_ENFORCE_EQ(                                                    \
         Has(#field__),                                                    \
         true,                                                             \
-        phi::errors::PreconditionNotMet("There is no such field"));       \
+        common::errors::PreconditionNotMet("There is no such field"));    \
     valid_fields_.erase(#field__);                                        \
     return static_cast<type__*>(field__##_.release());                    \
   }                                                                       \
@@ -301,7 +301,12 @@ struct Argument {
   DECL_ARGUMENT_FIELD(tensorrt_ops_run_float,
                       TensorRtOpsRunFloat,
                       std::unordered_set<std::string>);
-
+#ifdef PADDLE_WITH_OPENVINO
+  DECL_ARGUMENT_FIELD(use_openvino, UseOpenVINO, bool);
+  DECL_ARGUMENT_FIELD(openvino_inference_precision,
+                      OpenvinoInferencePrecision,
+                      int);
+#endif
   DECL_ARGUMENT_FIELD(use_xpu, UseXpu, bool);
   DECL_ARGUMENT_FIELD(xpu_locked, XpuLocked, bool);
   DECL_ARGUMENT_FIELD(xpu_precision, XpuPrecision, std::string);
@@ -417,12 +422,12 @@ struct Argument {
   std::unordered_set<std::string> valid_fields_;
 };
 
-#define ARGUMENT_CHECK_FIELD(argument__, fieldname__)                          \
-  PADDLE_ENFORCE_EQ(                                                           \
-      argument__->Has(#fieldname__),                                           \
-      true,                                                                    \
-      phi::errors::PreconditionNotMet("the argument field [%s] should be set", \
-                                      #fieldname__));
+#define ARGUMENT_CHECK_FIELD(argument__, fieldname__) \
+  PADDLE_ENFORCE_EQ(                                  \
+      argument__->Has(#fieldname__),                  \
+      true,                                           \
+      common::errors::PreconditionNotMet(             \
+          "the argument field [%s] should be set", #fieldname__));
 
 }  // namespace analysis
 }  // namespace inference

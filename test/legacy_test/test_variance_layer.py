@@ -17,7 +17,6 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def ref_var(x, axis=None, unbiased=True, keepdim=False):
@@ -69,7 +68,6 @@ class TestVarAPI(unittest.TestCase):
         np.testing.assert_allclose(out_ref, out_dygraph, rtol=1e-05)
         self.assertTrue(np.equal(out_ref.shape, out_dygraph.shape).all())
 
-        @test_with_pir_api
         def test_static_or_pir_mode():
             out_static = self.static()
             np.testing.assert_allclose(out_ref, out_static, rtol=1e-05)
@@ -121,11 +119,73 @@ class TestVarAPI_alias(unittest.TestCase):
 
 
 class TestVarError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_error(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data('X', [2, 3, 4], 'int32')
             self.assertRaises(TypeError, paddle.var, x)
+
+
+class TestVarAPI_ZeroSize(unittest.TestCase):
+    def init_data(self):
+        self.x_shape = [10, 0]
+
+    def test_zerosize(self):
+        self.init_data()
+        paddle.disable_static()
+        x = paddle.to_tensor(np.random.random(self.x_shape))
+        out1 = paddle.var(x).numpy()
+        out2 = np.var(x.numpy())
+        np.testing.assert_allclose(out1, out2, equal_nan=True)
+        paddle.enable_static()
+
+
+class TestVarAPI_ZeroSize1(unittest.TestCase):
+    def init_data(self):
+        self.x_shape = []
+        # x = torch.tensor([])
+        # res= torch.var(x)     Here, res is nan
+        self.expact_out = np.nan
+
+    def test_zerosize(self):
+        self.init_data()
+        paddle.disable_static()
+        x = paddle.to_tensor(np.random.random(self.x_shape))
+        out1 = paddle.var(x).numpy()
+        np.testing.assert_allclose(out1, self.expact_out, equal_nan=True)
+        paddle.enable_static()
+
+
+class TestVarAPI_UnBiased1(unittest.TestCase):
+    def init_data(self):
+        self.x_shape = [1]
+        # x = torch.randn([1])
+        # res= torch.var(x,correction=0)     Here, res is 0.
+        self.expact_out = 0.0
+
+    def test_api(self):
+        self.init_data()
+        paddle.disable_static()
+        x = paddle.to_tensor(np.random.random(self.x_shape))
+        out1 = paddle.var(x, unbiased=False).numpy()
+        np.testing.assert_allclose(out1, self.expact_out, equal_nan=True)
+        paddle.enable_static()
+
+
+class TestVarAPI_UnBiased2(unittest.TestCase):
+    def init_data(self):
+        self.x_shape = [1]
+        # x = torch.randn([1])
+        # res= torch.var(x,correction=1)     Here, res is 0.
+        self.expact_out = np.nan
+
+    def test_api(self):
+        self.init_data()
+        paddle.disable_static()
+        x = paddle.to_tensor(np.random.random(self.x_shape))
+        out1 = paddle.var(x, unbiased=True).numpy()
+        np.testing.assert_allclose(out1, self.expact_out, equal_nan=True)
+        paddle.enable_static()
 
 
 if __name__ == '__main__':

@@ -26,7 +26,7 @@ std::string FillStackNotation(int64_t n_axis) {
   static const std::string alphabet = "abcdefghijlopqrstuvwxyz";
   PADDLE_ENFORCE_GT(alphabet.size(),
                     static_cast<size_t>(n_axis),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "alphabet.size() [%d]; n_axis [%d] is too large",
                         alphabet.size(),
                         n_axis));
@@ -53,7 +53,7 @@ SpmdInfo StackInferSpmd(const std::vector<DistMetaTensor>& x, int axis) {
 
   auto non_empty_index = all_empty ? 0 : non_empty_iter - tensor_shapes.begin();
   auto ndim = tensor_shapes[non_empty_index].size();
-  // normlize dim
+  // normalize dim
   auto dim = axis < 0 ? static_cast<int64_t>(ndim) + axis + 1 : axis;
   std::vector<TensorDistAttr> input_attrs;
   std::transform(
@@ -69,6 +69,7 @@ SpmdInfo StackInferSpmd(const std::vector<DistMetaTensor>& x, int axis) {
 
   TensorDistAttr output_attr =
       CopyTensorDistAttrForOutput(input_attrs[non_empty_index]);
+  output_attr.set_partial_status(input_attrs[non_empty_index].partial_status());
   std::vector<int64_t> dim_mapping(ndim + 1, -1);
   const auto& input_dim_mapping = input_attrs[non_empty_index].dims_mapping();
   for (size_t i = 0; i < ndim; i++) {

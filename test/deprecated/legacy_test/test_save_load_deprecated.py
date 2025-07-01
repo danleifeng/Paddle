@@ -142,7 +142,7 @@ class TestJitPruneModelAndLoad(unittest.TestCase):
     def test_load_var_not_in_extra_var_info(self):
         self.train_and_save()
 
-        # chage extra var info
+        # change extra var info
         var_info_path = self.model_path + INFER_PARAMS_INFO_SUFFIX
         with open(var_info_path, 'rb') as f:
             extra_var_info = pickle.load(f)
@@ -332,7 +332,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                     low=-self._init_scale, high=self._init_scale
                 ),
             )
-            self.weight_1_arr.append(self.add_parameter('w_%d' % i, weight_1))
+            self.weight_1_arr.append(self.add_parameter(f'w_{i}', weight_1))
             bias_1 = self.create_parameter(
                 attr=base.ParamAttr(
                     initializer=paddle.nn.initializer.Uniform(
@@ -343,7 +343,7 @@ class SimpleLSTMRNN(paddle.nn.Layer):
                 dtype="float32",
                 default_initializer=paddle.nn.initializer.Constant(0.0),
             )
-            self.bias_arr.append(self.add_parameter('b_%d' % i, bias_1))
+            self.bias_arr.append(self.add_parameter(f'b_{i}', bias_1))
 
     def forward(self, input_embedding, init_hidden=None, init_cell=None):
         self.cell_array = []
@@ -892,7 +892,7 @@ class TestLoadFromOldInterfaceSingleFile(unittest.TestCase):
                     main_program,
                     file_model_path,
                     exe,
-                    all_var_list + [temp_var],
+                    [*all_var_list, temp_var],
                 )
         temp_dir.cleanup()
 

@@ -37,10 +37,24 @@ set(ROCKSDB_SHARED_LINKER_FLAGS "-Wl,--no-as-needed -ldl")
 
 if(WITH_ARM)
   file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/rocksdb/libaio.h.patch
-       native_src)
-  set(ROCKSDB_PATCH_COMMAND
-      git checkout -- . && git checkout ${ROCKSDB_TAG} && patch -Nd
-      ${PADDLE_SOURCE_DIR}/third_party/rocksdb/env/ < ${native_src})
+       libaio_h_patch)
+  set(ROCKSDB_PATCH_COMMAND_ARM
+      patch -Nd ${PADDLE_SOURCE_DIR}/third_party/rocksdb/env/ <
+      ${libaio_h_patch})
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND ${CMAKE_CXX_COMPILER_VERSION}
+                                            VERSION_GREATER_EQUAL 13.0)
+  message(
+    STATUS
+      "GCC version is ${CMAKE_CXX_COMPILER_VERSION}, adding some patches for gcc13+"
+  )
+  file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/rocksdb/include.patch
+       include_patch)
+  file(TO_NATIVE_PATH ${PADDLE_SOURCE_DIR}/patches/rocksdb/redundant_move.patch
+       redundant_move_patch)
+  set(ROCKSDB_PATCH_COMMAND_GCC13 git apply ${include_patch}
+                                  ${redundant_move_patch})
 endif()
 
 ExternalProject_Add(
@@ -49,7 +63,11 @@ ExternalProject_Add(
   PREFIX ${ROCKSDB_PREFIX_DIR}
   SOURCE_DIR ${ROCKSDB_SOURCE_DIR}
   UPDATE_COMMAND ""
-  PATCH_COMMAND ${ROCKSDB_PATCH_COMMAND}
+  PATCH_COMMAND
+  COMMAND git checkout -- . && git checkout ${ROCKSDB_TAG} && git apply
+          ${PADDLE_SOURCE_DIR}/patches/rocksdb/compaction_picker_level.cc.patch
+  COMMAND ${ROCKSDB_PATCH_COMMAND_ARM}
+  COMMAND ${ROCKSDB_PATCH_COMMAND_GCC13}
   CMAKE_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
              -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
              -DWITH_BZ2=OFF

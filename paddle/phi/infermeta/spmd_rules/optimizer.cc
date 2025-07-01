@@ -17,29 +17,32 @@ limitations under the License. */
 #include "glog/logging.h"
 
 #include "paddle/phi/core/distributed/auto_parallel/dist_attr.h"
+#include "paddle/phi/core/distributed/auto_parallel/reshard/reshard_utils.h"
 #include "paddle/phi/core/distributed/auto_parallel/utils.h"
 #include "paddle/phi/infermeta/spmd_rules/elementwise.h"
 #include "paddle/phi/infermeta/spmd_rules/utils.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
-SpmdInfo AdamInferSpmdDynamic(const DistMetaTensor& param,
-                              const DistMetaTensor& grad,
-                              const DistMetaTensor& learning_rate,
-                              const DistMetaTensor& moment1,
-                              const DistMetaTensor& moment2,
-                              const DistMetaTensor& beta1_pow,
-                              const DistMetaTensor& beta2_pow,
-                              const DistMetaTensor& master_param,
-                              const DistMetaTensor& skip_update,
-                              const Scalar& beta1,
-                              const Scalar& beta2,
-                              const Scalar& epsilon,
-                              bool lazy_mode,
-                              int64_t min_row_size_to_use_multithread,
-                              bool multi_precision,
-                              bool use_global_beta_pow) {
+SpmdInfo AdamInferSpmdDynamic(
+    const DistMetaTensor& param,
+    const DistMetaTensor& grad,
+    const DistMetaTensor& learning_rate,
+    const DistMetaTensor& moment1,
+    const DistMetaTensor& moment2,
+    const paddle::optional<DistMetaTensor>& moment2_max,
+    const DistMetaTensor& beta1_pow,
+    const DistMetaTensor& beta2_pow,
+    const DistMetaTensor& master_param,
+    const DistMetaTensor& skip_update,
+    const Scalar& beta1,
+    const Scalar& beta2,
+    const Scalar& epsilon,
+    bool lazy_mode,
+    int64_t min_row_size_to_use_multithread,
+    bool multi_precision,
+    bool use_global_beta_pow,
+    bool amsgrad) {
   // shape check
   PADDLE_ENFORCE(
       param.dims().size() == grad.dims().size() &&
@@ -78,6 +81,9 @@ SpmdInfo AdamInferSpmdDynamic(const DistMetaTensor& param,
       CopyTensorDistAttrForOutput(moment1.dist_attr());
   TensorDistAttr moment2_dist_attr =
       CopyTensorDistAttrForOutput(moment2.dist_attr());
+  TensorDistAttr moment2_max_dist_attr =
+      amsgrad ? CopyTensorDistAttrForOutput(moment2_max.get().dist_attr())
+              : TensorDistAttr();
   TensorDistAttr beta1_pow_dist_attr =
       CopyTensorDistAttrForOutput(beta1_pow.dist_attr());
   TensorDistAttr beta2_pow_dist_attr =
@@ -86,25 +92,40 @@ SpmdInfo AdamInferSpmdDynamic(const DistMetaTensor& param,
       master_param.initialized()
           ? CopyTensorDistAttrForOutput(master_param.dist_attr())
           : TensorDistAttr();
-  TensorDistAttr skip_update_dist_attr =
-      skip_update.initialized()
-          ? CopyTensorDistAttrForOutput(skip_update.dist_attr())
-          : TensorDistAttr();
-
+  // If skip_update is on global_mesh, it should be reshard into
+  // local mesh. (currently occurs in static mode pipeline parallel)
+  auto skip_update_dist_attr = TensorDistAttr();
+  if (skip_update.initialized()) {
+    skip_update_dist_attr = skip_update.dist_attr();
+    PADDLE_ENFORCE_EQ(
+        skip_update_dist_attr.dims_mapping()[0],
+        -1,
+        errors::InvalidArgument(
+            "skip_update should be replicated, but got shard on mesh %d.",
+            skip_update_dist_attr.dims_mapping()[0]));
+    skip_update_dist_attr.clean_partial_status();
+    if (skip_update_dist_attr.process_mesh().ndim() > 1 &&
+        phi::distributed::IsSubMesh(skip_update_dist_attr.process_mesh(),
+                                    param_dist_attr.process_mesh())) {
+      skip_update_dist_attr.set_process_mesh(param_dist_attr.process_mesh());
+    }
+  }
   // set the unchanged dims mapping
   lr_dist_attr.set_dims_mapping(learning_rate.dist_attr().dims_mapping());
   beta1_pow_dist_attr.set_dims_mapping(beta1_pow.dist_attr().dims_mapping());
   beta2_pow_dist_attr.set_dims_mapping(beta2_pow.dist_attr().dims_mapping());
-  if (skip_update.initialized()) {
-    skip_update_dist_attr.set_dims_mapping(
-        skip_update.dist_attr().dims_mapping());
-  }
 
   // set the changeable dims mapping
   auto param_spmd_dims_mapping = param_dist_attr_spmd.dims_mapping();
   auto grad_spmd_dims_mapping = grad_dist_attr_spmd.dims_mapping();
   auto momentum1_src_dims_mapping = moment1.dist_attr().dims_mapping();
   auto momentum2_src_dims_mapping = moment2.dist_attr().dims_mapping();
+
+  std::vector<int64_t> momentum2_max_src_dims_mapping;
+  if (amsgrad) {
+    momentum2_max_src_dims_mapping =
+        moment2_max.get().dist_attr().dims_mapping();
+  }
 
   // Get the final dist attr for param, master_param, grad and momentum.
   // Whatever the input dist attrs are, the output dist attr should be same.
@@ -119,10 +140,20 @@ SpmdInfo AdamInferSpmdDynamic(const DistMetaTensor& param,
   // and the unshard tensors should keep unshard status.
   std::vector<int64_t> dst_dims_mapping;
   for (int64_t i = 0; i < param.dims().size(); ++i) {
-    std::vector<int64_t> shard_status{param_spmd_dims_mapping[i],
-                                      grad_spmd_dims_mapping[i],
-                                      momentum1_src_dims_mapping[i],
-                                      momentum2_src_dims_mapping[i]};
+    std::vector<int64_t> shard_status;
+    if (amsgrad) {
+      shard_status.assign({param_spmd_dims_mapping[i],
+                           grad_spmd_dims_mapping[i],
+                           momentum1_src_dims_mapping[i],
+                           momentum2_src_dims_mapping[i],
+                           momentum2_max_src_dims_mapping[i]});
+
+    } else {
+      shard_status.assign({param_spmd_dims_mapping[i],
+                           grad_spmd_dims_mapping[i],
+                           momentum1_src_dims_mapping[i],
+                           momentum2_src_dims_mapping[i]});
+    }
     int64_t dst_shard_status = -1;
     for (auto status : shard_status) {
       if (status == -1) {
@@ -162,12 +193,16 @@ SpmdInfo AdamInferSpmdDynamic(const DistMetaTensor& param,
   }
   moment1_dist_attr.set_dims_mapping(dst_dims_mapping);
   moment2_dist_attr.set_dims_mapping(dst_dims_mapping);
+  if (amsgrad) {
+    moment2_max_dist_attr.set_dims_mapping(dst_dims_mapping);
+  }
 
   return {{param_dist_attr,
            grad_dist_attr,
            lr_dist_attr,
            moment1_dist_attr,
            moment2_dist_attr,
+           moment2_max_dist_attr,
            beta1_pow_dist_attr,
            beta2_pow_dist_attr,
            master_param_dist_attr,
@@ -175,35 +210,40 @@ SpmdInfo AdamInferSpmdDynamic(const DistMetaTensor& param,
           {param_dist_attr,
            moment1_dist_attr,
            moment2_dist_attr,
+           moment2_max_dist_attr,
            beta1_pow_dist_attr,
            beta2_pow_dist_attr,
            master_param_dist_attr}};
 }
 
-SpmdInfo AdamwInferSpmdDynamic(const DistMetaTensor& param,
-                               const DistMetaTensor& grad,
-                               const DistMetaTensor& learning_rate,
-                               const DistMetaTensor& moment1,
-                               const DistMetaTensor& moment2,
-                               const DistMetaTensor& beta1_pow,
-                               const DistMetaTensor& beta2_pow,
-                               const DistMetaTensor& master_param,
-                               const DistMetaTensor& skip_update,
-                               const Scalar& beta1,
-                               const Scalar& beta2,
-                               const Scalar& epsilon,
-                               float lr_ratio,
-                               float coeff,
-                               bool with_decay,
-                               bool lazy_mode,
-                               int64_t min_row_size_to_use_multithread,
-                               bool multi_precision,
-                               bool use_global_beta_pow) {
+SpmdInfo AdamwInferSpmdDynamic(
+    const DistMetaTensor& param,
+    const DistMetaTensor& grad,
+    const DistMetaTensor& learning_rate,
+    const DistMetaTensor& moment1,
+    const DistMetaTensor& moment2,
+    const paddle::optional<DistMetaTensor>& moment2_max,
+    const DistMetaTensor& beta1_pow,
+    const DistMetaTensor& beta2_pow,
+    const DistMetaTensor& master_param,
+    const DistMetaTensor& skip_update,
+    const Scalar& beta1,
+    const Scalar& beta2,
+    const Scalar& epsilon,
+    float lr_ratio,
+    float coeff,
+    bool with_decay,
+    bool lazy_mode,
+    int64_t min_row_size_to_use_multithread,
+    bool multi_precision,
+    bool use_global_beta_pow,
+    bool amsgrad) {
   return AdamInferSpmdDynamic(param,
                               grad,
                               learning_rate,
                               moment1,
                               moment2,
+                              moment2_max,
                               beta1_pow,
                               beta2_pow,
                               master_param,
@@ -214,7 +254,8 @@ SpmdInfo AdamwInferSpmdDynamic(const DistMetaTensor& param,
                               lazy_mode,
                               min_row_size_to_use_multithread,
                               multi_precision,
-                              use_global_beta_pow);
+                              use_global_beta_pow,
+                              amsgrad);
 }
 
 SpmdInfo SgdInferSpmd(const DistMetaTensor& param,
@@ -261,5 +302,4 @@ SpmdInfo SgdInferSpmd(const DistMetaTensor& param,
       {param_dist_attr, master_param_dist_attr}};
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

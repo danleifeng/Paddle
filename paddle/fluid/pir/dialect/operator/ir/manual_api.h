@@ -26,6 +26,7 @@ namespace paddle {
 namespace dialect {
 
 pir::Value builtin_combine(const std::vector<pir::Value>& x);
+std::vector<pir::Value> builtin_split(const pir::Value& x);
 
 std::vector<pir::Value> add_n_grad(const std::vector<pir::Value>& inputs,
                                    const pir::Value& out_grad);
@@ -55,6 +56,12 @@ pir::Value split_with_num_grad(const std::vector<pir::Value>& out_grad,
                                const pir::Value& axis);
 
 pir::Value ones(const std::vector<int64_t>& shape,
+                phi::DataType dtype = phi::DataType::FLOAT32,
+                const Place& place = phi::CPUPlace());
+
+pir::Value full(const std::vector<int64_t>& shape,
+                double real,
+                double imag,
                 phi::DataType dtype = phi::DataType::FLOAT32,
                 const Place& place = phi::CPUPlace());
 
@@ -101,6 +108,16 @@ std::tuple<pir::Value, pir::Value> fused_gemm_epilogue(pir::Value x,
                                                        bool trans_x,
                                                        bool trans_y,
                                                        std::string activation);
+
+std::tuple<pir::Value, pir::Value, pir::Value> fused_gemm_epilogue_grad(
+    pir::Value x,
+    pir::Value y,
+    paddle::optional<pir::Value> reserve_space,
+    pir::Value out_grad,
+    bool trans_x,
+    bool trans_y,
+    std::string activation_grad);
+
 pir::Value array_pop(pir::Value input, int index);
 
 std::vector<pir::Value> tensorrt_engine(
@@ -111,5 +128,7 @@ std::vector<pir::Value> tensorrt_engine(
     std::vector<std::vector<int64_t>> outputs_shape,
     std::vector<phi::DataType> outputs_dtype,
     const std::string& converter_debug_info);
+
+pir::Operation* share_var(const std::vector<pir::Value>& x);
 }  // namespace dialect
 }  // namespace paddle

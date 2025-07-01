@@ -23,7 +23,7 @@ bool Pool2dGradCheckIfOneDNNSupport(const KernelContext* ctx) {
     // adaptive
     return true;
   }
-  // oneDNN is supporting only unchangable in size pool window
+  // oneDNN is supporting only unchangeable in size pool window
   auto src_tz = common::vectorize(ctx->InputAt<phi::DenseTensor>(0).dims());
   const TensorRef& kernel_size_tmp = ctx->AttrAt<TensorRef>(0);
   IntArray kernel_size_array = IntArray(*kernel_size_tmp.Get());
@@ -39,8 +39,8 @@ void Pool2dGradKernel(const Context& dev_ctx,
                       const DenseTensor& out UNUSED,
                       const DenseTensor& dout,
                       const IntArray& kernel_size,
-                      const std::vector<int>& strides,
-                      const std::vector<int>& paddings,
+                      const std::vector<int64_t>& strides,
+                      const std::vector<int64_t>& paddings,
                       bool ceil_mode,
                       bool exclusive,
                       const std::string& data_format UNUSED,

@@ -86,8 +86,7 @@ class OperatorUnsqueezeFusePattern : public paddle::drr::DrrPatternBase {
     const auto &full_1 = pat.Op(paddle::dialect::FullIntArrayOp::name(),
                                 {{"value", pat.Attr("full_1_value")}});
 
-    unsqueeze({&pat.Tensor("Out"), &full_1()},
-              {&pat.Tensor("Unsqueeze_out"), &pat.Tensor("Xshape")});
+    unsqueeze({&pat.Tensor("Out"), &full_1()}, {&pat.Tensor("Unsqueeze_out")});
 
     if (fusable_ops_ == paddle::onednn::dialect::FusedTransposeOp::name() ||
         fusable_ops_ ==
@@ -178,7 +177,7 @@ class OperatorUnsqueezeFusePattern : public paddle::drr::DrrPatternBase {
 class OperatorUnsqueezeFusePass : public pir::PatternRewritePass {
  public:
   OperatorUnsqueezeFusePass()
-      : pir::PatternRewritePass("operator_unsqueeze_onednn_fuse_pass", 3) {}
+      : pir::PatternRewritePass("operator_unsqueeze_onednn_fuse_pass", 2) {}
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);

@@ -78,7 +78,7 @@ inline phi::DenseTensor TransDataLayout(const phi::DenseTensor& tensor,
     auto* dev_ctx = static_cast<phi::CPUContext*>(pool.Get(tensor.place()));
     return phi::TransferLayout(*dev_ctx, tensor, layout);
   } else {
-    PADDLE_THROW(phi::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "Unsupported data layout cast from CPU to GPU."));
   }
   return tensor;
@@ -108,7 +108,7 @@ phi::DenseTensor CastDataType(const Context& dev_ctx,
     case DataType::UINT8:
       return phi::Cast<uint8_t>(dev_ctx, tensor, dtype);
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Data type (%s) is not supported when casting data type.",
           tensor.dtype()));
   }
@@ -136,7 +136,34 @@ phi::DenseTensor CastDataType(const phi::GPUContext& dev_ctx,
     case DataType::UINT8:
       return phi::Cast<uint8_t>(dev_ctx, tensor, dtype);
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
+          "Data type (%s) is not supported when casting data type.",
+          tensor.dtype()));
+  }
+}
+#endif
+
+#ifdef PADDLE_WITH_XPU
+phi::DenseTensor CastDataType(const phi::XPUContext& dev_ctx,
+                              const phi::DenseTensor& tensor,
+                              DataType dtype) {
+  switch (tensor.dtype()) {
+    case DataType::FLOAT32:
+      return phi::Cast<float>(dev_ctx, tensor, dtype);
+    case DataType::FLOAT64:
+      return phi::Cast<double>(dev_ctx, tensor, dtype);
+    case DataType::INT32:
+      return phi::Cast<int32_t>(dev_ctx, tensor, dtype);
+    case DataType::INT64:
+      return phi::Cast<int64_t>(dev_ctx, tensor, dtype);
+    case DataType::FLOAT16:
+      return phi::Cast<phi::dtype::float16>(dev_ctx, tensor, dtype);
+    case DataType::BOOL:
+      return phi::Cast<bool>(dev_ctx, tensor, dtype);
+    case DataType::UINT8:
+      return phi::Cast<uint8_t>(dev_ctx, tensor, dtype);
+    default:
+      PADDLE_THROW(common::errors::Unimplemented(
           "Data type (%s) is not supported when casting data type.",
           tensor.dtype()));
   }
@@ -161,6 +188,11 @@ inline phi::DenseTensor TransDataType(const phi::DenseTensor& tensor,
     auto* dev_ctx = static_cast<phi::GPUContext*>(pool.Get(tensor.place()));
     return CastDataType(*dev_ctx, tensor, dtype);
 #endif
+#ifdef PADDLE_WITH_XPU
+  } else if (tensor.place().GetType() == phi::AllocationType::XPU) {
+    auto* dev_ctx = static_cast<phi::XPUContext*>(pool.Get(tensor.place()));
+    return CastDataType(*dev_ctx, tensor, dtype);
+#endif
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
   } else if (tensor.place().GetType() == phi::AllocationType::CUSTOM) {
     phi::DenseTensor out;
@@ -182,7 +214,7 @@ inline phi::DenseTensor TransDataType(const phi::DenseTensor& tensor,
     return out;
 #endif
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Place type is not supported when casting data type."));
   }
   return out;
@@ -203,7 +235,7 @@ inline phi::DenseTensor TransDataPlace(const phi::DenseTensor& tensor,
 #endif
 
   // FIXME(zcd): TransDataPlace is used to transform data from GPU to CPU and
-  // the enforced checkings have been done in GetDeviceContext, so the
+  // the enforced checks have been done in GetDeviceContext, so the
   // `dev_ctx->Wait()` is necessary. But `dev_ctx->Wait()` will make the program
   // slow, especially when the number of elements is little, for example,
   // the elements of learning rate are one and it's CPU side.
@@ -277,7 +309,7 @@ phi::DenseTensor Trans2Contiguous(const phi::DenseTensor& tensor) {
     return dense_out;
 #endif
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Place type is not supported when casting data type."));
   }
 
@@ -525,7 +557,7 @@ std::shared_ptr<phi::SelectedRows> PrepareDataForSelectedRows(
       return out_new;
     }
   }
-  PADDLE_THROW(phi::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "The impl() of input tensor is nullptr, it doesn't support for "
       "selected_rows data transform now."));
 }
@@ -562,7 +594,7 @@ std::shared_ptr<phi::SparseCooTensor> PrepareDataForSparseCooTensor(
     }
     return std::static_pointer_cast<phi::SparseCooTensor>(tensor_in);
   }
-  PADDLE_THROW(phi::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "The impl() of input tensor is nullptr, it doesn't support for "
       "SparseCooTensor data transform now."));
 }
@@ -601,7 +633,7 @@ std::shared_ptr<phi::SparseCsrTensor> PrepareDataForSparseCsrTensor(
     }
     return std::static_pointer_cast<phi::SparseCsrTensor>(tensor_in);
   }
-  PADDLE_THROW(phi::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "The impl() of input tensor is nullptr, it doesn't support for "
       "SparseCsrTensor data transform now."));
 }
@@ -626,7 +658,7 @@ std::shared_ptr<phi::DenseTensor> PrepareDataForDenseTensorInSparse(
 
     return std::make_shared<phi::DenseTensor>(Trans2Contiguous(dense_tensor));
   }
-  PADDLE_THROW(phi::errors::InvalidArgument(
+  PADDLE_THROW(common::errors::InvalidArgument(
       "The impl() of input tensor is nullptr, it doesn't support for "
       "DenseTensor data transform now."));
 }
@@ -669,7 +701,8 @@ static bool ReshardIsNeededWithPartial(
     const phi::distributed::TensorDistAttr& in_dist_attr,
     const phi::distributed::TensorDistAttr& out_dist_attr) {
   return (in_dist_attr.process_mesh() != out_dist_attr.process_mesh() ||
-          in_dist_attr.dims_mapping() != out_dist_attr.dims_mapping() ||
+          in_dist_attr.multi_dims_mapping() !=
+              out_dist_attr.multi_dims_mapping() ||
           in_dist_attr.partial_status() != out_dist_attr.partial_status());
 }
 
@@ -677,7 +710,8 @@ static bool ReshardIsNeeded(
     const phi::distributed::TensorDistAttr& in_dist_attr,
     const phi::distributed::TensorDistAttr& out_dist_attr) {
   return (in_dist_attr.process_mesh() != out_dist_attr.process_mesh() ||
-          in_dist_attr.dims_mapping() != out_dist_attr.dims_mapping());
+          in_dist_attr.multi_dims_mapping() !=
+              out_dist_attr.multi_dims_mapping());
 }
 
 std::string ReshardDebugInfo(
@@ -699,7 +733,7 @@ std::shared_ptr<phi::distributed::DistTensor> ReshardApiInputToKernelInput(
   PADDLE_ENFORCE_EQ(
       paddle::holds_alternative<phi::distributed::TensorDistAttr>(dist_attr),
       true,
-      phi::errors::PreconditionNotMet("Arg must be a TensorDistAttr"));
+      common::errors::PreconditionNotMet("Arg must be a TensorDistAttr"));
 
   auto tensor_in = tensor.impl();
   const auto& tensor_dist_attr = paddle::get<0>(dist_attr);
@@ -730,14 +764,14 @@ ReshardApiInputToKernelInput(phi::DeviceContext* dev_ctx,
       paddle::holds_alternative<std::vector<phi::distributed::TensorDistAttr>>(
           dist_attrs),
       true,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Arg must be a vector of TensorDistAttr"));
   const auto& tensor_dist_attrs = PADDLE_GET_CONST(
       std::vector<phi::distributed::TensorDistAttr>, dist_attrs);
 
   PADDLE_ENFORCE_EQ(tensors.size(),
                     tensor_dist_attrs.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Tensor's size should be equal to dist_attrs' size."));
 
   std::vector<std::shared_ptr<phi::distributed::DistTensor>> out;
@@ -747,7 +781,7 @@ ReshardApiInputToKernelInput(phi::DeviceContext* dev_ctx,
     if (tensor_in) {
       phi::distributed::DistTensor* dist_tensor =
           static_cast<phi::distributed::DistTensor*>(tensor_in.get());
-      VLOG(4) << "ReshardIsNeededWithPartial"
+      VLOG(4) << "ReshardIsNeededWithPartial "
               << ReshardIsNeededWithPartial(dist_tensor->dist_attr(),
                                             dist_attr);
       if (ReshardIsNeededWithPartial(dist_tensor->dist_attr(), dist_attr)) {
@@ -809,29 +843,22 @@ void SetInplaceOutputCorrectDistAttr(
     phi::distributed::DistTensor* dist_tensor =
         static_cast<phi::distributed::DistTensor*>(tensor_in.get());
     if (dist_tensor->initialized()) {
-      if (ReshardIsNeededWithPartial(dist_tensor->dist_attr(), dist_attr)) {
-        if (use_general_spmd_rule) {
+      if (use_general_spmd_rule) {
+        if (ReshardIsNeeded(dist_tensor->dist_attr(), dist_attr)) {
           VLOG(6) << "SetInplaceOutputCorrectDistAttr Reshard inplace output"
                   << " to origin dist_attr "
                   << ReshardDebugInfo(*dist_tensor, dist_attr);
           auto* func = phi::distributed::ChooseProperReshardFunction(
               *dist_tensor, dist_attr);
           func->Eval(dev_ctx, *dist_tensor, dist_attr, dist_tensor);
-        } else {
-          // just set correct SPMD dist_attrs
-          VLOG(6) << "SetInplaceOutputCorrectDistAttr input " << tensor.name()
-                  << " set its dist_attr from " << dist_tensor->dist_attr()
-                  << " to " << dist_attr;
-          dist_tensor->unsafe_set_dist_attr(dist_attr);
+          return;
         }
       }
-    } else {
-      VLOG(6) << "SetInplaceOutputCorrectDistAttr has"
-              << " uninitialized DistTensor input " << tensor.name()
-              << ", just set its dist_attr from " << dist_tensor->dist_attr()
-              << " to " << dist_attr;
-      dist_tensor->unsafe_set_dist_attr(dist_attr);
     }
+    VLOG(6) << "SetInplaceOutputCorrectDistAttr for tensor " << tensor.name()
+            << ", just set its dist_attr from " << dist_tensor->dist_attr()
+            << " to " << dist_attr;
+    dist_tensor->unsafe_set_dist_attr(dist_attr);
   }
 }
 
@@ -843,7 +870,7 @@ void SetInplaceOutputCorrectDistAttr(
   PADDLE_ENFORCE_EQ(
       paddle::holds_alternative<phi::distributed::TensorDistAttr>(dist_attr),
       true,
-      phi::errors::PreconditionNotMet("Arg must be a TensorDistAttr"));
+      common::errors::PreconditionNotMet("Arg must be a TensorDistAttr"));
   SetInplaceOutputCorrectDistAttr(
       dev_ctx, tensor, paddle::get<0>(dist_attr), use_general_spmd_rule);
 }
@@ -859,30 +886,23 @@ void SetInplaceOutputCorrectDistAttr(
       phi::distributed::DistTensor* dist_tensor =
           static_cast<phi::distributed::DistTensor*>(tensor_in.get());
       if (dist_tensor->initialized()) {
-        if (ReshardIsNeededWithPartial(dist_tensor->dist_attr(),
-                                       dist_attr[i])) {
-          if (use_general_spmd_rule) {
+        if (use_general_spmd_rule) {
+          if (ReshardIsNeededWithPartial(dist_tensor->dist_attr(),
+                                         dist_attr[i])) {
             VLOG(6) << "SetInplaceOutputCorrectDistAttr Reshard inplace output"
                     << " to origin dist_attr "
                     << ReshardDebugInfo(*dist_tensor, dist_attr[i]);
             auto* func = phi::distributed::ChooseProperReshardFunction(
                 *dist_tensor, dist_attr[i]);
             func->Eval(dev_ctx, *dist_tensor, dist_attr[i], dist_tensor);
-          } else {
-            // just set correct SPMD dist_attrs
-            VLOG(6) << "SetInplaceOutputCorrectDistAttr input "
-                    << tensors[i].name() << " set its dist_attr from "
-                    << dist_tensor->dist_attr() << " to " << dist_attr[i];
-            dist_tensor->unsafe_set_dist_attr(dist_attr[i]);
+            continue;
           }
         }
-      } else {
-        VLOG(6) << "SetInplaceOutputCorrectDistAttr has"
-                << " uninitialized DistTensor input " << tensors[i].name()
-                << ", just set its dist_attr from " << dist_tensor->dist_attr()
-                << " to " << dist_attr[i];
-        dist_tensor->unsafe_set_dist_attr(dist_attr[i]);
       }
+      VLOG(6) << "SetInplaceOutputCorrectDistAttr for tensor "
+              << tensors[i].name() << ", just set its dist_attr from "
+              << dist_tensor->dist_attr() << " to " << dist_attr[i];
+      dist_tensor->unsafe_set_dist_attr(dist_attr[i]);
     }
   }
 }
@@ -896,7 +916,7 @@ void SetInplaceOutputCorrectDistAttr(
       paddle::holds_alternative<std::vector<phi::distributed::TensorDistAttr>>(
           dist_attr),
       true,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Arg must be a vector of TensorDistAttr"));
   SetInplaceOutputCorrectDistAttr(
       dev_ctx, tensors, paddle::get<1>(dist_attr), use_general_spmd_rule);
@@ -912,7 +932,7 @@ void ReshardKernelOutputToApiOutput(
     PADDLE_ENFORCE_NE(
         tensor_out,
         nullptr,
-        phi::errors::InvalidArgument("The output tensor is nullptr."));
+        common::errors::InvalidArgument("The output tensor is nullptr."));
     phi::distributed::DistTensor* dist_tensor =
         static_cast<phi::distributed::DistTensor*>(tensor_out.get());
     dist_tensor->unsafe_set_dims(src_tensor->dims());
@@ -948,7 +968,7 @@ void ReshardKernelOutputToApiOutput(
   PADDLE_ENFORCE_EQ(
       src_tensors.size(),
       dst_tensors.size(),
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "src_tensors.size() [%d] and dst_tensors.size() [%d] not match",
           src_tensors.size(),
           dst_tensors.size()));

@@ -12,20 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
 import json
 import logging
 import numbers
 import os
 import random
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
 import paddle
 import paddle.distributed.auto_parallel.static.utils as auto_utils
-from paddle import static, utils
+from paddle import pir, static, utils
 from paddle.base.executor import _to_name_str
-from paddle.distributed import fleet
+from paddle.base.framework import auto_complete_op_role
+from paddle.decomposition import decomp
+from paddle.distributed.fleet.meta_optimizers.common import OpRole
+from paddle.distributed.passes.pass_base import new_pass
+from paddle.distributed.passes.pass_utils import (
+    _split_program_into_forward_backward_optimize,
+    set_skip_gc_vars,
+)
 from paddle.framework import (
     IrGraph,
     _current_expected_place_ as _get_device,
@@ -48,7 +58,6 @@ from .dist_context import DistributedContext, get_default_distributed_context
 from .dist_input_spec import DistributedInputSpec
 from .dist_loader import (
     DistributedDataLoader,
-    DistributedDataLoaderFromGenerator,
 )
 from .dist_op import DistributedOperator
 from .dist_saver import DistributedSaver
@@ -56,14 +65,35 @@ from .helper import ProgramHelper
 from .mix_to_dist_pass import apply_mix2dist_pass
 from .parallelizer_v2 import Parallelizer
 from .pir_pass import (
+    RemovePasses,
+    ReshardPasses,
     apply_partition_pass,
-    apply_reshard_pass,
-    remove_other_rank_input_output_pass,
-    remove_other_rank_op_pass,
+    check_chunk_id,
+    complete_chunk_id,
+    fuse_attention_ffn_qkv_pass,
+    pipeline_pass,
     remove_unuseful_comm_op_pass,
 )
 from .planner_v2 import Planner
 from .process_group import get_all_process_groups, new_process_group
+from .utils import set_all_ops_op_role
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from typing_extensions import TypeAlias
+
+    from paddle import Tensor
+    from paddle._typing import PlaceLike
+    from paddle.hapi.callbacks import Callback
+    from paddle.io import Dataset
+    from paddle.io.reader import _CollateFn
+    from paddle.nn import Layer
+    from paddle.optimizer import Optimizer
+    from paddle.pir import Value
+    from paddle.static import Program
+
+    _Mode: TypeAlias = Literal["train", "eval", "predict"]
 
 
 class Engine:
@@ -129,13 +159,13 @@ class Engine:
 
     def __init__(
         self,
-        model=None,
-        loss=None,
-        optimizer=None,
-        metrics=None,
-        cluster=None,
-        strategy=None,
-    ):
+        model: Layer | Callable[..., Any] | None = None,
+        loss: Layer | Callable[..., Any] | Tensor | None = None,
+        optimizer: Optimizer | None = None,
+        metrics: Metric | Sequence[Metric] | None = None,
+        cluster: Cluster | None = None,
+        strategy: Strategy | None = None,
+    ) -> None:
         if (
             model
             and not isinstance(model, paddle.nn.Layer)
@@ -166,6 +196,17 @@ class Engine:
             raise TypeError(
                 "'optimizer' must be object of class `paddle.optimizer.Optimizer`"
             )
+        # NOTE(ljz) Not support parameter groups
+        param_list = []
+        if optimizer is not None and (
+            optimizer._parameter_list is not None
+            and len(optimizer._parameter_list) > 0
+            and not isinstance(optimizer._parameter_list[0], dict)
+        ):
+            for p in optimizer._parameter_list:
+                if not p.stop_gradient:
+                    param_list.append(p)
+        self._parameter_name_list = [p.name for p in param_list]
         self._optimizer = auto_utils.validate_opt(optimizer)
 
         metrics = metrics or []
@@ -180,7 +221,6 @@ class Engine:
             raise TypeError(
                 "'cluster' must be the object or class `paddle.distributed.auto_parallel.Cluster`"
             )
-        self._cluster = cluster or get_default_cluster()
 
         if strategy and not isinstance(strategy, Strategy):
             raise TypeError(
@@ -190,34 +230,13 @@ class Engine:
 
         self._logger = get_logger(logging.INFO)
 
-        self._json_config = None
-        if cluster:
-            self._cluster = cluster
-        else:
-            if os.getenv("PADDLE_AUTO_PARALLEL_CONFIG"):
-                try:
-                    path = os.getenv("PADDLE_AUTO_PARALLEL_CONFIG")
-                    with open(path, "r") as f:
-                        self._json_config = json.load(f)
-                except Exception as e:
-                    self._logger.info(
-                        "Load json failed, please check json file, engine will run default config."
-                    )
-                    self._json_config = None
-            self._cluster = get_default_cluster(self._json_config)
-
-        if os.getenv("POD_NAME"):
-            self._logger.info(
-                "Distribute training by paddle.distributed.launch"
-            )
-            fleet.init(is_collective=True)
-
         # for compute cost
         # TODO: remove _fwd_main_progs and _orig_optimizer and _pir_main_progs
         self._fwd_dist_contexts = {}
         self._fwd_main_progs = {}
         self._startup_progs = {}
         self._pir_dist_main_progs = {}
+        self._pir_dist_startup_progs = {}
         self._pir_dense_main_progs = {}
         self._pir_fetch_values = []
         self._pir_user_defined_fetch_names = []
@@ -252,6 +271,7 @@ class Engine:
         self._dygraph_mode = False
         self._tuning = self._strategy.tuning
         self._acc_steps = 1
+        self._job_plan = None
         self._in_pir_mode = paddle.base.framework.get_flags(
             "FLAGS_enable_pir_api"
         )["FLAGS_enable_pir_api"]
@@ -273,12 +293,42 @@ class Engine:
         paddle.framework.set_flags({'FLAGS_new_executor_sequential_run': 1})
         paddle.framework.set_flags({'FLAGS_new_executor_static_build': 1})
 
-        if auto_utils.use_new_executor():
-            is_pir_mode = os.environ.get("FLAGS_enable_pir_in_executor", None)
-            if is_pir_mode is None:
-                paddle.framework.set_flags({'FLAGS_enable_pir_in_executor': 1})
+        is_pir_mode = os.environ.get("FLAGS_enable_pir_in_executor", None)
+        if is_pir_mode is None:
+            paddle.framework.set_flags({'FLAGS_enable_pir_in_executor': 1})
 
         self.enable_job_schedule_profiler = False
+
+        self.fused_ffn_qkv = None
+
+        # self._cluster is UNUSED in PIR mode
+        if not self._in_pir_mode:
+            self._json_config = None
+            if cluster:
+                self._cluster = cluster
+            else:
+                auto_config = None
+                if os.getenv("PADDLE_AUTO_PARALLEL_CONFIG"):
+                    try:
+                        path = os.getenv("PADDLE_AUTO_PARALLEL_CONFIG")
+                        with open(path, "r") as f:
+                            self._json_config = json.load(f)
+                    except Exception as e:
+                        self._logger.info(
+                            "Load json failed, please check json file, engine will run default config."
+                        )
+                        self._json_config = None
+                else:
+                    if os.getenv("PADDLE_AUTO_CLUSTER"):
+                        auto_config = int(os.getenv("PADDLE_AUTO_CLUSTER"))
+                self._cluster = get_default_cluster(
+                    self._json_config, auto_config
+                )
+
+            if self._cluster is None:
+                raise TypeError(
+                    "'cluster' must be the object or class `paddle.distributed.auto_parallel.Cluster`"
+                )
 
     # get dist input spec from shard dataloader
     def _prepare_data_spec_from_dataloader(self, dataloader):
@@ -289,32 +339,47 @@ class Engine:
             batch_sampler = dataloader.batch_sampler
         else:
             batch_sampler = dataloader._dataloader.batch_sampler
-        if isinstance(batch_sampler, paddle.io.DistributedBatchSampler):
+        if hasattr(batch_sampler, "set_epoch"):
             # Get data from DataLoader iterator directly may affect data generation randomness
             # of BatchSampler when `Shuffle=True`. It may cause difference of data feeding
             # between dynamic and to_static mode.
-            batch_sampler.epoch -= 1
+            batch_sampler.set_epoch(0)
         if isinstance(data, dict):
-            data = tuple(data.values())
-            if len(data) != 2:
+            data = list(data.values())
+            if len(data) >= 2:
+                labels = data.pop()
+                inputs = data
+            else:
                 raise ValueError(
-                    f"Data should be a dict with two keys, but received {len(data)}."
+                    f"Data should be a dict at least two keys, but received {len(data)}."
                 )
-            inputs, labels = data
         elif isinstance(data, (list, tuple)):
-            if len(data) != 2:
+            if len(data) >= 2:
+                labels = data.pop()
+                inputs = data
+            else:
                 raise ValueError(
-                    f"Data should be a list or tuple with two elements, but received {len(data)}."
+                    f"Data should be a dict or list at list two element, but received {len(data)}."
                 )
-            inputs, labels = data
         else:
             raise TypeError(
                 f"Data should be a dict or list, but received {type(data)}."
             )
-
-        inputs = auto_utils.to_list(inputs)
+        if not isinstance(inputs, (list, tuple)):
+            inputs = auto_utils.to_list(inputs)
         labels = auto_utils.to_list(labels)
 
+        def flatten_list(nested_list):
+            flat_list = []
+            for item in nested_list:
+                if isinstance(item, (list, tuple)):
+                    flat_list.extend(flatten_list(item))
+                else:
+                    flat_list.append(item)
+            return flat_list
+
+        # flatten [[1,2],3] - > [1,2,3]
+        inputs = flatten_list(inputs)
         if inputs is not None:
             for i, item in enumerate(inputs):
                 assert item is not None, "Receive None input."
@@ -482,37 +547,6 @@ class Engine:
         dist_main_block._sync_with_cpp()
         self._has_prepared_reader[self._mode] = True
 
-        # Insert read op to forward TaskNode for fleet executor if 1F1B pass is setted
-        if (
-            self.main_program._pipeline_opt
-            and not auto_utils.use_new_executor()
-        ):
-            assert "tasks" in self.main_program._pipeline_opt["fleet_opt"]
-            fleet_opt = self.main_program._pipeline_opt["fleet_opt"]
-            fwd_task = None
-            if self._strategy.pipeline.schedule_mode == "1F1B":
-                fwd_task = fleet_opt["tasks"][1]
-            elif self._strategy.pipeline.schedule_mode == "stream":
-                fwd_task = fleet_opt["tasks"][0]
-            assert fwd_task is not None
-            fwd_prog = fwd_task.get_program()
-            fwd_block = fwd_prog.global_block()
-
-            for var in feed_list:
-                if var.name not in fwd_block.vars:
-                    fwd_block._clone_variable(var)
-
-            for op_desc in read_ops_desc:
-                new_op_desc = fwd_block.desc._prepend_op()
-                new_op_desc.copy_from(op_desc)
-                new_op = Operator(
-                    fwd_block, new_op_desc, type=new_op_desc.type()
-                )
-                fwd_block.ops.insert(0, new_op)
-
-            fwd_block._sync_with_cpp()
-            fwd_task.set_program(fwd_prog)
-
     def _prepare_feed(self, data, user_feeds, mode):
         feeds = {}
         if data is not None:
@@ -623,7 +657,7 @@ class Engine:
             outputs_indices = fetch_indices[group_idx]
             logs_out = {}
             for idx in outputs_indices:
-                logs_out["out%d" % (idx)] = outs[idx]
+                logs_out[f"out{idx}"] = outs[idx]
             logs["outputs"] = logs_out
             group_idx += 1
         # logging user fetches
@@ -649,11 +683,81 @@ class Engine:
         mix_fw_program = self._fwd_main_progs[mode]
         startup_program = self._startup_progs[mode]
 
+        # TODO(zhangbo) Open fused_ffn/fused_attention_qkv pass
+        if os.getenv("FLAGS_enable_fused_ffn_qkv_pass") in [
+            'True',
+            'true',
+            '1',
+        ]:
+            self.fused_ffn_qkv = fuse_attention_ffn_qkv_pass(
+                startup_program,
+                mix_fw_program,
+                self.concrete_program,
+                mode="all",
+            )
+
+            # update self._parameter_name_list after fused_ffn_qkv, otherwise opt stage will not update fused params
+            for k in self.fused_ffn_qkv.keys():
+                for fusion in self.fused_ffn_qkv[k]:
+                    for after_fuse_name, before_fuse_params in fusion.items():
+                        index = self._parameter_name_list.index(
+                            before_fuse_params[0].name
+                        )
+                        self._parameter_name_list.insert(index, after_fuse_name)
+                        for before_fuse_param in before_fuse_params:
+                            self._parameter_name_list.remove(
+                                before_fuse_param.name
+                            )
+
+        forward_op_start_idx = 0
+        backward_op_start_idx = -1
+        opt_op_start_idx = -1
         # Part 1: Complete program
         # Step 1.1: Mix2Dist Pass
         # TODO(JZ-LIANG) regulization pass with pass management.
         dist_program = mix_fw_program.clone()
         apply_mix2dist_pass(dist_program)
+        if self._strategy.mp_optimization.replace_with_parallel_cross_entropy:
+            auto_parallel_replace_with_parallel_cross_entropy_pass = new_pass(
+                "replace_with_parallel_cross_entropy", {}
+            )
+            auto_parallel_replace_with_parallel_cross_entropy_pass.apply(
+                [dist_program], [startup_program]
+            )
+
+        set_all_ops_op_role(dist_program.global_block(), OpRole.Forward)
+        if (
+            self._strategy.pipeline.enable
+            and self._strategy.pipeline.schedule_mode == "VPP"
+        ):
+            complete_chunk_id(
+                dist_program, startup_program, self._strategy.pipeline
+            )
+
+        if self._strategy.mp_optimization.replace_with_c_embedding:
+            config = {}
+            config["concrete_program"] = self.concrete_program
+            auto_parallel_c_embedding_pass = new_pass(
+                "auto_parallel_c_embedding_pass", config
+            )
+            auto_parallel_c_embedding_pass.apply(
+                [dist_program], [startup_program]
+            )
+
+        if self._strategy.pipeline.auto_parallel_sync_shared_params:
+            config = {}
+            config["concrete_program"] = self.concrete_program
+            config["pipeline_strategy"] = self._strategy.pipeline
+            auto_parallel_sync_shared_params_pass = new_pass(
+                "auto_parallel_sync_shared_params", config
+            )
+            shared_params = (
+                auto_parallel_sync_shared_params_pass.sync_shared_parameters(
+                    dist_program, startup_program
+                )
+            )
+            for pname in shared_params:
+                self._parameter_name_list.append(pname)
 
         # Step 1.2: pir backward
         if mode == "train" and self._loss and self._optimizer:
@@ -661,11 +765,20 @@ class Engine:
             if loss.initialized():
                 with static.program_guard(dist_program, startup_program):
                     if self._strategy.amp.enable:
+                        self._strategy.amp.level = (
+                            self._strategy.amp.level.upper()
+                        )
                         amp_lists = paddle.static.amp.decorator.AutoMixedPrecisionLists(
                             custom_white_list=self._strategy.amp.custom_white_list,
                             custom_black_list=self._strategy.amp.custom_black_list,
                             dtype=self._strategy.amp.dtype,
                         )
+                        self._optimizer._sorted = False
+                        parameter_value_list = [
+                            dist_program.get_parameter_value_by_name(pname)
+                            for pname in self._parameter_name_list
+                        ]
+
                         self._optimizer = paddle.static.amp.decorator.OptimizerWithMixedPrecision(
                             optimizer=self._optimizer,
                             amp_lists=amp_lists,
@@ -678,33 +791,44 @@ class Engine:
                             decr_ratio=self._strategy.amp.decr_ratio,
                             use_dynamic_loss_scaling=self._strategy.amp.use_dynamic_loss_scaling,
                             use_amp_guard=self._strategy.amp.use_fp16_guard,
-                            use_master_grad=self._strategy.amp.use_dynamic_loss_scaling,
+                            use_master_grad=self._strategy.amp.use_master_grad,
                             use_promote=self._strategy.amp.use_promote,
                         )
-                        # bfloat16 needs no scaler
-                        scaler = paddle.amp.GradScaler(
-                            init_loss_scaling=self._strategy.amp.init_loss_scaling,
-                            incr_ratio=self._strategy.amp.incr_ratio,
-                            decr_ratio=self._strategy.amp.decr_ratio,
-                            incr_every_n_steps=self._strategy.amp.incr_every_n_steps,
-                            decr_every_n_nan_or_inf=self._strategy.amp.decr_every_n_nan_or_inf,
-                            use_dynamic_loss_scaling=self._strategy.amp.use_dynamic_loss_scaling,
-                            enable=self._strategy.amp.enable
-                            and self._strategy.amp.dtype != 'bfloat16',
+                        with auto_complete_op_role(
+                            dist_program, OpRole.Forward
+                        ):
+                            # bfloat16 needs no scaler
+                            scaler = paddle.amp.GradScaler(
+                                init_loss_scaling=self._strategy.amp.init_loss_scaling,
+                                incr_ratio=self._strategy.amp.incr_ratio,
+                                decr_ratio=self._strategy.amp.decr_ratio,
+                                incr_every_n_steps=self._strategy.amp.incr_every_n_steps,
+                                decr_every_n_nan_or_inf=self._strategy.amp.decr_every_n_nan_or_inf,
+                                use_dynamic_loss_scaling=self._strategy.amp.use_dynamic_loss_scaling,
+                                enable=self._strategy.amp.enable
+                                and self._strategy.amp.dtype != 'bfloat16',
+                            )
+                            scaled = scaler.scale(loss)
+                        optimizer_ops, params_grads = scaler.minimize(
+                            self._optimizer,
+                            scaled,
+                            parameter_list=parameter_value_list,
                         )
-                        scaled = scaler.scale(loss)
-                        scaler.minimize(self._optimizer, scaled)
-                        # print('after minimize', dist_program, flush=1)
-
                     else:
-                        params_grads = (
-                            paddle.autograd.ir_backward.append_backward(loss)
-                        )
-                        self._optimizer._apply_optimize(
-                            loss, startup_program, params_grads=params_grads
-                        )
-                        # self._optimizer.minimize(loss, startup_program=startup_program)
-
+                        with auto_complete_op_role(
+                            dist_program, OpRole.Backward
+                        ):
+                            params_grads = (
+                                paddle.autograd.ir_backward.append_backward(
+                                    loss
+                                )
+                            )
+                        with auto_complete_op_role(
+                            dist_program, OpRole.Optimize
+                        ):
+                            self._optimizer._apply_optimize(
+                                loss, startup_program, params_grads=params_grads
+                            )
             else:
                 self._logger.info(
                     "loss value is not found, skip append backward."
@@ -712,14 +836,21 @@ class Engine:
 
         # re-run apply_mix2dist_pass to dist accumulator.
         apply_mix2dist_pass(dist_program)
-        # print('program', startup_program, dist_program, flush=1)
+        if mode == "train" and self._strategy.recompute.enable:
+            config = copy.deepcopy(self._strategy.recompute.to_dict())
+            auto_parallel_recompute_pir_pass = new_pass(
+                "auto_parallel_recompute_pir", config
+            )
+            auto_parallel_recompute_pir_pass.apply(
+                [dist_program], [startup_program]
+            )
 
         # Part 2: Parallelism search (for full auto-parallel)
         # NOTE make all parallelis search logic work as Pass,
         # and all the Pass in this Part should be optional to allow consistence in dynamic and static mode.
         if self._strategy.auto_mode == "semi-auto":
             # TODO(xxxx) Step 2.1 Entire Graph Completion in Pir.
-            # dist_program = apply_complition_pass(dist_program)
+            # dist_program = apply_completion_pass(dist_program)
             pass
         elif self._strategy.auto_mode == "random" or "full_random":
             # TODO(caozhou) Step 2.3 Basic Random / MCMC Algorithm for Fully Auto Parallel Search.
@@ -734,25 +865,33 @@ class Engine:
 
         # Part 3: Graph partition
         # TODO(JZ-LIANG) Step 3.1: Partition Pass
-        #   insert reshard op if operand tensor's placements if different from what the cumsumer op need.
+        #   insert reshard op if operand tensor's placements is different from what the cumsumer op need.
         #   Partition the computation graph into different pipeline stage if need.
         apply_partition_pass(dist_program)
+
+        if mode == "train" and self._loss and self._optimizer:
+            global_params_grads = params_grads
+        else:
+            global_params_grads = []
+            params_grads = []
 
         # TODO(hitywt) Step 3.2: Reshard Pass
         #   resolute the reshard op into special collective operation.
         #   collect the communicator created during resolution.
-        apply_reshard_pass(dist_program)
+        ReshardPasses.apply_reshard_pass(dist_program, global_params_grads)
 
-        # print('after reshard', dist_program, flush=1)
+        # Note(luchang): When using VPP pipeline pass, we need to split the whole graph into
+        # multiple chunks and adjust the process mesh accordingly. Here, we need to store the
+        # distributed information of the entire graph for later resharding of the dynamic graph parameters.
+        all_params = dist_program.global_block().all_parameters()
+        self.program_helper.cache_whole_graph_dist_attr(all_params)
 
-        remove_other_rank_input_output_pass(dist_program)
-        # print(
-        #     'after remove_other_rank_input_output_pass', dist_program, flush=1
-        # )
+        RemovePasses.apply_all(dist_program, startup_program, params_grads)
 
-        remove_other_rank_op_pass(dist_program)
-
-        # print('after remove_other_rank_op_pass', dist_program, flush=1)
+        if self._strategy.pipeline.auto_parallel_sync_shared_params:
+            global_params_grads = auto_parallel_sync_shared_params_pass.sync_shared_parameter_gradient(
+                dist_program, startup_program, global_params_grads
+            )
 
         # Part 4: Optimization Pass
         # NOTE Only those Optimization Pass that related to Parallelism (need dist attr) should be placed here and all the Pass should be Optional.
@@ -772,14 +911,128 @@ class Engine:
             # dist_program = apply_sharding_optimization_pass(dist_program)
             pass
 
+        if mode == "train" and self._strategy.pipeline.enable:
+            self._strategy.gradient_merge.enable = True
+            self._strategy.gradient_merge.k_steps = (
+                self._strategy.pipeline.accumulate_steps
+            )
+            self._strategy.gradient_merge.avg = True
+
+        if mode == "train" and self._strategy.gradient_merge.enable:
+            config = copy.deepcopy(self._strategy.gradient_merge.to_dict())
+            config["gradient_sync_after_accumulate"] = True
+            config["params_grads"] = global_params_grads
+
+            auto_parallel_gradient_merge_pass = new_pass(
+                "auto_parallel_gradient_merge_pass", config
+            )
+            auto_parallel_gradient_merge_pass.apply(
+                [dist_program], [startup_program]
+            )
+
+        if (
+            self._strategy.pipeline.enable
+            and self._strategy.pipeline.schedule_mode == "VPP"
+        ):
+            check_chunk_id(dist_program)
+
         # TODO(JZ-LIANG) Step 4.4 Dist2Dense Pass
         # NOTE All optimization pass that need dist_attr info should be called before Dist2Dense Pass.
         dense_program = dist_program.clone()
         paddle.base.libpaddle.pir.apply_dist2dense_pass(dense_program)
         remove_unuseful_comm_op_pass(dense_program)
 
+        if core._enable_dist_prim_all():
+            logging.info("apply decompose in auto parallel")
+            with decomp.prim_guard():
+                decomp.decompose_dist_program(dense_program)
+
+        if core._enable_auto_recompute():
+            logging.info("apply auto_recompute in auto parallel")
+            dense_program = decomp.auto_recompute_pir_program(
+                dense_program,
+                lambda op: bool(op.has_attr('op_role') and op.op_role == 0),
+            )
+
+        if (
+            self._strategy.fused_passes.fused_passes_list is not None
+            and "fused_gemm_epilogue_pass"
+            in self._strategy.fused_passes.fused_passes_list
+        ):
+            pm = pir.PassManager()
+            pm.add_pass("fused_gemm_epilogue_pass", {})
+            pm.run(dense_program)
+            self._strategy.fused_passes.fused_passes_list.remove(
+                "fused_gemm_epilogue_pass"
+            )
+
+        if self._strategy.pipeline.enable:
+            self._job_plan = pipeline_pass(
+                [dense_program], [dense_program], self._strategy.pipeline
+            )
+        elif mode == "train" and self._strategy.gradient_merge.enable:
+            sub_programs = _split_program_into_forward_backward_optimize(
+                dense_program
+            )
+            job_types = ["forward", "backward", "optimize"]
+
+            # If gradient_merge is enabled, we need to multiply the job list by k_steps.
+            # When k_steps is 2, the jobs will be [forward, backward, forward, backward, optimize].
+            jobs = []
+            for i in range(self._strategy.gradient_merge.k_steps):
+                forward_job = core.Job("forward")
+                forward_job.set_micro_batch_id(i)
+                jobs.append(forward_job)
+
+                backward_job = core.Job("backward")
+                backward_job.set_micro_batch_id(i)
+                jobs.append(backward_job)
+
+            opt_job = core.Job("optimize")
+            opt_job.set_micro_batch_id(0)
+            jobs.append(opt_job)
+
+            type_to_program = set_skip_gc_vars(
+                self._strategy.gradient_merge.k_steps,
+                job_types,
+                sub_programs,
+                jobs,
+            )
+            self._job_plan = core.Plan(jobs, type_to_program)
+
+        if (
+            self._strategy.fused_passes.fused_passes_list is not None
+            and self._strategy.fused_passes.fused_passes_list
+        ):
+            pm = pir.PassManager()
+            for p in self._strategy.fused_passes.fused_passes_list:
+                # Temporary implementation, it will be refined when auto_parallel refactored
+                if p == 'eliminate_transpose':
+                    from paddle.distributed.auto_parallel.static.pir_pass import (
+                        eliminate_transpose_by_reshape,
+                    )
+
+                    if self._job_plan is None:
+                        eliminate_transpose_by_reshape(dense_program)
+                    else:
+                        for job_type in self._job_plan.job_types():
+                            ir_program = self._job_plan.ir_program(job_type)
+                            eliminate_transpose_by_reshape(ir_program)
+
+                else:
+                    pm.add_pass(p, {})
+
+            if self._job_plan is None:
+                pm.run(dense_program)
+            else:
+                for job_type in self._job_plan.job_types():
+                    ir_program = self._job_plan.ir_program(job_type)
+                    pm.run(ir_program)
+
+        remove_unuseful_comm_op_pass(dense_program)
         self._pir_dense_main_progs[mode] = dense_program
         self._pir_dist_main_progs[mode] = dist_program
+        self._pir_dist_startup_progs[mode] = startup_program
 
     def _prepare_program(self, mode, init_parameters=True):
         if self._in_pir_mode:
@@ -880,9 +1133,10 @@ class Engine:
             serial_main_prog = self._orig_main_prog.clone()
             serial_startup_prog = self._orig_startup_prog.clone()
             if not self._skip_build:
-                with static.program_guard(
-                    serial_main_prog, serial_startup_prog
-                ), utils.unique_name.guard():
+                with (
+                    static.program_guard(serial_main_prog, serial_startup_prog),
+                    utils.unique_name.guard(),
+                ):
                     self._inputs = [
                         s._create_feed_layer() for s in self._inputs_spec
                     ]
@@ -983,9 +1237,7 @@ class Engine:
             self._json_config,
         )
         self._dist_contexts[mode].gradient_scale = self._strategy.gradient_scale
-        self._dist_contexts[
-            mode
-        ].gradient_scale_using_allreduce_avg = (
+        self._dist_contexts[mode].gradient_scale_using_allreduce_avg = (
             self._strategy.gradient_scale_using_allreduce_avg
         )
         self._fwd_main_progs[mode] = serial_main_prog.clone()
@@ -1018,9 +1270,9 @@ class Engine:
 
         if self._tuning.run_after_tuning:
             # update the strategy
-            self._dist_contexts[
-                mode
-            ]._strategy = self._optimization_tuner.get_best_config()
+            self._dist_contexts[mode]._strategy = (
+                self._optimization_tuner.get_best_config()
+            )
 
     def _plan(self, mode):
         if self._planned_mode is None:
@@ -1097,7 +1349,6 @@ class Engine:
                 all_process_groups = get_all_process_groups()
                 for process_group in all_process_groups:
                     process_group.instantiate()
-                pass
                 return
 
             # Traverse different rank programs and traverse each op of them,
@@ -1137,20 +1388,22 @@ class Engine:
             )
 
         if self._in_pir_mode:
+            # FIXME(ljz) avoid shared same tensor more than once in different mode
+            if mode != "train":
+                return
             # TODO(2024-Q2)
             # 1. unify random control
-            # 2. initilization of non-parameter buffer
+            # 2. initialization of non-parameter buffer
             # 3. run startup program for pir
             # 4. lazy init adaption
             # 5. amp init adaption
             # 6. vpp init adaption
-            self.program_helper.init_pir(
-                self._pir_dist_main_progs[mode], self._place
-            )
+
             # self._init_lr(self._pir_dense_main_progs[mode])
             self.program_helper.init_pir(
                 self._pir_dist_main_progs[mode], self._place
             )
+            changed_output_op_list = []
             if self._executor is None:
                 self._executor = paddle.static.Executor(self._place)
                 startup_prog = self._startup_progs[mode].clone()
@@ -1178,6 +1431,7 @@ class Engine:
                         initial_op = param.get_defining_op()
                         new_param = block.add_kwarg(var_name, param.type())
                         new_param.persistable = True
+                        new_param.place_attr = scope_var.get_tensor()._place()
                         param.replace_all_uses_with(new_param)
                         del_ops.append(op)
                         del_ops.append(initial_op)
@@ -1187,19 +1441,44 @@ class Engine:
                         if local_shape != global_shape:
                             src_value = op.operand_source(0)
                             assert src_value.shape == global_shape
-                            initial_op = src_value.get_defining_op()
-                            if initial_op.name() == "pd_op.full":
-                                initial_op.set_int_array_attr(
-                                    "shape", local_shape
+                            dst_dist_attr = name_map_value[var_name].dist_attr()
+                            if not src_value.is_dist():
+                                src_dist_attr = paddle.base.libpaddle.pir.create_tensor_dist_attribute(
+                                    dst_dist_attr.process_mesh,
+                                    [-1] * len(src_value.shape),
+                                    {},
                                 )
                                 src_value.set_type(
-                                    name_map_value[var_name].type()
+                                    paddle.base.libpaddle.pir.cvt_to_dist_type(
+                                        src_value.type(), src_dist_attr
+                                    )
                                 )
-                            # initial_op.name() == "pd_op.cast": # master_weight
-
+                            pir.set_insertion_point_after(
+                                src_value.get_defining_op()
+                            )
+                            reshard_var = paddle._C_ops.reshard_v2(
+                                src_value, dst_dist_attr
+                            )
+                            if src_value.persistable:
+                                src_value.persistable = False
+                                changed_output_op_list.append(op)
+                            op.operand(0).set_source(reshard_var)
                 for del_op in del_ops:
                     del_op.erase()
+
+                set_all_ops_op_role(startup_prog.global_block(), OpRole.Forward)
+                ReshardPasses.apply_reshard_pass(startup_prog)
+                paddle.base.libpaddle.pir.apply_dist2dense_pass(startup_prog)
+                remove_unuseful_comm_op_pass(startup_prog)
+
+                for op in changed_output_op_list:
+                    op.operand_source(0).persistable = True
                 self._executor.run(startup_prog)
+                if self._job_plan is not None:
+                    # pipeline scheduling should be enabled after running
+                    # startup program, otherwise the startup program cannot
+                    # run correctly.
+                    self._executor._set_plan(self._job_plan)
             return
 
         if self._strategy.seed:
@@ -1283,7 +1562,7 @@ class Engine:
     # distributed training combined with prim mechanism (prim is behind of distributed)
     # for local main subprogram after distributed partition,
     # mark _need_decomp=True to tag this program needs to be decomposed
-    # get _grad_var_to_var from distributed context and set it to main program for futher decomposing in static executor
+    # get _grad_var_to_var from distributed context and set it to main program for further decomposing in static executor
     def _mark_prim(self, mode):
         if os.getenv("FLAGS_enable_prim_after_distribute") in [
             'True',
@@ -1303,55 +1582,55 @@ class Engine:
 
     def fit(
         self,
-        train_data,
-        train_sample_split=None,
-        batch_size=1,
-        epochs=1,
-        steps_per_epoch=None,
-        log_freq=10,
-        save_dir=None,
-        save_freq=1,
-        valid_data=None,
-        valid_sample_split=None,
-        valid_freq=1,
-        valid_steps=None,
-        collate_fn=None,
-        callbacks=None,
-        verbose=2,
-        nvprof_range=[-1, -1],
-    ):
+        train_data: Dataset,
+        train_sample_split: int | None = None,
+        batch_size: int = 1,
+        epochs: int = 1,
+        steps_per_epoch: int | None = None,
+        log_freq: int = 10,
+        save_dir: str | None = None,
+        save_freq: int = 1,
+        valid_data: Dataset | None = None,
+        valid_sample_split: int | None = None,
+        valid_freq: int = 1,
+        valid_steps: int | None = None,
+        collate_fn: _CollateFn | None = None,
+        callbacks: Sequence[Callback] | None = None,
+        verbose: int = 2,
+        nvprof_range: list[int] | tuple[int, int] = [-1, -1],
+    ) -> None:
         """
         Trains the model for a fixed number of epochs. If `valid_data` is set,
         evaluation will be done at the end of each epoch.
 
         Args:
             train_data (Dataset): An instance of paddle paddle.io.Dataset. Default: None.
-            train_sample_split (int, optional): Each sample of the train dataset is assumed
+            train_sample_split (int|None, optional): Each sample of the train dataset is assumed
                 to be a (input, label) pair by default and has two items. If each sample has
                 more than two items, train_sample_split specifies how to split these items into
                 input and label. The items before it are input and the left are label. Default: None.
             batch_size (int, optional): The batch size of train_data and valid_data if provided.
                 The user's data will be used directly without batching if set to None. Default: 1.
             epochs (int, optional): The number of epochs to train the model. Default: 1.
-            steps_per_epoch (int, optional): The total number of steps (batches of samples)
+            steps_per_epoch (int|None, optional): The total number of steps (batches of samples)
                 is executed in one epoch before stating the next one. If None, it is equal to
                 the number samples in your dataset divided by the batch size. Default: None.
-            valid_data (Dataset, optional): An instance of paddle paddle.io.Dataset used for
+            valid_data (Dataset|None, optional): An instance of paddle paddle.io.Dataset used for
                 evaluation at the end of epoch. No evaluation will be done if set to None.
                 Default: None. (Unsupported for now)
             valid_freq (int, optional): Only relevant if valid_data is provided. This specifies
                 how many training epochs before a new evaluation is performed. Default: 1.
-            valid_sample_split (int, optional): Only relevant if valid_data is provided.
+            valid_sample_split (int|None, optional): Only relevant if valid_data is provided.
                 Each sample of the valid dataset is assumed to be a (input, label) pair
                 by default and has two items. If each sample has more than two items,
                 valid_sample_split specifies how to split these items into input and label.
                 The items before it are input and the left are label. Default: None.
-            valid_steps (int, optional): Only relevant if valid_data is provided.
+            valid_steps (int|None, optional): Only relevant if valid_data is provided.
                 It is the total number of steps (batches of samples) to draw before
                 stopping validation at the end of every epoch. If None, validation will run until the
                 `valid_data` dataset is exhausted. The validation will start from the
                 beginning of the dataset at each epoch. Default: None.
-            collate_fn(callable, optional): function to generate mini-batch data by merging
+            collate_fn(callable|None, optional): function to generate mini-batch data by merging
                 the sample list, None for only stack each fields of sample in axis
                 0. Default None.
             callbacks (Callback|None, optional): A list of `Callback` instances to apply
@@ -1397,35 +1676,19 @@ class Engine:
         else:
             self._switch_mode(self._mode)
 
-        if auto_utils.use_new_executor():
-            local_batch_size = self._validate_batch_size(batch_size)
-            train_dataloader = self._prepare_dataloader(
-                train_data,
-                return_list=False,
-                batch_size=local_batch_size,
-                epochs=epochs,
-                collate_fn=collate_fn,
-            )
-            steps_per_epoch = (
-                len(train_dataloader)
-                if steps_per_epoch is None
-                else steps_per_epoch
-            )
-        else:
-            micro_batch_size = self._validate_batch_size(batch_size)
-            train_dataloader = self._prepare_dataloader_from_generator(
-                dataset=train_data,
-                capacity=70,
-                iterable=False,
-                batch_size=micro_batch_size,
-                epochs=epochs,
-                steps_per_epoch=steps_per_epoch,
-                collate_fn=collate_fn,
-            )
-            steps_per_epoch = train_dataloader._steps
-            local_batch_size = micro_batch_size
-            if self._strategy.pipeline.enable:
-                local_batch_size = micro_batch_size * self._acc_steps
+        local_batch_size = self._validate_batch_size(batch_size)
+        train_dataloader = self._prepare_dataloader(
+            train_data,
+            return_list=False,
+            batch_size=local_batch_size,
+            epochs=epochs,
+            collate_fn=collate_fn,
+        )
+        steps_per_epoch = (
+            len(train_dataloader)
+            if steps_per_epoch is None
+            else steps_per_epoch
+        )
 
         fetch_names, fetch_indices = self._prepare_fetch(None, mode=self._mode)
 
@@ -1440,9 +1703,9 @@ class Engine:
             save_dir=save_dir,
             verbose=verbose,
             metrics=self._metrics_name(),
-            acc_step=1
-            if self._strategy.pipeline.enable
-            else self._acc_steps,  # lr update once every local batch
+            acc_step=(
+                1 if self._strategy.pipeline.enable else self._acc_steps
+            ),  # lr update once every local batch
         )
 
         cbks.on_begin('train')
@@ -1451,44 +1714,36 @@ class Engine:
             cbks.on_epoch_begin(epoch)
 
             for step, batch in enumerate(train_dataloader):
-                if auto_utils.use_new_executor():
-                    batches = self._validate_batch(batch)
-                else:
-                    batches = [{}]
+                batches = self._validate_batch(batch)
 
-                try:
-                    for micro_batch in batches:
-                        with paddle.profiler.utils._nvprof_range(
-                            iter_id=step,
-                            start=nvprof_range[0],
-                            end=nvprof_range[1],
-                        ):
-                            cbks.on_batch_begin('train', step, logs)
-                            outs = self._executor.run(
-                                self.main_program,
-                                feed=micro_batch,
-                                fetch_list=fetch_names,
-                                use_program_cache=self._strategy.use_cache,
-                                return_numpy=self._strategy.return_numpy,
-                            )
+                for micro_batch in batches:
+                    with paddle.profiler.utils._nvprof_range(
+                        iter_id=step,
+                        start=nvprof_range[0],
+                        end=nvprof_range[1],
+                    ):
+                        cbks.on_batch_begin('train', step, logs)
+                        outs = self._executor.run(
+                            self.main_program,
+                            feed=micro_batch,
+                            fetch_list=fetch_names,
+                            use_program_cache=self._strategy.use_cache,
+                            return_numpy=self._strategy.return_numpy,
+                        )
 
-                            lr = auto_utils.get_lr(self.optimizer)
-                            logs = self._prepare_logger(
-                                outs,
-                                epoch,
-                                step,
-                                lr,
-                                fetch_names,
-                                fetch_indices,
-                                self._mode,
-                            )
-                            cbks.on_batch_end('train', step, logs)
-                except core.EOFException:
-                    break
+                        lr = auto_utils.get_lr(self.optimizer)
+                        logs = self._prepare_logger(
+                            outs,
+                            epoch,
+                            step,
+                            lr,
+                            fetch_names,
+                            fetch_indices,
+                            self._mode,
+                        )
+                        cbks.on_batch_end('train', step, logs)
 
                 if steps_per_epoch and step >= steps_per_epoch:
-                    if not auto_utils.use_new_executor():
-                        train_dataloader._reset()
                     break
 
             if valid_data and (epoch + 1) % valid_freq == 0:
@@ -1517,30 +1772,30 @@ class Engine:
 
     def evaluate(
         self,
-        valid_data,
-        valid_sample_split=None,
-        batch_size=1,
-        steps=None,
-        log_freq=10,
-        collate_fn=None,
-        callbacks=None,
-        verbose=2,
-    ):
+        valid_data: Dataset,
+        valid_sample_split: int | None = None,
+        batch_size: int = 1,
+        steps: int | None = None,
+        log_freq: int = 10,
+        collate_fn: _CollateFn | None = None,
+        callbacks: Sequence[Callback] | None = None,
+        verbose: int = 2,
+    ) -> dict[str, Any]:
         """
         Evaluate the loss and metrics of the model on evaluation data.
 
         Args:
             valid_data (Dataset): An instance of paddle paddle.io.Dataset. Default: None.
-            valid_sample_split (int, optional): Each sample of the eval dataset is assumed
+            valid_sample_split (int|None, optional): Each sample of the eval dataset is assumed
                 to be a (input, label) pair by default and has two items. If each sample has
                 more than two items, valid_sample_split specifies how to split these items into
                 input and label. The items before it are input and the left are label. Default: None.
             batch_size (int, optional): The batch size of valid_data. The user's data will
                 be used directly without batching if set to None. Default: 1.
-            steps (int, optional): It is the total number of steps (batches of samples) to draw before
+            steps (int|None, optional): It is the total number of steps (batches of samples) to draw before
                 stopping evaluation. If None, evaluation will run until the `valid_data` dataset is exhausted.
                 The evaluation will start from the beginning of the dataset in each run. Default: None.
-            collate_fn(callable, optional): function to generate mini-batch data by merging
+            collate_fn(callable|None, optional): function to generate mini-batch data by merging
                 the sample list, None for only stack each fields of sample in axis
                 0. Default None.
             callbacks (Callback|None, optional): A list of `Callback` instances to apply
@@ -1582,29 +1837,14 @@ class Engine:
         else:
             self._switch_mode(self._mode)
 
-        if auto_utils.use_new_executor():
-            local_batch_size = self._validate_batch_size(batch_size)
-            valid_dataloader = self._prepare_dataloader(
-                valid_data,
-                return_list=False,
-                batch_size=local_batch_size,
-                collate_fn=collate_fn,
-            )
-            steps_per_epoch = len(valid_dataloader) if steps is None else steps
-        else:
-            micro_batch_size = self._validate_batch_size(batch_size)
-            valid_dataloader = self._prepare_dataloader_from_generator(
-                dataset=valid_data,
-                capacity=70,
-                iterable=False,
-                batch_size=micro_batch_size,
-                steps_per_epoch=steps,
-                collate_fn=collate_fn,
-            )
-            steps_per_epoch = valid_dataloader._steps
-            local_batch_size = micro_batch_size
-            if self._strategy.pipeline.enable:
-                local_batch_size = micro_batch_size * self._acc_steps
+        local_batch_size = self._validate_batch_size(batch_size)
+        valid_dataloader = self._prepare_dataloader(
+            valid_data,
+            return_list=False,
+            batch_size=local_batch_size,
+            collate_fn=collate_fn,
+        )
+        steps_per_epoch = len(valid_dataloader) if steps is None else steps
 
         fetch_names, fetch_indices = self._prepare_fetch(None, mode=self._mode)
 
@@ -1623,27 +1863,18 @@ class Engine:
         )
         logs = {}
         for step, batch in enumerate(valid_dataloader):
-            if auto_utils.use_new_executor():
-                batches = self._validate_batch(batch)
-            else:
-                batches = [{}]
-
-            try:
-                for micro_batch in batches:
-                    cbks.on_batch_begin('eval', step, logs)
-                    outs = self._executor.run(
-                        self.main_program,
-                        feed=micro_batch,
-                        fetch_list=fetch_names,
-                        use_program_cache=self._strategy.use_cache,
-                        return_numpy=self._strategy.return_numpy,
-                    )
-            except core.EOFException:
-                break
+            batches = self._validate_batch(batch)
+            for micro_batch in batches:
+                cbks.on_batch_begin('eval', step, logs)
+                outs = self._executor.run(
+                    self.main_program,
+                    feed=micro_batch,
+                    fetch_list=fetch_names,
+                    use_program_cache=self._strategy.use_cache,
+                    return_numpy=self._strategy.return_numpy,
+                )
 
             if steps_per_epoch and step >= steps_per_epoch:
-                if not auto_utils.use_new_executor():
-                    valid_dataloader._reset()
                 break
             logs = self._prepare_logger(
                 outs, None, step, None, fetch_names, fetch_indices, self._mode
@@ -1655,14 +1886,14 @@ class Engine:
 
     def predict(
         self,
-        test_data,
-        test_sample_split=None,
-        batch_size=1,
-        steps=None,
-        collate_fn=None,
-        callbacks=None,
-        verbose=2,
-    ):
+        test_data: Dataset,
+        test_sample_split: int | None = None,
+        batch_size: int = 1,
+        steps: int | None = None,
+        collate_fn: _CollateFn | None = None,
+        callbacks: Sequence[Callback] | None = None,
+        verbose: int = 2,
+    ) -> list[Any]:
         """
         Compute the output predictions on testing data.
 
@@ -1716,26 +1947,14 @@ class Engine:
         else:
             self._switch_mode(self._mode)
 
-        if auto_utils.use_new_executor():
-            local_batch_size = self._validate_batch_size(batch_size)
-            test_dataloader = self._prepare_dataloader(
-                test_data,
-                return_list=False,
-                batch_size=local_batch_size,
-                collate_fn=collate_fn,
-            )
-            steps_per_epoch = len(test_dataloader) if steps is None else steps
-        else:
-            micro_batch_size = self._validate_batch_size(batch_size)
-            test_dataloader = self._prepare_dataloader_from_generator(
-                dataset=test_data,
-                capacity=70,
-                iterable=False,
-                batch_size=micro_batch_size,
-                steps_per_epoch=steps,
-                collate_fn=collate_fn,
-            )
-            steps_per_epoch = test_dataloader._steps
+        local_batch_size = self._validate_batch_size(batch_size)
+        test_dataloader = self._prepare_dataloader(
+            test_data,
+            return_list=False,
+            batch_size=local_batch_size,
+            collate_fn=collate_fn,
+        )
+        steps_per_epoch = len(test_dataloader) if steps is None else steps
 
         fetch_names, fetch_indices = self._prepare_fetch(None, mode=self._mode)
 
@@ -1745,27 +1964,18 @@ class Engine:
         cbks.on_begin('predict', {'steps': test_steps})
         logs = {}
         for step, batch in enumerate(test_dataloader):
-            if auto_utils.use_new_executor():
-                batches = self._validate_batch(batch)
-            else:
-                batches = [{}]
-
-            try:
-                for micro_batch in batches:
-                    cbks.on_batch_begin('predict', step, logs)
-                    outs = self._executor.run(
-                        self.main_program,
-                        feed=micro_batch,
-                        fetch_list=fetch_names,
-                        use_program_cache=self._strategy.use_cache,
-                        return_numpy=self._strategy.return_numpy,
-                    )
-            except core.EOFException:
-                break
+            batches = self._validate_batch(batch)
+            for micro_batch in batches:
+                cbks.on_batch_begin('predict', step, logs)
+                outs = self._executor.run(
+                    self.main_program,
+                    feed=micro_batch,
+                    fetch_list=fetch_names,
+                    use_program_cache=self._strategy.use_cache,
+                    return_numpy=self._strategy.return_numpy,
+                )
 
             if steps_per_epoch and step >= steps_per_epoch:
-                if not auto_utils.use_new_executor():
-                    test_dataloader._reset()
                 break
             logs = self._prepare_logger(
                 outs, None, step, None, fetch_names, fetch_indices, self._mode
@@ -1777,22 +1987,22 @@ class Engine:
 
     def dataloader(
         self,
-        dataset,
-        batch_size=1,
-        shuffle=False,
-        drop_last=True,
-        collate_fn=None,
-        num_workers=0,
-        use_buffer_reader=True,
-        use_shared_memory=True,
-        timeout=0,
-        worker_init_fn=None,
-        epochs=1,
-        steps_per_epoch=None,
-        sample_split=1,
-        mode=None,
-        places=None,
-    ):
+        dataset: Dataset,
+        batch_size: int = 1,
+        shuffle: bool = False,
+        drop_last: bool = True,
+        collate_fn: _CollateFn | None = None,
+        num_workers: int = 0,
+        use_buffer_reader: bool = True,
+        use_shared_memory: bool = True,
+        timeout: int = 0,
+        worker_init_fn: Callable[[int], None] | None = None,
+        epochs: int = 1,
+        steps_per_epoch: int | None = None,
+        sample_split: int = 1,
+        mode: _Mode | None = None,
+        places: PlaceLike | Sequence[PlaceLike] | None = None,
+    ) -> DistributedDataLoader:
         if mode is not None:
             self.to_mode(mode)
 
@@ -1823,59 +2033,17 @@ class Engine:
         )
         return dataloader
 
-    def dataloader_from_generator(
-        self,
-        dataset,
-        capacity=70,
-        use_double_buffer=True,
-        iterable=True,
-        use_multiprocess=False,
-        drop_last=True,
-        batch_size=1,
-        epochs=1,
-        steps_per_epoch=None,
-        collate_fn=None,
-        sample_split=1,
-        mode=None,
-    ):
-        if mode is not None:
-            self.to_mode(mode)
-
-        if not self._has_prepared[self._mode]:
-            self._inputs_spec, self._labels_spec = self._prepare_data_spec(
-                dataset, sample_split, batch_size
-            )
-            self._prepare_program(self._mode)
-        else:
-            self._switch_mode(self._mode)
-
-        micro_batch_size = self._validate_batch_size(batch_size)
-        dataloader = self._prepare_dataloader_from_generator(
-            dataset=dataset,
-            capacity=capacity,
-            use_double_buffer=use_double_buffer,
-            iterable=iterable,
-            return_list=False,
-            use_multiprocess=use_multiprocess,
-            drop_last=drop_last,
-            batch_size=micro_batch_size,
-            epochs=epochs,
-            steps_per_epoch=steps_per_epoch,
-            collate_fn=collate_fn,
-        )
-        return dataloader
-
     def prepare(
         self,
-        inputs_spec=None,
-        labels_spec=None,
-        inputs=None,
-        labels=None,
-        main_program=None,
-        startup_program=None,
-        mode=None,
-        init_parameters=True,
-    ):
+        inputs_spec: InputSpec | None = None,
+        labels_spec: InputSpec | None = None,
+        inputs: Sequence[Tensor] | None = None,
+        labels: Sequence[Tensor] | None = None,
+        main_program: Program | None = None,
+        startup_program: Program | None = None,
+        mode: _Mode | None = None,
+        init_parameters: bool = True,
+    ) -> None:
         if mode is not None:
             self.to_mode(mode)
 
@@ -1921,7 +2089,15 @@ class Engine:
         else:
             self._switch_mode(self._mode)
 
-    def run(self, data=None, feed=None, fetch_list=None, mode=None):
+    def run(
+        self,
+        data: (
+            list[dict[str, Any]] | tuple[dict[str, Any]] | dict[str, Any] | None
+        ) = None,
+        feed: dict[str, Any] | None = None,
+        fetch_list: list[Tensor | str | Operator | Value] | None = None,
+        mode: _Mode | None = None,
+    ) -> dict[str, Any]:
         if mode is not None:
             self.to_mode(mode)
         feed_dict = self._prepare_feed(data, feed, self._mode)
@@ -1941,10 +2117,25 @@ class Engine:
         if self._in_pir_mode:
             use_cache = False
             no_fetch = False  # not last rank should not fetch loss in pipeline parallel
-            loss_value = self.main_program.get_output_value_by_name(
+            if self._job_plan is None:
+                program_for_executor = self.main_program
+            else:
+                # NOTE: If pipeline scheduling is enabled, The program_for_executor
+                # is used to tell the executor where to feed data and add fetch op,
+                # not the program to be executed. The ``plan`` object is already
+                # constructed, and the programs to be executed are  stored in the
+                # ``plan`` object.
+                loss_job_type = "forward"
+                if self._strategy.pipeline.schedule_mode == "VPP":
+                    vpp_degree = self._strategy.pipeline.vpp_degree
+                    loss_job_type = f"forward{vpp_degree - 1}"
+
+                program_for_executor = self._job_plan.ir_program(loss_job_type)
+
+            loss_value = program_for_executor.get_output_value_by_name(
                 self._loss_names[0]
             )
-            if paddle.pir.is_fake_value(loss_value):
+            if pir.is_fake_value(loss_value):
                 no_fetch = True
                 fetch_names = []
             else:
@@ -1975,7 +2166,7 @@ class Engine:
         )
         return logs
 
-    def get_feed_list(self):
+    def get_feed_list(self) -> list[Tensor]:
         dist_context = self._dist_contexts[self._mode]
         dist_main_prog = dist_context.dist_main_programs[self._cur_rank]
         dist_startup_prog = dist_context.dist_startup_programs[self._cur_rank]
@@ -1997,6 +2188,9 @@ class Engine:
                 feed_list.append(copy_var)
 
         return feed_list
+
+    def get_feed_name_list(self) -> list[str]:
+        return [spec.name for spec in self._inputs_spec + self._labels_spec]
 
     def _prepare_dataloader(
         self,
@@ -2060,66 +2254,6 @@ class Engine:
 
         return dataloader
 
-    def _prepare_dataloader_from_generator(
-        self,
-        dataset,
-        capacity=None,
-        use_double_buffer=True,
-        iterable=True,
-        return_list=False,
-        use_multiprocess=False,
-        drop_last=True,
-        batch_size=1,
-        epochs=1,
-        steps_per_epoch=None,
-        collate_fn=None,
-    ):
-        dist_context = self._dist_contexts[self._mode]
-        dist_main_prog = dist_context.dist_main_programs[self._cur_rank]
-        dist_startup_prog = dist_context.dist_startup_programs[self._cur_rank]
-        dist_main_block = dist_main_prog.global_block()
-
-        # NOTE: Get feed_list, then insert dataloader op with sharded var shape.
-        # Cause predict_program does not contain labels var,
-        # then we will add labels var from serial_program to dist_program,
-        # that maintains the length of feed_list equal to the length of dataset's values.
-        inputs_var = dist_context.serial_feed_vars["inputs"]
-        labels_var = dist_context.serial_feed_vars["labels"]
-        feed_list = []
-        for var in inputs_var + labels_var:
-            if var.name in dist_main_block.vars:
-                feed_list.append(dist_main_block.vars[var.name])
-            else:
-                copy_var = dist_main_block._clone_variable(var, var.persistable)
-                copy_var.desc.set_original_id(var.desc.original_id())
-                feed_list.append(copy_var)
-
-        places = paddle.static.cuda_places()
-        with static.program_guard(dist_main_prog, dist_startup_prog):
-            dataloader = DistributedDataLoaderFromGenerator(
-                dataset=dataset,
-                feed_list=feed_list,
-                capacity=capacity,
-                use_double_buffer=use_double_buffer,
-                iterable=iterable,
-                return_list=return_list,
-                use_multiprocess=use_multiprocess,
-                drop_last=drop_last,
-                places=places,
-                batch_size=batch_size,
-                epochs=epochs,
-                steps_per_epoch=steps_per_epoch,
-                collate_fn=collate_fn,
-                split_data=self._strategy.split_data,
-                data_parallel_world_size=self._dp_world_sizes,
-                data_parallel_rank=self._dp_ranks,
-                acc_steps=1
-                if not self._strategy.pipeline.enable
-                else self._acc_steps,
-            )
-        self._prepare_reader(feed_list)
-        return dataloader
-
     def _tune(self, tune_data, tune_sample_split=None, batch_size=1):
         self._mode = 'train'
         self._inputs_spec, self._labels_spec = self._prepare_data_spec(
@@ -2131,19 +2265,13 @@ class Engine:
         if batch_size is None:
             return None
 
-        if auto_utils.use_new_executor():
-            assert (
-                len(set(self._dp_world_sizes)) == 1
-            ), f"DistributedBatchSampler only support one data parallel group, but got [{len(set(self._dp_world_sizes))}] different data parallel groups"
-            assert (
-                batch_size % self._dp_world_sizes[0] == 0
-            ), f"batch_size [{batch_size}] is not divisible by dp_world_size [{self._dp_world_sizes[0]}]"
-            return batch_size // self._dp_world_sizes[0]
-        else:
-            assert (
-                batch_size % self._acc_steps == 0
-            ), f"Requires batch_size:[{batch_size}] to be divisible by acc_steps:[{self._acc_steps}]."
-            return batch_size // self._acc_steps
+        assert (
+            len(set(self._dp_world_sizes)) == 1
+        ), f"DistributedBatchSampler only support one data parallel group, but got [{len(set(self._dp_world_sizes))}] different data parallel groups"
+        assert (
+            batch_size % self._dp_world_sizes[0] == 0
+        ), f"batch_size [{batch_size}] is not divisible by dp_world_size [{self._dp_world_sizes[0]}]"
+        return batch_size // self._dp_world_sizes[0]
 
     def _validate_batch(self, batch):
         if batch is None:
@@ -2218,7 +2346,7 @@ class Engine:
         ), f"{mode} model is not ready, please call `prepare()` first."
         self.to_mode(mode)
 
-    def to_mode(self, mode):
+    def to_mode(self, mode: _Mode) -> None:
         assert mode in [
             "train",
             "eval",
@@ -2243,7 +2371,7 @@ class Engine:
                 state_dict[name] = state_dict[name].astype(param_array.dtype)
         program.set_state_dict(state_dict)
 
-    def save(self, path, training=True):
+    def save(self, path: str, training: bool = True) -> None:
         """
         Saves the model, parameters, optimizer state to path.
         If `training` is set to False, only inference model will be saved.
@@ -2328,7 +2456,9 @@ class Engine:
                 program=dist_main_prog,
             )
 
-    def load(self, path, strict=True, load_optimizer=True):
+    def load(
+        self, path: str, strict: bool = True, load_optimizer: bool = True
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """
         Load the stored model, parameters and optimizer states.
 
@@ -2381,7 +2511,12 @@ class Engine:
         )
         return self._state_dict, self._dist_attr
 
-    def cost(self, inputs_spec=None, labels_spec=None, mode=None):
+    def cost(
+        self,
+        inputs_spec: InputSpec | None = None,
+        labels_spec: InputSpec | None = None,
+        mode: _Mode | None = None,
+    ) -> tuple[int, int] | None:
         """
         Get and Print cost, including memory of every rank,
         max memory among all ranks, and the global cost of one step based on
@@ -2442,65 +2577,73 @@ class Engine:
 
         return global_cost.time, max_memory
 
-    def get_dist_main_program(self, mode):
+    def get_dist_main_program(self, mode: _Mode) -> Program:
+        if self._in_pir_mode:
+            return self._pir_dist_main_progs[self._mode]
         return self._dist_contexts[mode].dist_main_programs[self._cur_rank]
 
-    def get_dist_startup_program(self, mode):
+    def get_dist_startup_program(self, mode: _Mode) -> Program:
+        if self._in_pir_mode:
+            return self._pir_dist_startup_progs[self._mode]
         return self._dist_contexts[mode].dist_startup_programs[self._cur_rank]
 
-    def get_serial_main_program(self, mode):
+    def get_serial_main_program(self, mode: _Mode) -> Program:
+        if self._in_pir_mode:
+            return self._fwd_main_progs[mode]
         return self._dist_contexts[mode].serial_main_program
 
-    def get_serial_startup_program(self, mode):
+    def get_serial_startup_program(self, mode: _Mode) -> Program:
+        if self._in_pir_mode:
+            return self._startup_progs[mode]
         return self._dist_contexts[mode].serial_startup_program
 
     @property
-    def main_program(self):
+    def main_program(self) -> Program:
         if self._in_pir_mode:
             return self._pir_dense_main_progs[self._mode]
         dist_context = self._dist_contexts[self._mode]
         return dist_context.dist_main_programs[self._cur_rank]
 
     @property
-    def startup_program(self):
+    def startup_program(self) -> Program:
         dist_context = self._dist_contexts[self._mode]
         return dist_context.dist_startup_programs[self._cur_rank]
 
     @property
-    def dist_context(self):
+    def dist_context(self) -> DistributedContext:
         return self._dist_contexts[self._mode]
 
     @property
-    def serial_main_program(self):
+    def serial_main_program(self) -> Program:
         dist_context = self._dist_contexts[self._mode]
         return dist_context.serial_main_program
 
     @property
-    def serial_startup_program(self):
+    def serial_startup_program(self) -> Program:
         dist_context = self._dist_contexts[self._mode]
         return dist_context.serial_startup_program
 
     @property
-    def feed_vars(self):
+    def feed_vars(self) -> dict[str, list[Tensor]]:
         dist_context = self._dist_contexts[self._mode]
         return dist_context.serial_feed_vars
 
     @property
-    def fetch_vars(self):
+    def fetch_vars(self) -> dict[str, list[Tensor]]:
         dist_context = self._dist_contexts[self._mode]
         return dist_context.serial_fetch_vars
 
     @property
-    def optimizer(self):
+    def optimizer(self) -> Optimizer:
         dist_context = self._dist_contexts[self._mode]
         if dist_context._serial_optimizer:
             return dist_context._serial_optimizer
         return self._optimizer
 
     @property
-    def inputs(self):
+    def inputs(self) -> list[Tensor]:
         return self._inputs
 
     @property
-    def labels(self):
+    def labels(self) -> list[Tensor]:
         return self._labels

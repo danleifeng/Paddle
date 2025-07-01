@@ -4,7 +4,7 @@
 #include "paddle/fluid/primitive/backend/generated/generated_backend.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_api.h"
 #include "paddle/fluid/primitive/primitive/primitive.h"
-#include "paddle/fluid/primitive/type/lazy_tensor.h"
+#include "paddle/fluid/primitive/base/lazy_tensor.h"
 
 namespace paddle {
 namespace primitive {
@@ -81,7 +81,7 @@ auto op_res_{{i}} = std::get<{{i}}>(op_res);
       {% if outputs[i].typename == 'Tensor' and not outputs[i].optional %}
 Tensor {{outputs[i].name}}(std::make_shared<LazyTensor>(op_res_{{i}}));
       {% elif outputs[i].typename == 'Tensor' and outputs[i].optional %}
-paddle::optional<Tensor> {{outputs[i].name}};
+paddle::optional<Tensor> {{outputs[i].name}} = paddle::make_optional<Tensor>(Tensor());
 if(op_res_{{i}}){
   {{outputs[i].name}} = paddle::make_optional<Tensor>(Tensor(std::make_shared<LazyTensor>(op_res_{{i}}.get())));
 }

@@ -41,12 +41,11 @@
 #include "paddle/cinn/backends/extern_func_emitter.h"
 #include "paddle/cinn/backends/extern_func_emitter_builtin.h"
 #include "paddle/cinn/backends/llvm/llvm_util.h"
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/type.h"
 #include "paddle/cinn/ir/ir_printer.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/utils/ir_verify.h"
-#include "paddle/cinn/optim/var_mod_simplify.h"
+#include "paddle/cinn/optim/ir_simplify.h"
 #include "paddle/cinn/runtime/cinn_runtime.h"
 #include "paddle/cinn/runtime/intrinsic.h"
 #include "paddle/cinn/utils/string.h"
@@ -116,6 +115,7 @@ CodeGenLLVM::CodeGenLLVM(llvm::Module *m,
   md_tbaa_root_ = md_builder_->createTBAARoot("cinn-tbaa");
   md_tbaa_alias_set_ = md_builder_->createTBAANode("cinn-alias", md_tbaa_root_);
   InitTarget(target_);
+  RegisterCustomizedPODStructType();
 }
 
 CodeGenLLVM::~CodeGenLLVM() {}
@@ -208,7 +208,7 @@ llvm::Value *CodeGenLLVM::EmitBinaryOp(llvm::Value *lhs,
   PADDLE_ENFORCE_EQ(
       lhs->getType(),
       rhs->getType(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "the types of operands of binary operation are mismatch"));
 
   switch (opcode) {
@@ -264,7 +264,7 @@ llvm::Value *CodeGenLLVM::Visit(const ir::FloatImm *op) {
   } else if (op->type().is_float16()) {
     return llvm::ConstantFP::get(b_->getHalfTy(), op->value);
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument("illegal float type."));
+    PADDLE_THROW(::common::errors::InvalidArgument("illegal float type."));
   }
   return nullptr;
 }
@@ -278,44 +278,59 @@ llvm::Value *CodeGenLLVM::Visit(const ir::StringImm *op) {
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::Add *op) {
-  return EmitBinaryOp(
-      Visit(&op->a()), Visit(&op->b()), '+', is_integral_type(op->type()));
+  auto promote_args = std::move(ir::TryElevateInt32ToInt64({op->a(), op->b()}));
+  return EmitBinaryOp(Visit(&promote_args.at(0)),
+                      Visit(&promote_args.at(1)),
+                      '+',
+                      is_integral_type(op->type()));
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::Sub *op) {
-  return EmitBinaryOp(
-      Visit(&op->a()), Visit(&op->b()), '-', is_integral_type(op->type()));
+  auto promote_args = std::move(ir::TryElevateInt32ToInt64({op->a(), op->b()}));
+  return EmitBinaryOp(Visit(&promote_args.at(0)),
+                      Visit(&promote_args.at(1)),
+                      '-',
+                      is_integral_type(op->type()));
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::Mul *op) {
-  ir::TryElevateInt32ToInt64({op->a(), op->b()});
-  auto *lhs = Visit(&op->a());
-  auto *rhs = Visit(&op->b());
-  return EmitBinaryOp(lhs, rhs, '*', is_integral_type(op->type()));
+  auto promote_args = std::move(ir::TryElevateInt32ToInt64({op->a(), op->b()}));
+  return EmitBinaryOp(Visit(&promote_args.at(0)),
+                      Visit(&promote_args.at(1)),
+                      '*',
+                      is_integral_type(op->type()));
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::Div *op) {
-  return EmitBinaryOp(
-      Visit(&op->a()), Visit(&op->b()), '/', is_integral_type(op->type()));
+  auto promote_args = std::move(ir::TryElevateInt32ToInt64({op->a(), op->b()}));
+  return EmitBinaryOp(Visit(&promote_args.at(0)),
+                      Visit(&promote_args.at(1)),
+                      '/',
+                      is_integral_type(op->type()));
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::Mod *op) {
-  return EmitBinaryOp(
-      Visit(&op->a()), Visit(&op->b()), '%', is_integral_type(op->type()));
+  auto promote_args = std::move(ir::TryElevateInt32ToInt64({op->a(), op->b()}));
+  return EmitBinaryOp(Visit(&promote_args.at(0)),
+                      Visit(&promote_args.at(1)),
+                      '%',
+                      is_integral_type(op->type()));
 }
 
-#define __IR_EMITTER_DEFINE_CMP_VISITOR(__sop, __uop, __fop) \
-  auto *lhs = Visit(&op->a());                               \
-  auto *rhs = Visit(&op->b());                               \
-  CHECK(op->a().type() == op->b().type());                   \
-  llvm::CmpInst::Predicate predicate;                        \
-  if (op->a().type().is_int()) {                             \
-    predicate = llvm::CmpInst::ICMP_##__sop;                 \
-  } else if (op->a().type().is_uint()) {                     \
-    predicate = llvm::CmpInst::ICMP_##__uop;                 \
-  } else /*float*/ {                                         \
-    predicate = llvm::CmpInst::FCMP_##__fop;                 \
-  }                                                          \
+#define __IR_EMITTER_DEFINE_CMP_VISITOR(__sop, __uop, __fop)     \
+  auto promote_args =                                            \
+      std::move(ir::TryElevateInt32ToInt64({op->a(), op->b()})); \
+  auto *lhs = Visit(&promote_args.at(0));                        \
+  auto *rhs = Visit(&promote_args.at(1));                        \
+  CHECK(promote_args.at(0).type() == promote_args.at(1).type()); \
+  llvm::CmpInst::Predicate predicate;                            \
+  if (promote_args.at(0).type().is_int()) {                      \
+    predicate = llvm::CmpInst::ICMP_##__sop;                     \
+  } else if (promote_args.at(0).type().is_uint()) {              \
+    predicate = llvm::CmpInst::ICMP_##__uop;                     \
+  } else /*float*/ {                                             \
+    predicate = llvm::CmpInst::FCMP_##__fop;                     \
+  }                                                              \
   return EmitComparison(predicate, lhs, rhs, b_)
 
 llvm::Value *CodeGenLLVM::Visit(const ir::EQ *op) {
@@ -368,6 +383,91 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Min *op) {
   return Select(p, lhs, rhs);
 }
 
+inline bool FuncHasStructSRet(const llvm::Function *callee) {
+  // StructSRet is constructed by hand, not the LLVM
+  // function attribute (StructSRet)
+  const auto *func_type = callee->getFunctionType();
+  llvm::Type *param_ty = func_type->getParamType(0);
+  llvm::Type *ret_type = func_type->getReturnType();
+  return param_ty->isPointerTy() && ret_type->isVoidTy();
+}
+
+std::vector<llvm::Value *> AdaptABIArguments(
+    llvm::IRBuilder<> *builder,
+    llvm::Function *callee,
+    std::vector<llvm::Value *> &&input_args) {
+  // this function decompose the input arguments to primitive elements
+  // and reconstruct the input arguments according to callee func type
+  // for example: welford_fp64 (welford_fp64, welford_fp32) ->
+  // (*struct.welford_fp64*, *struct.welford_fp64*, {<2x float>, float})
+  // struct_to_int64: if true, struct of 64bit size will be turned into i64
+  // by bit casting
+  std::vector<llvm::Value *> output_args;
+
+  auto input_it = input_args.begin();
+  const auto *func_type = callee->getFunctionType();
+  const int num_params = func_type->getNumParams();
+
+  output_args.reserve(num_params);
+
+  int param_idx = 0;
+  // Case 1: check whether we have a pointer for struct ret
+  if (FuncHasStructSRet(callee)) {
+    llvm::Type *param_ty = func_type->getParamType(0);
+    llvm::Value *sret_ptr = builder->CreateAlloca(
+        param_ty->getPointerElementType(), nullptr, "sret.ptr");
+    output_args.push_back(sret_ptr);
+    param_idx++;
+  }
+
+  // traverse all the param in the target func type
+  for (; param_idx < num_params; param_idx++) {
+    llvm::Type *param_ty = func_type->getParamType(param_idx);
+
+    if (input_it == input_args.end()) break;
+    llvm::Value *current_input = *input_it;
+    llvm::Type *input_type = current_input->getType();
+
+    if (input_type == param_ty) {
+      // Case 2: if type matches, just pass it directly
+      output_args.push_back(current_input);
+      input_it++;
+    } else if (param_ty->isPointerTy()) {
+      // Case 3: if the input type is pointer,
+      // we need to create a local buffer
+      PADDLE_ENFORCE_EQ(input_type,
+                        param_ty->getPointerElementType(),
+                        ::common::errors::PreconditionNotMet(
+                            "Pointer parameter type mismatch"));
+      auto *input_ptr = builder->CreateAlloca(input_type, nullptr, "input.ptr");
+      builder->CreateStore(current_input, input_ptr);
+      output_args.push_back(input_ptr);
+      input_it++;
+    } else if (param_ty->isIntegerTy() && input_type->isIntegerTy()) {
+      // Case 4: for argidx type, tensor index might be deterministically casted
+      // to int64_t, so we need to cast the integer type here
+      if (input_type->getPrimitiveSizeInBits() <
+          param_ty->getPrimitiveSizeInBits()) {  // sign ext
+        output_args.push_back(
+            builder->CreateSExt(current_input, param_ty, "sext"));
+      } else {
+        output_args.push_back(
+            builder->CreateTrunc(current_input, param_ty, "trunc"));
+      }
+      input_it++;
+    } else {
+      PADDLE_THROW(
+          ::common::errors::Fatal("Unhandled case for ABI param adaptation."));
+    }
+  }
+
+  PADDLE_ENFORCE_EQ(input_it,
+                    input_args.end(),
+                    ::common::errors::PreconditionNotMet(
+                        "Not all input args are consumed by the callee"));
+  return output_args;
+}
+
 llvm::Value *CodeGenLLVM::Visit(const ir::Max *op) {
   auto *lhs = Visit(&op->a());
   auto *rhs = Visit(&op->b());
@@ -393,10 +493,39 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Not *op) {
   return Not(Visit(&op->v()));
 }
 
+llvm::Value *CodeGenLLVM::CastCompositeType(const ir::Expr &op_v) {
+  if (op_v.type().is_customized_type()) {
+    std::string from_type_name = op_v.type().to_string();
+    if (from_type_name.find("argidx_") != std::string::npos ||
+        from_type_name.find("welford_") != std::string::npos) {
+      auto callee = m_->getFunction("cast_" + from_type_name);
+      CHECK(callee) << "type casting function is null";
+      auto func_type = callee->getFunctionType();
+      auto value = Visit(&op_v);
+      auto params = AdaptABIArguments(b_, callee, {value});
+      llvm::Value *call_handle = Call(callee, params, "pod_value_cast");
+      if (FuncHasStructSRet(callee)) {
+        // currently, the functions are relatively simple, sret arg can only
+        // be found in the return type, which is the first argument
+        // sret created a stack temp value, we need to load from it
+        auto *sret_ptr = params[0];
+        auto *sret_ty = sret_ptr->getType()->getPointerElementType();
+        return b_->CreateLoad(sret_ty, sret_ptr);
+      } else {
+        return call_handle;
+      }
+    }
+  }
+  return nullptr;
+}
+
 llvm::Value *CodeGenLLVM::Visit(const ir::Cast *op) {
   auto from = op->v().type();
   auto to = op->type();
 
+  if (auto cast_call = CastCompositeType(op->v())) {
+    return cast_call;
+  }
   llvm::Type *source = CinnTypeToLLVMType(from, m_);
   llvm::Type *target = CinnTypeToLLVMType(to, m_);
   CHECK(source) << "source ir type is null";
@@ -511,53 +640,6 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Cast *op) {
 llvm::Value *CodeGenLLVM::CreateSerialFor(const ir::For *op, int stride) {
   SymbolTableGuard symbol_table_guard(*symbol_table_);
 
-  do {
-    break;
-    llvm::BasicBlock *preheader_bb = b_->GetInsertBlock();
-    auto *for_begin = llvm::BasicBlock::Create(
-        b_->getContext(), "for_begin", b_->GetInsertBlock()->getParent());
-    auto *for_body = llvm::BasicBlock::Create(
-        b_->getContext(), "for_body", b_->GetInsertBlock()->getParent());
-    auto *for_end = llvm::BasicBlock::Create(
-        b_->getContext(), "for_end", b_->GetInsertBlock()->getParent());
-
-    Br(for_begin);
-    b_->SetInsertPoint(for_begin);
-
-    auto *begin = Visit(&op->min);
-    auto *loop_value = PHI(begin->getType(), 2);
-    loop_value->addIncoming(begin, preheader_bb);
-
-    llvm::Value *old_var = GetVar(op->loop_var->name);
-    SetVar(op->loop_var->name, loop_value);
-    auto *end = Visit(&op->extent);
-    CondBr(ICmpSLT(loop_value, end), for_body, for_end);
-    b_->SetInsertPoint(for_body);
-    Visit(&op->body);
-
-    if (old_var) {
-      SetVar(op->loop_var->name, old_var);
-    } else {
-      symbol_table_->Erase(op->loop_var->name);
-    }
-
-    auto loop_next = Add(loop_value,
-                         llvm::ConstantInt::get(b_->getInt32Ty(), stride),
-                         "indvar.inc",
-                         true,
-                         true);
-    loop_value->addIncoming(loop_next, b_->GetInsertBlock());
-
-    Br(for_begin);
-    b_->SetInsertPoint(for_end);
-
-    return nullptr;
-    // llvm::AllocaInst *loop_var = Alloca(b_->getInt32Ty(), nullptr,
-    // op->loop_var->name); loop_var->setAlignment(llvm::Align(4));
-    // SetVar(op->loop_var->name, loop_var);
-  } while (false);
-
-  ////////////////////////////////////
   llvm::BasicBlock *preheader_bb = b_->GetInsertBlock();
   llvm::BasicBlock *exit_bb = nullptr;
 
@@ -792,21 +874,25 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Call *op) {
     args[0] = BitCast(args[0], ll_void_p_ty(), "cast_to_void_p");
   }
 
-  return Call(callee, std::move(args));
+  auto params = AdaptABIArguments(b_, callee, std::move(args));
+  llvm::Value *ret = Call(callee, params);
+  if (FuncHasStructSRet(callee)) {
+    // void return type and the first param is a pointer
+    // will be considered as sret callee
+    auto *sret_ptr = params[0];
+    auto *sret_ty = sret_ptr->getType()->getPointerElementType();
+    ret = b_->CreateLoad(sret_ty, params.front());
+  }
+  return ret;
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::_Module_ *op) {
-  {
-    Expr body_to_verify(&Reference(op));
-    ir::ir_utils::IrVerify(body_to_verify);
-  }
+  { ir::ir_utils::IrVerify(op); }
 
   for (auto &fn : op->functions) {
-    VLOG(1) << "JIT Linking function [" << fn.As<ir::_LoweredFunc_>()->name
+    VLOG(3) << "JIT Linking function [" << fn.As<ir::_LoweredFunc_>()->name
             << "]";
-    ir::Expr fn_expr(fn);
-
-    auto fnll = Visit(&fn_expr);
+    auto fnll = Visit(fn.As<ir::_LoweredFunc_>());
 
     VLOG(5) << "fn llvm:\n" << DumpToString(*fnll);
   }
@@ -814,20 +900,13 @@ llvm::Value *CodeGenLLVM::Visit(const ir::_Module_ *op) {
 }
 
 llvm::Value *CodeGenLLVM::Visit(const ir::_Var_ *op) {
-  llvm::Value *value = GetVar(op->name, false);
-  llvm::Value *result{};
-  CHECK(value) << "ir::_Var_[" << op->name << "]: value is null";
-  // TODO(fc500110) hard coding
-  if (LLVM_WillVarLowerAsPointer(op->name)) {
-    result = value;
-  } else if (value->getType()->isPointerTy() &&
-             !value->getType()->getPointerElementType()->isPointerTy()) {
-    result = Load(value, op->name + "_load");
-  } else {
-    result = value;
+  llvm::Value *value = GetVar(op->name, /* lazy= */ false);
+  // When visiting a Var that is allocated on the stack, we are actually
+  // reading its value instead of its address.
+  if (llvm::AllocaInst::classof(value)) {
+    return Load(value, op->name + "_load");
   }
-
-  return result;
+  return value;
 }
 
 void CodeGenLLVM::Scalarize(
@@ -882,10 +961,10 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Load *op) {
     {
       int alignment = op->type().bits();
       alignment = 8;
-      PADDLE_ENFORCE_GT(
-          alignment,
-          0,
-          phi::errors::InvalidArgument("alignment should be greater than 0"));
+      PADDLE_ENFORCE_GT(alignment,
+                        0,
+                        ::common::errors::InvalidArgument(
+                            "alignment should be greater than 0"));
       load_inst->setAlignment(llvm::Align(std::min(alignment, 8)));
     }
 
@@ -954,10 +1033,10 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Store *op) {
     {
       int alignment = op->type().bits();
       alignment = 8;
-      PADDLE_ENFORCE_GT(
-          alignment,
-          0,
-          phi::errors::InvalidArgument("alignment should be greater than 0"));
+      PADDLE_ENFORCE_GT(alignment,
+                        0,
+                        ::common::errors::InvalidArgument(
+                            "alignment should be greater than 0"));
       store_inst->setAlignment(llvm::Align(std::min(alignment, 8)));
     }
     // TODO(fc500110): tbaa AliasAnalysis
@@ -982,8 +1061,7 @@ llvm::Value *CodeGenLLVM::Visit(const ir::Store *op) {
       // fit the total_lanes in native_lanes(split into multiple native steps)
       for (int offset = 0; offset < total_lanes; offset += total_lanes) {
         int lanes = total_lanes;
-        Expr base = cinn::common::AutoSimplify(ramp->base + offset);
-        optim::VarModSimplify(&base);
+        Expr base = optim::ArithSimplify(ramp->base + offset);
         auto *ptr =
             CreateBufferPtr(op->type().ElementOf(), buffer, Visit(&base));
         auto *vtype = llvm::VectorType::get(
@@ -1043,12 +1121,6 @@ llvm::Value *CodeGenLLVM::Visit(const ir::_Buffer_ *op) {
 
 llvm::Value *CodeGenLLVM::Visit(const ir::_Tensor_ *op) {
   return GetVar(op->name);
-  auto *buffer_op = op->buffer.As<ir::_Buffer_>();
-  if (symbol_table_->Lookup(buffer_op->name)) {
-    return Visit(buffer_op);
-  }
-
-  return SetVar(buffer_op->name, Visit(buffer_op));
 }
 
 template <typename T,
@@ -1070,7 +1142,7 @@ llvm::Value *CodeGenLLVM::Visit(const ir::_LoweredFunc_ *op) {
   PADDLE_ENFORCE_EQ(
       op->alloc_output_buffer_exprs.size(),
       op->dealloc_output_buffer_exprs.size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "the count of allocation and deallocation expressions is not "
           "match"));
 
@@ -1241,7 +1313,7 @@ llvm::Value *CodeGenLLVM::EmitCall_debug_info(const ir::Call *op) {
   auto callee = m_->getFunction(runtime::intrinsic::debug_log_repr);
   PADDLE_ENFORCE_GE(op->read_args.size(),
                     1UL,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "The arguments of debug_log_repr should be greater "
                         "than 1"));
   std::vector<llvm::Value *> args;
@@ -1302,10 +1374,7 @@ llvm::Value *CodeGenLLVM::DenseVectorLoad(const ir::Load *op) {
 
   for (int i = 0; i < load_lanes; i += load_lanes) {
     int slice_lanes = load_lanes;
-    auto slice_base = cinn::common::AutoSimplify(ramp->base + i);
-    optim::VarModSimplify(&slice_base);
-    auto slide_stride = Expr(1);
-    auto slide_index = slice_base;
+    auto slice_base = optim::ArithSimplify(ramp->base + i);
 
 #if LLVM_VERSION_MAJOR >= 11
     const llvm::ElementCount elem_count(slice_lanes, /*scalable*/ false);
@@ -1330,9 +1399,10 @@ llvm::Value *CodeGenLLVM::DenseVectorLoad(const ir::Load *op) {
     slices.push_back(load_inst);
   }
 
-  PADDLE_ENFORCE_EQ(slices.size(),
-                    1UL,
-                    phi::errors::InvalidArgument("slices size should be 1."));
+  PADDLE_ENFORCE_EQ(
+      slices.size(),
+      1UL,
+      ::common::errors::InvalidArgument("slices size should be 1."));
 
   return slices[0];
 }
@@ -1340,11 +1410,12 @@ llvm::Value *CodeGenLLVM::DenseVectorLoad(const ir::Load *op) {
 llvm::Value *CodeGenLLVM::CreateBufferVecPtr(Type t,
                                              llvm::Value *buffer,
                                              llvm::Value *index) {
-  PADDLE_ENFORCE_GT(t.lanes(),
-                    1,
-                    phi::errors::InvalidArgument("type lanes should be greater "
-                                                 "than 1, but received %d",
-                                                 t.lanes()));
+  PADDLE_ENFORCE_GT(
+      t.lanes(),
+      1,
+      ::common::errors::InvalidArgument("type lanes should be greater "
+                                        "than 1, but received %d",
+                                        t.lanes()));
   llvm::PointerType *btype =
       llvm::dyn_cast<llvm::PointerType>(buffer->getType());
   CHECK(btype);
@@ -1359,11 +1430,12 @@ llvm::Value *CodeGenLLVM::CreateBufferVecPtr(Type t,
 llvm::Value *CodeGenLLVM::CreateBufferPtr(Type t,
                                           llvm::Value *buffer,
                                           llvm::Value *index) {
-  PADDLE_ENFORCE_EQ(t.lanes(),
-                    1,
-                    phi::errors::InvalidArgument("type lanes should be 1, but "
-                                                 "received %d",
-                                                 t.lanes()));
+  PADDLE_ENFORCE_EQ(
+      t.lanes(),
+      1,
+      ::common::errors::InvalidArgument("type lanes should be 1, but "
+                                        "received %d",
+                                        t.lanes()));
   auto *btype = llvm::dyn_cast<llvm::PointerType>(buffer->getType());
   CHECK(btype);
   auto *ptype =
@@ -1382,7 +1454,7 @@ llvm::Value *CodeGenLLVM::CreateVecSlice(llvm::Value *vec,
       llvm::dyn_cast<llvm::VectorType>(vec->getType())->getNumElements();
   PADDLE_ENFORCE_LE(begin + lanes,
                     total_lanes,
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "begin + lanes should be less than total_lanes"));
   if (lanes == total_lanes && begin == 0) return vec;  // full slice
   std::vector<llvm::Constant *> indices;
@@ -1395,7 +1467,7 @@ llvm::Value *CodeGenLLVM::CreateVecSlice(llvm::Value *vec,
 }
 
 int GetNaiveVecAlignmentImpl(common::UnknownArch, const Target &target) {
-  PADDLE_THROW(phi::errors::InvalidArgument("unknown Arch found"));
+  PADDLE_THROW(::common::errors::InvalidArgument("unknown Arch found"));
 }
 
 int GetNaiveVecAlignmentImpl(common::X86Arch, const Target &target) {
@@ -1404,7 +1476,7 @@ int GetNaiveVecAlignmentImpl(common::X86Arch, const Target &target) {
   } else if (target.bits == Target::Bit::k64) {
     return 512;
   }
-  PADDLE_THROW(phi::errors::InvalidArgument("get unknown bits"));
+  PADDLE_THROW(::common::errors::InvalidArgument("get unknown bits"));
 }
 
 int GetNaiveVecAlignmentImpl(common::ARMArch, const Target &target) {
@@ -1416,6 +1488,10 @@ int GetNaiveVecAlignmentImpl(common::NVGPUArch, const Target &target) {
 }
 
 int GetNaiveVecAlignmentImpl(common::HygonDCUArchHIP, const Target &target) {
+  return 128;
+}
+
+int GetNaiveVecAlignmentImpl(common::HygonDCUArchSYCL, const Target &target) {
   return 128;
 }
 
@@ -1434,12 +1510,8 @@ void CodeGenLLVM::InitTarget(const Target &target) {
   naive_vec_alignment_ = GetNaiveVecAlignment(target);
 }
 
-bool LLVM_WillVarLowerAsPointer(const std::string &var_name) {
-  return var_name == "_args" || utils::EndsWith(var_name, "__ptr");
-}
-
 void CodeGenLLVM::AddTbaaMetadata(llvm::Instruction *inst,
-                                  absl::string_view buffer,
+                                  std::string_view buffer,
                                   Expr index) {
   // If the index is constant, generate some TBAA info that helps LLVM
   // understand our loads/stores aren't aliased.
@@ -1457,7 +1529,7 @@ void CodeGenLLVM::AddTbaaMetadata(llvm::Instruction *inst,
         PADDLE_ENFORCE_GE(
             base,
             0,
-            phi::errors::InvalidArgument("base should be greater than 0"));
+            ::common::errors::InvalidArgument("base should be greater than 0"));
         width = NextPowerOfTwo(ramp->lanes * stride);
 
         while (base % width) {
@@ -1533,8 +1605,8 @@ llvm::Value *CodeGenLLVM::Visit(const ir::intrinsics::BufferCreate *op) {
   for (int i = 0; i < buffer_node->shape.size(); i++) {
     buffer_size = buffer_size * buffer_node->shape[i];
   }
-  ir::TryElevateInt32ToInt64({buffer_size});
-  args.push_back(Visit(&buffer_size));
+  auto promote_args = std::move(ir::TryElevateInt32ToInt64({buffer_size}));
+  args.push_back(Visit(&promote_args.at(0)));
   args.push_back(ll_const_int32(32));
 
   return Call(callee, args);
@@ -1636,37 +1708,37 @@ llvm::Value *CodeGenLLVM::Visit(const ir::intrinsics::BuiltinIntrin *op) {
     if (func_name == "bitwise_and") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         2U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "bitwise_and should have at least 2 arguments"));
       return b_->CreateAnd(Visit(&op->args[0]), Visit(&op->args[1]));
     } else if (func_name == "bitwise_or") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         2U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "bitwise_or should have at least 2 arguments"));
       return b_->CreateOr(Visit(&op->args[0]), Visit(&op->args[1]));
     } else if (func_name == "bitwise_xor") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         2U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "bitwise_xor should have at least 2 arguments"));
       return b_->CreateXor(Visit(&op->args[0]), Visit(&op->args[1]));
     } else if (func_name == "bitwise_not") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         1U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "bitwise_not should have at least 1 argument"));
       return b_->CreateNot(Visit(&op->args[0]));
     } else if (func_name == "left_shift") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         2U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "left_shift should have at least 2 arguments"));
       return b_->CreateShl(Visit(&op->args[0]), Visit(&op->args[1]));
     } else if (func_name == "right_shift") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         2U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "right_shift should have at least 2 arguments"));
       if (op->args[0]->type().is_int()) {
         return b_->CreateAShr(Visit(&op->args[0]), Visit(&op->args[1]));
@@ -1676,7 +1748,7 @@ llvm::Value *CodeGenLLVM::Visit(const ir::intrinsics::BuiltinIntrin *op) {
     } else if (func_name == "isnan") {
       PADDLE_ENFORCE_GE(op->args.size(),
                         1U,
-                        phi::errors::InvalidArgument(
+                        ::common::errors::InvalidArgument(
                             "isnan should have at least 1 argument"));
       llvm::Value *v = Visit(&op->args[0]);
       return b_->CreateFCmpUNO(v, v);
@@ -1738,13 +1810,38 @@ llvm::Value *CodeGenLLVM::Visit(const ir::intrinsics::PodValueToX *op) {
   } else {
     std::stringstream ss;
     ss << "Not supported type: " << to_type;
-    PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+    PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
   }
 
   CHECK(callee);
   auto *value = Visit(&op->pod_value_ptr);
   CHECK(value);
   return Call(callee, std::vector<llvm::Value *>({value}), "pod_value_cast");
+}
+
+void CodeGenLLVM::RegisterCustomizedPODStructType() {
+  // some of the POD struct type defined in cinn_runtime.h
+  // might be missing when loaded by LLVM, for unknown reasons
+  // To make sure they can be found, we explicitly register them here
+#define REGISTER_STRUCT_TYPE(name, ...) \
+  llvm::StructType::create({__VA_ARGS__}, "struct." #name, /*isPacked=*/false);
+
+#define REGISTER_ARGIDX_TYPE(dname, dtype)                         \
+  REGISTER_STRUCT_TYPE(argidx_##dname##_i32, dtype, ll_int32_ty()) \
+  REGISTER_STRUCT_TYPE(argidx_##dname##_i64, dtype, ll_int64_ty())
+
+  REGISTER_STRUCT_TYPE(welford_fp32, ll_fp32_ty(), ll_fp32_ty(), ll_fp32_ty())
+  REGISTER_STRUCT_TYPE(welford_fp64, ll_fp64_ty(), ll_fp64_ty(), ll_fp64_ty())
+
+  REGISTER_ARGIDX_TYPE(fp32, ll_fp32_ty())
+  REGISTER_ARGIDX_TYPE(fp64, ll_fp64_ty())
+  REGISTER_ARGIDX_TYPE(i16, ll_int16_ty())
+  REGISTER_ARGIDX_TYPE(i32, ll_int32_ty())
+  REGISTER_ARGIDX_TYPE(i64, ll_int64_ty())
+  REGISTER_ARGIDX_TYPE(u8, ll_uint8_ty())
+
+#undef REGISTER_ARGIDX_TYPE
+#undef REGISTER_STRUCT_TYPE
 }
 
 }  // namespace backends

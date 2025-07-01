@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/fluid/eager/type_defs.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/api/include/tensor.h"
 namespace egr {
@@ -94,7 +95,7 @@ class SavedTensorsHooks {
                 std::shared_ptr<UnPackHookBase> unpack_hook) {
     PADDLE_ENFORCE_EQ(pack_hook_ == nullptr && unpack_hook_ == nullptr,
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "paddle.autograd.saved_tensors_hooks only one pair "
                           "of hooks is allowed at a time."));
     pack_hook_ = pack_hook;
@@ -122,6 +123,18 @@ class SavedTensorsHooks {
   std::shared_ptr<PackHookBase> pack_hook_;
   std::shared_ptr<UnPackHookBase> unpack_hook_;
   bool is_enable_{false};
+};
+
+class NodePostHookBase {
+ public:
+  virtual ~NodePostHookBase() = default;
+  virtual paddle::small_vector<std::vector<paddle::Tensor>,
+                               egr::kSlotSmallVectorSize>
+  operator()(
+      const paddle::small_vector<std::vector<paddle::Tensor>,
+                                 egr::kSlotSmallVectorSize>& grad_outputs,
+      const paddle::small_vector<std::vector<paddle::Tensor>,
+                                 egr::kSlotSmallVectorSize>& grad_inputs) = 0;
 };
 
 }  // namespace egr

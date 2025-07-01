@@ -23,7 +23,7 @@ namespace fusion {
 
 #define TRANSFORMER_ENCODER_KERNEL_IMPL(x_dtype_, w_dtype_, gemm_dtype_) \
   int r = xpu::transformer_encoder<x_dtype_, w_dtype_, gemm_dtype_>(     \
-      ctx.x_context(),                                                   \
+      dev_ctx.x_context(),                                               \
       x_fp16_data,                                                       \
       fc_weight_data_##w_dtype_,                                         \
       out_fp16_data,                                                     \
@@ -38,7 +38,7 @@ namespace fusion {
 
 template <typename T, typename Context>
 void MultiEncoderXPUKernel(
-    const Context& ctx,
+    const Context& dev_ctx,
     const DenseTensor& x,
     const std::vector<const DenseTensor*>& fc_input_max,
     const std::vector<const DenseTensor*>& fc_weight,
@@ -83,7 +83,7 @@ void MultiEncoderXPUKernel(
   } else {
     PADDLE_ENFORCE(
         false,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "x.dims().size() MUST be 2 or 3, but get [%d].", x.dims().size()));
   }
   DDim out_dims;
@@ -103,19 +103,19 @@ void MultiEncoderXPUKernel(
   XPUTypeFP16* out_fp16_data = nullptr;
   if (x_dtype == phi::DataType::FLOAT32) {
     auto* x_fp16_data_t = reinterpret_cast<XPUTypeFP16*>(
-        ctx.template Alloc<phi::dtype::float16>(x_fp16));
-    int r_cast_x = xpu::cast_v2<float, XPUTypeFP16>(
-        ctx.x_context(), x.data<float>(), x_fp16_data_t, x.numel());
+        dev_ctx.template Alloc<phi::dtype::float16>(x_fp16));
+    int r_cast_x = xpu::cast<float, XPUTypeFP16>(
+        dev_ctx.x_context(), x.data<float>(), x_fp16_data_t, x.numel());
     PADDLE_ENFORCE_XDNN_SUCCESS(r_cast_x,
                                 "multi_encoder_xpu(cast x from fp32 to fp16)");
     x_fp16_data = x_fp16_data_t;
     out_fp16_data = reinterpret_cast<XPUTypeFP16*>(
-        ctx.template Alloc<phi::dtype::float16>(out_fp16));
+        dev_ctx.template Alloc<phi::dtype::float16>(out_fp16));
   } else {
     x_fp16_data =
         reinterpret_cast<const XPUTypeFP16*>(x.data<phi::dtype::float16>());
     out_fp16_data = reinterpret_cast<XPUTypeFP16*>(
-        ctx.template Alloc<phi::dtype::float16>(out));
+        dev_ctx.template Alloc<phi::dtype::float16>(out));
   }
 
   // q,k,v weight are fused.
@@ -141,8 +141,8 @@ void MultiEncoderXPUKernel(
       fc_weight_data_XPUTypeFP16.push_back(
           reinterpret_cast<const XPUTypeFP16*>(fc_weight[i]->data()));
     } else {
-      // Int8 weight also convert to int16_t* for temperary storage.
-      // The kenerl dytpe of int8 is choosen by quant_type in
+      // Int8 weight also convert to int16_t* for temporary storage.
+      // The kernel dtype of int8 is chosen by quant_type in
       // xpu::transformer_encoder
       fc_weight_data_int16_t.push_back(
           reinterpret_cast<const int16_t*>(fc_weight[i]->data()));
@@ -222,7 +222,7 @@ void MultiEncoderXPUKernel(
     if (!enable_int8 && local_quant) {
       TRANSFORMER_ENCODER_KERNEL_IMPL(XPUTypeFP16, XPUTypeFP16, float)
     } else {
-      // The kenerl dytpe of int8 is choosen by quant_type in
+      // The kernel dtype of int8 is chosen by quant_type in
       // xpu::transformer_encoder This template args, int16_t, is only for skip
       // quant fc
       TRANSFORMER_ENCODER_KERNEL_IMPL(XPUTypeFP16, int16_t, int16_t)
@@ -331,10 +331,10 @@ void MultiEncoderXPUKernel(
 
   if (x_dtype == phi::DataType::FLOAT32) {
     int r_cast_out =
-        xpu::cast_v2<XPUTypeFP16, float>(ctx.x_context(),
-                                         out_fp16_data,
-                                         ctx.template Alloc<float>(out),
-                                         out->numel());
+        xpu::cast<XPUTypeFP16, float>(dev_ctx.x_context(),
+                                      out_fp16_data,
+                                      dev_ctx.template Alloc<float>(out),
+                                      out->numel());
     PADDLE_ENFORCE_XDNN_SUCCESS(
         r_cast_out, "multi_encoder_xpu(cast out from fp16 to fp32)");
   }

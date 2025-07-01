@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 import paddle.nn.functional as F
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(10)
 
@@ -181,7 +180,6 @@ class TestNNLogSoftmaxAPI(unittest.TestCase):
             else paddle.CPUPlace()
         )
 
-    @test_with_pir_api
     def check_api(self, axis=-1):
         ref_out = np.apply_along_axis(ref_log_softmax, axis, self.x)
 
@@ -201,7 +199,6 @@ class TestNNLogSoftmaxAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), ref_out, rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_check_api(self):
         for axis in [-1, 1]:
             self.check_api(axis)
@@ -217,7 +214,6 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
             else paddle.CPUPlace()
         )
 
-    @test_with_pir_api
     def check_api(self, axis=-1, dtype=None):
         x = self.x.copy()
         if dtype is not None:
@@ -236,13 +232,11 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), ref_out, rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_check_api(self):
         for axis in [-1, 1]:
             self.check_api(axis)
         self.check_api(-1, 'float64')
 
-    @test_with_pir_api
     def test_errors(self):
         with paddle.static.program_guard(paddle.static.Program()):
             x = paddle.static.data(name='X1', shape=[100], dtype='int32')
@@ -250,6 +244,51 @@ class TestNNFunctionalLogSoftmaxAPI(unittest.TestCase):
 
             x = paddle.static.data(name='X2', shape=[100], dtype='float32')
             self.assertRaises(TypeError, F.log_softmax, x, dtype='int32')
+
+
+def _check_cuda_memory_20GB():
+    if not hasattr(paddle.device.cuda, 'get_device_properties'):
+        return False
+    gpu_info = paddle.device.cuda.get_device_properties(0)
+    return gpu_info.total_memory >= 20 * (1024**3)  # 20GB
+
+
+@unittest.skipIf(
+    not core.is_compiled_with_cuda() or not _check_cuda_memory_20GB(),
+    "Need CUDA support and at least 20GB GPU memory",
+)
+class TestLogSoftmaxLargeOp(unittest.TestCase):
+    def test_check_run(self):
+        x = paddle.randn([4, 4096, 131072 + 2048])  # 8GB+4*4096*2048
+        paddle.nn.functional.log_softmax(x, axis=-1)
+
+
+class TestLogSoftmaxOp_ZeroSize(OpTest):
+    def setUp(self):
+        self.op_type = 'log_softmax'
+        self.python_api = F.log_softmax
+        self.public_python_api = F.log_softmax
+        self.dtype = 'float64'
+        self.shape = [2, 0, 4, 5]
+        self.axis = -1
+        self.set_attrs()
+
+        x = np.random.uniform(0.1, 1.0, self.shape).astype(self.dtype)
+        # shape is same as x, size is 0.
+        out = np.random.random(self.shape).astype(self.dtype)
+
+        self.inputs = {'X': x}
+        self.outputs = {'Out': out}
+        self.attrs = {'axis': self.axis}
+
+    def set_attrs(self):
+        pass
+
+    def test_check_output(self):
+        self.check_output(check_pir=True)
+
+    def test_check_grad(self):
+        self.check_grad(['X'], ['Out'], check_pir=True)
 
 
 if __name__ == "__main__":

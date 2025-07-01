@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import unittest
 
-from test_case_base import TestCaseBase
+from test_case_base import (
+    TestCaseBase,
+    test_instruction_translator_cache_context,
+)
 
 import paddle
 from paddle.jit import sot
 from paddle.jit.sot import symbolic_translate
-from paddle.jit.sot.opcode_translator.executor.executor_cache import (
-    OpcodeExecutorCache,
-)
 from paddle.jit.sot.utils import strict_mode_guard
 
 
@@ -259,9 +259,10 @@ class TestEnumerateCache(TestCaseBase):
             paddle.randn([5, 10]),
         ]
 
-        out = symbolic_translate(for_enumerate_cache)(func_list, x)
-        out = symbolic_translate(for_enumerate_cache)(func_list, x)
-        self.assert_nest_match(OpcodeExecutorCache().translate_count, 1)
+        with test_instruction_translator_cache_context() as ctx:
+            out = symbolic_translate(for_enumerate_cache)(func_list, x)
+            out = symbolic_translate(for_enumerate_cache)(func_list, x)
+            self.assertEqual(ctx.translate_count, 1)
 
 
 # after_loop_fn need zzz, and zzz is created as UndefinedVar when generating loop body
@@ -306,6 +307,51 @@ class TestListCompWithFallback(TestCaseBase):
     def test_list_comp_with_fallback(self):
         x = [paddle.randn([4, 6])]
         self.assert_results(comp_with_fallback, x)
+
+
+def for_arange(x):
+    for i in paddle.arange(0, 5):
+        x = x + i
+    return x
+
+
+class TestArange(TestCaseBase):
+    def test_arange(self):
+        x = paddle.to_tensor(1)
+        self.assert_results(for_arange, x)
+
+
+def for_break_with_load_same_consts(x: paddle.Tensor):
+    y = None
+    z = None
+    for i in [1, 2, 3]:
+        if y is None:
+            y = i
+        if z is None:
+            z = i
+        x += y + z
+        sot.psdb.breakgraph()
+    return x
+
+
+class TestForBreakWithLoadSameConsts(TestCaseBase):
+    def test_for_break_with_load_same_consts(self):
+        x = paddle.to_tensor(1)
+        self.assert_results(for_break_with_load_same_consts, x)
+
+
+def for_break_with_write_pre_defined_name(x: paddle.Tensor):
+    y = None
+    for i in [1, 2, 3]:
+        y = i
+        sot.psdb.breakgraph()
+    return x + 1
+
+
+class TestForBreakWithWritePreDefinedName(TestCaseBase):
+    def test_for_break_with_write_pre_defined_name(self):
+        x = paddle.to_tensor(1)
+        self.assert_results(for_break_with_write_pre_defined_name, x)
 
 
 if __name__ == "__main__":

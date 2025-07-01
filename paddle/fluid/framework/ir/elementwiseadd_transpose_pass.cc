@@ -78,7 +78,7 @@ namespace paddle::framework::ir {
 int ElementwiseAddTransposeFusePass::ApplyEleTransPattern(
     ir::Graph *graph) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::PreconditionNotMet("graph should not be null."));
+      graph, common::errors::PreconditionNotMet("graph should not be null."));
   FusePassBase::Init("eleadd_transpose_fuse", graph);
   int found_subgraph_count = 0;
   GraphPatternDetector gpd;
@@ -132,7 +132,7 @@ int ElementwiseAddTransposeFusePass::ApplyEleTransPattern(
     }
     if (!reshape->Op()->HasAttr("shape")) {
       VLOG(1) << "reshape op in elementwise_add_transpose fusion do not found "
-                 "shape attr, the fusion will be stoped.";
+                 "shape attr, the fusion will be stopped.";
       return;
     }
     std::vector<int> shape_attr =
@@ -145,7 +145,7 @@ int ElementwiseAddTransposeFusePass::ApplyEleTransPattern(
                  "in elementwise_add_transpose, "
                  "currently, the elementwiseadd transpose pass only support "
                  "reshape bay shape attr rather than shape tensor."
-                 "Therefore, the fusion will be stoped.";
+                 "Therefore, the fusion will be stopped.";
       return;
     }
     if (shape_attr[3] % 8 != 0) {
@@ -154,7 +154,7 @@ int ElementwiseAddTransposeFusePass::ApplyEleTransPattern(
              "in elementwise_add_transpose, "
              "currently, the elementwiseadd transpose pass only support "
              "channel size mod 8 == 0 for khwc8 trt format"
-             "Therefore, the fusion will be stoped.";
+             "Therefore, the fusion will be stopped.";
       return;
     }
     std::unordered_set<const Node *> del_node_set;
@@ -183,7 +183,7 @@ int ElementwiseAddTransposeFusePass::ApplyEleTransPattern(
 }
 void ElementwiseAddTransposeFusePass::ApplyImpl(ir::Graph *graph) const {
   PADDLE_ENFORCE_NOT_NULL(graph,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Pointer to graph argument should not be NULL."));
   FusePassBase::Init("elementwiseadd_transpose_fuse_pass", graph);
   int found_subgraph_count = ApplyEleTransPattern(graph);

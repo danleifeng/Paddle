@@ -16,8 +16,7 @@ limitations under the License. */
 
 #include <string>
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 class RecvOpV2 : public framework::OperatorWithKernel {
  public:
@@ -30,21 +29,21 @@ class RecvOpV2 : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_GE(
         peer,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The peer (%d) for recv_v2 op must be non-negative.", peer));
     PADDLE_ENFORCE_GE(
         ring_id,
         0,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The ring_id (%d) for recv_v2 op must be non-negative.", ring_id));
 
     if (ctx->GetOutputsVarType("Out").front() ==
-        framework::proto::VarType::LOD_TENSOR) {
+        framework::proto::VarType::DENSE_TENSOR) {
       auto out_shape = ctx->Attrs().Get<std::vector<int>>("out_shape");
       PADDLE_ENFORCE_GE(
           out_shape.size(),
           1,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The size of the output shape must be greater than 0 "
               "but the value given is %d.",
               out_shape.size()));
@@ -55,7 +54,7 @@ class RecvOpV2 : public framework::OperatorWithKernel {
         for (size_t i = 0; i < out_shape.size(); ++i) {
           PADDLE_ENFORCE_GE(out_shape[i],
                             1,
-                            phi::errors::InvalidArgument(
+                            common::errors::InvalidArgument(
                                 "The shape attribute for recv_v2 must be set "
                                 "explicitly, but the %dth element is %d which "
                                 "is less than 1. Or dynamic_shape should be "
@@ -106,8 +105,7 @@ Reference: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/p2p.h
   }
 };
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators
 
 namespace ops = paddle::operators;
 

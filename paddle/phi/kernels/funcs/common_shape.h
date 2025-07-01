@@ -29,26 +29,27 @@ inline void SetXShape(const DenseTensor &x, DenseTensor *xshape) {
     xshape_dims[i + 1] = in_dims[i];
   }
   xshape->ResizeAndAllocate(common::make_ddim(xshape_dims));
-  xshape->ResetLoD(x.meta().lod);
+  xshape->ResetLoD(x.meta().legacy_lod);
 }
 
+template <typename T>
 inline void GetBroadcastDimsArrays(const DDim &x_dims,
                                    const DDim &y_dims,
-                                   int *x_dims_array,
-                                   int *y_dims_array,
-                                   int *out_dims_array,
+                                   T *x_dims_array,
+                                   T *y_dims_array,
+                                   T *out_dims_array,
                                    const int max_dim,
                                    const int axis) {
   PADDLE_ENFORCE_GE(
       axis,
       0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Axis should be great than or equal to 0, but received axis is %d.",
           axis));
   PADDLE_ENFORCE_LE(
       axis,
       max_dim,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Axis should be less than or equal to %d, but received axis is %d.",
           max_dim,
           axis));
@@ -69,10 +70,11 @@ inline void GetBroadcastDimsArrays(const DDim &x_dims,
   }
   for (int i = 0; i < max_dim; ++i) {
     PADDLE_ENFORCE_EQ(
-        x_dims_array[i] == y_dims_array[i] || x_dims_array[i] <= 1 ||
-            y_dims_array[i] <= 1,
+        x_dims_array[i] == y_dims_array[i] ||
+            (x_dims_array[i] <= 1 && x_dims_array[i] != 0) ||
+            (y_dims_array[i] <= 1 && y_dims_array[i] != 0),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Broadcast dimension mismatch. Operands could "
             "not be broadcast together with the shape of X = [%s] and "
             "the shape of Y = [%s]. Received [%d] in X is not equal to "
@@ -87,6 +89,9 @@ inline void GetBroadcastDimsArrays(const DDim &x_dims,
       out_dims_array[i] = (std::max)(x_dims_array[i], y_dims_array[i]);
     } else {
       out_dims_array[i] = -1;
+      if (y_dims_array[i] == 0 || x_dims_array[i] == 0) {
+        out_dims_array[i] = 0;
+      }
     }
   }
 }
@@ -161,7 +166,7 @@ static inline std::vector<int64_t> MatrixGetBroadcastBatchPortion(
     PADDLE_ENFORCE_EQ(
         (x_size == y_size || x_size == 1 || y_size == 1),
         true,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The size of tensor x (%d) must match the size of tensor y "
             "(%d) at non-singleton dimension %d.",
             x_size,
@@ -309,7 +314,7 @@ inline void FCOutputSize(const DDim &in_dims,
   PADDLE_ENFORCE_EQ(
       in_mat_dims[1],
       w_dims0,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input's second dimension and weight's first dimension is "
           "expected to be the same. But received input's second dimension is "
           "%d, input's shape is %s; weight's first dimension is %d, weight's "
@@ -342,7 +347,7 @@ inline std::vector<int64_t> GetReduceDims(const DenseTensor &in,
       PADDLE_ENFORCE_EQ(
           in_dims[i + diff],
           out_dims[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "ReduceDims dimension mismatch. Operands could "
               "not be broadcast together with the shape of in_dims = [%s] and "
               "the shape of out_dims = [%s]. Received [%d] in X is not equal "

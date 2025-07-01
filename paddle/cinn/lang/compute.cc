@@ -18,9 +18,6 @@
 #include "paddle/cinn/common/common.h"
 #include "paddle/cinn/ir/operation.h"
 #include "paddle/cinn/optim/ir_simplify.h"
-#include "paddle/cinn/poly/dim.h"
-#include "paddle/cinn/poly/domain.h"
-#include "paddle/cinn/poly/stage.h"
 #include "paddle/cinn/runtime/use_extern_funcs.h"
 
 namespace cinn {
@@ -32,10 +29,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
                    const std::vector<Expr> &shape) {
   return Compute(
       domain,
-      [fn](const std::vector<Expr> &axis) -> Expr {
-        // CHECK_EQ(axis.size(), 0);
-        return fn();
-      },
+      [fn](const std::vector<Expr> &axis) -> Expr { return fn(); },
       name,
       shape);
 }
@@ -49,7 +43,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
       [fn](const std::vector<Expr> &axis) -> Expr {
         PADDLE_ENFORCE_EQ(axis.size(),
                           1,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "The size of axis vector is incorrect"
                               "Expected value is 1, but receive %d. ",
                               axis.size()));
@@ -68,7 +62,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
       [fn](const std::vector<Expr> &axis) -> Expr {
         PADDLE_ENFORCE_EQ(axis.size(),
                           2,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "The size of axis vector is incorrect"
                               "Expected value is 2, but receive %d. ",
                               axis.size()));
@@ -87,7 +81,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
       [fn](const std::vector<Expr> &axis) -> Expr {
         PADDLE_ENFORCE_EQ(axis.size(),
                           3,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "The size of axis vector is incorrect"
                               "Expected value is 3, but receive %d. ",
                               axis.size()));
@@ -106,7 +100,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
       [fn](const std::vector<Expr> &axis) -> Expr {
         PADDLE_ENFORCE_EQ(axis.size(),
                           4,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "The size of axis vector is incorrect"
                               "Expected value is 4, but receive %d. ",
                               axis.size()));
@@ -125,7 +119,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
       [fn](const std::vector<Expr> &axis) -> Expr {
         PADDLE_ENFORCE_EQ(axis.size(),
                           5,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "The size of axis vector is incorrect"
                               "Expected value is 5, but receive %d. ",
                               axis.size()));
@@ -144,7 +138,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
       [fn](const std::vector<Expr> &axis) -> Expr {
         PADDLE_ENFORCE_EQ(axis.size(),
                           6,
-                          phi::errors::InvalidArgument(
+                          ::common::errors::InvalidArgument(
                               "The size of axis vector is incorrect"
                               "Expected value is 6, but receive %d. ",
                               axis.size()));
@@ -158,9 +152,9 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
                    std::function<Expr(const std::vector<Expr> &)> fn,
                    const std::string &name,
                    const std::vector<Expr> &shape) {
-  auto axises = cinn::common::GenDefaultAxis(domain.size());
+  auto axes = cinn::common::GenDefaultAxis(domain.size());
   std::vector<Expr> _axis;
-  for (auto &x : axises) _axis.push_back(x);
+  for (auto &x : axes) _axis.push_back(x);
   Expr fn_body = fn(_axis);
 
   std::vector<Var> reduce_axis;
@@ -181,14 +175,12 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
 
   // construct the shape.
   for (auto dim : domain) {
-    auto copied = dim;
-    optim::Simplify(&copied);
+    auto copied = optim::ArithSimplify(dim);
     domain_without_reduce_axis.push_back(copied);
   }
 
   for (auto dim : shape) {
-    auto copied = dim;
-    optim::Simplify(&copied);
+    auto copied = optim::ArithSimplify(dim);
     shape_simplified.push_back(copied);
   }
 
@@ -202,8 +194,11 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
 
   // check reduce_axis not include the reserved axis name
   for (auto &ra : reduce_axis) {
-    CHECK(!cinn::common::IsAxisNameReserved(ra->name))
-        << "reduce axis [" << ra->name << "]'s name is reserved";
+    PADDLE_ENFORCE_EQ(
+        !cinn::common::IsAxisNameReserved(ra->name),
+        true,
+        ::common::errors::InvalidArgument(
+            "Reduce axis [%s]'s name is reserved.", ra->name.c_str()));
   }
 
   VLOG(3) << "tensor " << name
@@ -211,6 +206,7 @@ ir::Tensor Compute(const std::vector<Expr> &domain,
 
   auto op = ir::ComputeOp::Make(
       unique_name, fn, real_shape, domain_without_reduce_axis, reduce_axis);
+
   auto tensor = ir::Tensor(unique_name,
                            fn_body.type(),
                            real_shape,
@@ -257,10 +253,12 @@ Expr CallExtern(const std::string &func_name,
                 const std::map<std::string, attr_t> &attrs) {
   auto *proto =
       backends::ExternFunctionProtoRegistry::Global().Lookup(func_name);
-  CHECK(proto)
-      << "No extern function prototype " << func_name << " found\n"
-      << "existing records are:\n"
-      << backends::ExternFunctionProtoRegistry::Global().debug_string();
+  PADDLE_ENFORCE_NOT_NULL(
+      proto,
+      ::common::errors::InvalidArgument(
+          "No extern function prototype %s found\nExisting records are:\n%s",
+          func_name,
+          backends::ExternFunctionProtoRegistry::Global().debug_string()));
 
   auto call = ir::Call::Make(proto->ret_type,
                              func_name,

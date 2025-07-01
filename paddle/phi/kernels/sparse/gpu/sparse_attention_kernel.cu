@@ -86,7 +86,7 @@ __global__ void BlockSparseSoftmaxForward(T* softmax,
     const T* attnptr = (attn_mask == nullptr)
                            ? nullptr
                            : (attn_mask + cur_block_row * num_rows);
-    // the coloumn start index in current row
+    // the column start index in current row
     const int* colindex = layout_colindex + layout_rowptr[cur_block_row];
     for (int j = 0; j < iter; j++) {
       int cur_block_col = j * WarpSize + threadIdx.x;
@@ -206,7 +206,7 @@ input: sparse C in CSR format (num_rows,num_rows)
 output: sparse C after softmax operation
 */
 template <typename DeviceContext, typename T>
-void SparseSoftmaxForward(const phi::GPUContext& ctx,
+void SparseSoftmaxForward(const phi::GPUContext& dev_ctx,
                           const phi::DenseTensor* offset,
                           const phi::DenseTensor* columns,
                           phi::DenseTensor* input,
@@ -312,14 +312,14 @@ void SparseSoftmaxForward(const phi::GPUContext& ctx,
                            columns_data,
                            num_rows);
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The head_dim of query in sparse_attention op should less or equal "
         "512"));
   }
 }
 
 template <typename DeviceContext, typename T>
-void SparseSoftmaxBackward(const phi::GPUContext& ctx,
+void SparseSoftmaxBackward(const phi::GPUContext& dev_ctx,
                            const phi::DenseTensor* offset,
                            const phi::DenseTensor* columns,
                            phi::DenseTensor* dx,
@@ -410,7 +410,7 @@ void SparseSoftmaxBackward(const phi::GPUContext& ctx,
                            columns_data,
                            num_rows);
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The head_dim of query in sparse_attention op should less or equal "
         "512"));
   }
@@ -422,7 +422,7 @@ inline cudaDataType_t GetGpuType(const DataType data_type) {
   } else if (data_type == DataType::FLOAT64) {
     return CUDA_R_64F;
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Not support tensor type in sparse_attention OP: %s",
         phi::DataTypeToString(data_type)));
   }
@@ -450,7 +450,7 @@ input: dense A (num_rows,num_cols), dense B (num_rows,num_cols)
 output: sparse C in CSR format (num_rows,num_rows)
 */
 template <typename DeviceContext, typename T>
-void DotSdd(const phi::GPUContext& ctx,
+void DotSdd(const phi::GPUContext& dev_ctx,
             const phi::DenseTensor* a,
             const phi::DenseTensor* b,
             const phi::DenseTensor* c_offset,
@@ -519,9 +519,9 @@ void DotSdd(const phi::GPUContext& ctx,
                                          CUSPARSE_SDDMM_ALG_DEFAULT,
                                          &buffer_size);
   auto d_buffer_ptr = phi::memory_utils::Alloc(
-      ctx.GetPlace(),
+      dev_ctx.GetPlace(),
       buffer_size,
-      phi::Stream(reinterpret_cast<phi::StreamId>(ctx.stream())));
+      phi::Stream(reinterpret_cast<phi::StreamId>(dev_ctx.stream())));
   void* d_buffer = static_cast<void*>(d_buffer_ptr->ptr());
 
   phi::dynload::cusparseSDDMM(handle,
@@ -539,9 +539,9 @@ void DotSdd(const phi::GPUContext& ctx,
   CusparseDestroy(&mat_a, &mat_b, &mat_c);
   phi::dynload::cusparseDestroy(handle);
 #else
-  PADDLE_THROW(
-      phi::errors::Unimplemented("DotSdd use cusparseSDDMM, which is supported "
-                                 "from CUDA 11.3"));
+  PADDLE_THROW(common::errors::Unimplemented(
+      "DotSdd use cusparseSDDMM, which is supported "
+      "from CUDA 11.3"));
 #endif
 }
 
@@ -550,7 +550,7 @@ input: sparse A in CSR format (num_rows,num_rows), dense B (num_rows,num_cols)
 output: dense C (num_rows,num_cols)
 */
 template <typename DeviceContext, typename T>
-void DotDsd(const phi::GPUContext& ctx,
+void DotDsd(const phi::GPUContext& dev_ctx,
             const phi::DenseTensor* a_offset,
             const phi::DenseTensor* a_columns,
             const phi::DenseTensor* a_value,
@@ -621,9 +621,9 @@ void DotDsd(const phi::GPUContext& ctx,
                                         CUSPARSE_SPMM_ALG_DEFAULT,
                                         &buffer_size);
   auto d_buffer_ptr = phi::memory_utils::Alloc(
-      ctx.GetPlace(),
+      dev_ctx.GetPlace(),
       buffer_size,
-      phi::Stream(reinterpret_cast<phi::StreamId>(ctx.stream())));
+      phi::Stream(reinterpret_cast<phi::StreamId>(dev_ctx.stream())));
   void* d_buffer = static_cast<void*>(d_buffer_ptr->ptr());
 
   phi::dynload::cusparseSpMM(handle,
@@ -641,9 +641,9 @@ void DotDsd(const phi::GPUContext& ctx,
   CusparseDestroy(&mat_b, &mat_c, &mat_a);
   phi::dynload::cusparseDestroy(handle);
 #else
-  PADDLE_THROW(
-      phi::errors::Unimplemented("DotDsd use cusparseSpMM, which is supported "
-                                 "from CUDA 11.0"));
+  PADDLE_THROW(common::errors::Unimplemented(
+      "DotDsd use cusparseSpMM, which is supported "
+      "from CUDA 11.0"));
 #endif
 }
 

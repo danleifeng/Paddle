@@ -58,11 +58,12 @@ class PrintOp : public framework::OperatorBase {
 
     PADDLE_ENFORCE_NOT_NULL(
         in_var,
-        phi::errors::NotFound("The input:%s not found in scope", Input("In")));
+        common::errors::NotFound("The input:%s not found in scope",
+                                 Input("In")));
     PADDLE_ENFORCE_NOT_NULL(
         out_var,
-        phi::errors::NotFound("The output:%s not found in scope",
-                              Output("Out")));
+        common::errors::NotFound("The output:%s not found in scope",
+                                 Output("Out")));
 
     auto &in_tensor = in_var->Get<phi::DenseTensor>();
     phi::DenseTensor *out_tensor = out_var->GetMutable<phi::DenseTensor>();
@@ -185,6 +186,6 @@ REGISTER_OPERATOR(print,
 
 REGISTER_OP_VERSION(print).AddCheckpoint(
     R"ROC(Upgrade print add a new attribute [print_tensor_layout] to "
-             "contorl whether to print tensor's layout.)ROC",
+             "control whether to print tensor's layout.)ROC",
     paddle::framework::compatible::OpVersionDesc().NewAttr(
         "print_tensor_layout", "Whether to print the tensor's layout.", true));

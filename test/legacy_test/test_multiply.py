@@ -17,13 +17,13 @@ import unittest
 import numpy as np
 
 import paddle
-from paddle import tensor
-from paddle.static import Program, program_guard
+from paddle import static, tensor
+from paddle.base.framework import in_pir_mode
 
 
 class TestMultiplyApi(unittest.TestCase):
     def _run_static_graph_case(self, x_data, y_data):
-        with program_guard(Program(), Program()):
+        with static.program_guard(static.Program(), static.Program()):
             paddle.enable_static()
             x = paddle.static.data(
                 name='x', shape=x_data.shape, dtype=x_data.dtype
@@ -110,13 +110,14 @@ class TestMultiplyError(unittest.TestCase):
     def test_errors(self):
         # test static computation graph: dtype can not be int8
         paddle.enable_static()
-        with program_guard(Program(), Program()):
+        with static.program_guard(static.Program(), static.Program()):
             x = paddle.static.data(name='x', shape=[100], dtype=np.int8)
             y = paddle.static.data(name='y', shape=[100], dtype=np.int8)
-            self.assertRaises(TypeError, tensor.multiply, x, y)
+            if not in_pir_mode():
+                self.assertRaises(TypeError, tensor.multiply, x, y)
 
         # test static computation graph: inputs must be broadcastable
-        with program_guard(Program(), Program()):
+        with static.program_guard(static.Program(), static.Program()):
             x = paddle.static.data(name='x', shape=[20, 50], dtype=np.float64)
             y = paddle.static.data(name='y', shape=[20], dtype=np.float64)
             self.assertRaises(ValueError, tensor.multiply, x, y)
@@ -183,7 +184,7 @@ class TestMultiplyError(unittest.TestCase):
 
 class TestMultiplyInplaceApi(TestMultiplyApi):
     def _run_static_graph_case(self, x_data, y_data):
-        with program_guard(Program(), Program()):
+        with static.program_guard(static.Program(), static.Program()):
             paddle.enable_static()
             x = paddle.static.data(
                 name='x', shape=x_data.shape, dtype=x_data.dtype
@@ -231,6 +232,62 @@ class TestMultiplyInplaceError(unittest.TestCase):
 
         self.assertRaises(ValueError, multiply_shape_error)
         paddle.enable_static()
+
+
+class TestMultiplyApiZeroSize(TestMultiplyApi):
+
+    # only support the 0 size tensor
+    def _test_grad(self, x_data, y_data):
+        paddle.disable_static()
+        x = paddle.to_tensor(x_data, stop_gradient=False)
+        y = paddle.to_tensor(y_data, stop_gradient=False)
+        z = paddle.multiply(x, y)
+        loss = z.sum()
+        loss.backward()
+        np.testing.assert_allclose(
+            x.grad.numpy(), np.zeros(self.x_shape).astype('float32'), rtol=1e-05
+        )
+        np.testing.assert_allclose(
+            y.grad.numpy(), np.zeros(self.y_shape).astype('float32'), rtol=1e-05
+        )
+
+    def init_shapes(self):
+        self.x_shape = [0, 4]
+        self.y_shape = [0, 1]
+
+    def test_multiply(self):
+        np.random.seed(7)
+        self.init_shapes()
+
+        # test static computation graph
+        x_data = np.random.rand(*(self.x_shape)).astype('float32')
+        y_data = np.random.rand(*(self.y_shape)).astype('float32')
+        expected_res = np.multiply(x_data, y_data)
+        res = self._run_static_graph_case(x_data, y_data)
+        np.testing.assert_allclose(res, expected_res, rtol=1e-05)
+        # test dynamic computation graph
+        res = self._run_dynamic_graph_case(x_data, y_data)
+        np.testing.assert_allclose(res, expected_res, rtol=1e-05)
+        # test gradient
+        self._test_grad(x_data, y_data)
+
+
+class TestMultiplyApiZeroSize1(TestMultiplyApiZeroSize):
+    def init_shapes(self):
+        self.x_shape = [6, 0]
+        self.y_shape = [6, 0]
+
+
+class TestMultiplyApiZeroSize2(TestMultiplyApiZeroSize):
+    def init_shapes(self):
+        self.x_shape = [1, 8]
+        self.y_shape = [0, 1]
+
+
+class TestMultiplyApiZeroSize3(TestMultiplyApiZeroSize):
+    def init_shapes(self):
+        self.x_shape = [5, 0]
+        self.y_shape = [5, 1]
 
 
 if __name__ == '__main__':

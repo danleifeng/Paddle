@@ -18,13 +18,11 @@ import numpy as np
 
 import paddle
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestRot90_API(unittest.TestCase):
     """Test rot90 api."""
 
-    @test_with_pir_api
     def test_static_graph(self):
         paddle.enable_static()
         startup_program = base.Program()
@@ -55,7 +53,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_k_0(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -85,7 +82,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_k_2(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -115,7 +111,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_k_3(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -145,7 +140,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_neg_k_1(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -175,7 +169,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_neg_k_2(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -205,7 +198,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_neg_k_3(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -235,7 +227,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_static_neg_k_4(self):
         paddle.enable_static()
         input = paddle.static.data(name='input', dtype='float32', shape=[2, 3])
@@ -265,7 +256,6 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(out_np),
             )
 
-    @test_with_pir_api
     def test_error_api(self):
         paddle.enable_static()
 
@@ -324,6 +314,45 @@ class TestRot90_API(unittest.TestCase):
                 msg='rot90 output is wrong, out =' + str(ret.numpy()),
             )
 
+
+def create_test_zero_size_class(op_type, dtype, shape, axis):
+    class Cls(unittest.TestCase):
+        def test_zero_size(self):
+            paddle.disable_static()
+            numpy_tensor_1 = np.random.rand(*shape).astype(dtype)
+            paddle_x = paddle.to_tensor(numpy_tensor_1)
+            paddle_x.stop_gradient = False
+
+            paddle_api = eval(f"paddle.{op_type}")
+            paddle_out = paddle_api(paddle_x, axes=axis)
+            numpy_api = eval(f"np.{op_type}")
+            numpy_out = numpy_api(numpy_tensor_1, axes=axis)
+
+            loss = paddle.sum(paddle_out)
+            loss.backward()
+
+            np.testing.assert_allclose(
+                paddle_out.numpy(),
+                numpy_out,
+                1e-2,
+                1e-2,
+            )
+            np.testing.assert_allclose(
+                paddle_out.shape,
+                numpy_out.shape,
+            )
+            np.testing.assert_allclose(
+                paddle_x.grad.shape,
+                paddle_x.shape,
+            )
+
+    cls_name = f"{op_type}{dtype}_ZeroSize"
+    Cls.__name__ = cls_name
+    globals()[cls_name] = Cls
+
+
+create_test_zero_size_class("rot90", "float32", [3, 4, 0], (0, 1))
+create_test_zero_size_class("rot90", "int32", [3, 4, 0, 3, 4], (0, 1))
 
 if __name__ == "__main__":
     unittest.main()

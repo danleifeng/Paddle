@@ -26,6 +26,7 @@ void CEmbeddingKernel(const Context& dev_ctx,
                       int64_t start_index,
                       int64_t vocab_size,
                       DenseTensor* out) {
+#if defined(PADDLE_WITH_XPU_BKCL)
   const T* table_data = w.data<T>();
   T* output_data = dev_ctx.template Alloc<T>(out);
   using XPUType = typename XPUTypeTrait<T>::Type;
@@ -33,40 +34,38 @@ void CEmbeddingKernel(const Context& dev_ctx,
   const int64_t height = w.dims()[0];
   const int64_t width = w.dims()[1];
 
-  // int embedding(Context* ctx, const T* x, const TID* indices, T* y, int xm,
-  // int n, int ym, int padding_idx, TID start_index = 0);
-
-  // xm: table height: number of entries of table.
-  // n: embedding dim: number of float value within single entry.
-  // ym: number of elements of input ids.
-
   const auto& index_type = ids.dtype();
   if (index_type == phi::DataType::INT32) {
-    int r = xpu::embedding(dev_ctx.x_context(),
-                           reinterpret_cast<const XPUType*>(table_data),
-                           ids.data<int32_t>(),
-                           reinterpret_cast<XPUType*>(output_data),
-                           height,
-                           width,
-                           ids.numel(),
-                           -1,
-                           static_cast<int32_t>(start_index));
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "embedding");
+    int r = xpu::paddle_embedding(dev_ctx.x_context(),
+                                  reinterpret_cast<const XPUType*>(table_data),
+                                  ids.data<int32_t>(),
+                                  reinterpret_cast<XPUType*>(output_data),
+                                  height,
+                                  width,
+                                  ids.numel(),
+                                  -1,
+                                  static_cast<int32_t>(start_index));
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_embedding");
   } else if (index_type == phi::DataType::INT64) {
-    int r = xpu::embedding(dev_ctx.x_context(),
-                           reinterpret_cast<const XPUType*>(table_data),
-                           ids.data<int64_t>(),
-                           reinterpret_cast<XPUType*>(output_data),
-                           height,
-                           width,
-                           ids.numel(),
-                           -1,
-                           static_cast<int64_t>(start_index));
-    PADDLE_ENFORCE_XDNN_SUCCESS(r, "embedding");
+    int r = xpu::paddle_embedding(dev_ctx.x_context(),
+                                  reinterpret_cast<const XPUType*>(table_data),
+                                  ids.data<int64_t>(),
+                                  reinterpret_cast<XPUType*>(output_data),
+                                  height,
+                                  width,
+                                  ids.numel(),
+                                  -1,
+                                  static_cast<int64_t>(start_index));
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_embedding");
   } else {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "XPU c_embedding ids only support int32 or int64."));
   }
+#else
+  PADDLE_THROW(common::errors::PreconditionNotMet(
+      "PaddlePaddle is not compiled with DWITH_XPU_BKCL, please recompile with "
+      "DWITH_XPU_BKCL for using c_embedding."));
+#endif
 }
 }  // namespace phi
 

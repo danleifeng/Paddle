@@ -15,7 +15,6 @@
 #pragma once
 
 #include <memory>
-#include "paddle/phi/common/place.h"
 #include "paddle/pir/include/core/dll_decl.h"
 
 namespace paddle {

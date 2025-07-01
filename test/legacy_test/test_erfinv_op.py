@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -30,7 +31,7 @@ class TestErfinvOp(OpTest):
         self.op_type = "erfinv"
         self.python_api = paddle.erfinv
         self.init_dtype()
-        self.shape = [11, 17]
+        self.init_shape()
         self.x = np.random.uniform(-1, 1, size=self.shape).astype(self.dtype)
         self.res_ref = erfinv(self.x).astype(self.dtype)
         self.grad_out = np.ones(self.shape, self.dtype)
@@ -40,11 +41,14 @@ class TestErfinvOp(OpTest):
         self.inputs = {'X': self.x}
         self.outputs = {'Out': self.res_ref}
 
+    def init_shape(self):
+        self.shape = [11, 17]
+
     def init_dtype(self):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -61,6 +65,11 @@ class TestErfinvFP64Op(TestErfinvOp):
         self.dtype = np.float64
 
 
+class TestErfinvOp_ZeroSize(TestErfinvOp):
+    def init_shape(self):
+        self.shape = [0, 17]
+
+
 class TestErfinvAPIOp(unittest.TestCase):
     def init_dtype(self):
         self.dtype = 'float32'
@@ -69,7 +78,13 @@ class TestErfinvAPIOp(unittest.TestCase):
         self.init_dtype()
         self.x = np.random.rand(5).astype(self.dtype)
         self.res_ref = erfinv(self.x)
-        self.place = [paddle.CPUPlace()]
+        self.place = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.place.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.place.append(paddle.CUDAPlace(0))
 
@@ -144,7 +159,9 @@ class TestErfinvBF16Op(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)

@@ -13,7 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -29,6 +29,8 @@ from paddle.nn.functional import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
     from paddle._typing.dtype_like import _DTypeLiteral
 
@@ -144,11 +146,11 @@ class Bernoulli(exponential_family.ExponentialFamily):
         """
         return paddle.multiply(self.probs, (1 - self.probs))
 
-    def sample(self, shape: Sequence[int]) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Sample from Bernoulli distribution.
 
         Args:
-            shape (Sequence[int]): Sample shape.
+            shape (Sequence[int], optional): Sample shape.
 
         Returns:
             Tensor: Sampled data with shape `sample_shape` + `batch_shape` + `event_shape`.
@@ -191,7 +193,9 @@ class Bernoulli(exponential_family.ExponentialFamily):
         with paddle.no_grad():
             return paddle.bernoulli(self.probs.expand(shape), name=name)
 
-    def rsample(self, shape: Sequence[int], temperature: float = 1.0) -> Tensor:
+    def rsample(
+        self, shape: Sequence[int] = [], temperature: float = 1.0
+    ) -> Tensor:
         """Sample from Bernoulli distribution (reparameterized).
 
         The `rsample` is a continuously approximate of Bernoulli distribution reparameterized sample method.
@@ -202,7 +206,7 @@ class Bernoulli(exponential_family.ExponentialFamily):
             `rsample` need to be followed by a `sigmoid`, which converts samples' value to unit interval (0, 1).
 
         Args:
-            shape (Sequence[int]): Sample shape.
+            shape (Sequence[int], optional): Sample shape.
             temperature (float): temperature for rsample, must be positive.
 
         Returns:

@@ -17,10 +17,10 @@ import unittest
 
 import numpy as np
 from op_test import OpTest, convert_float_to_uint16
+from utils import dygraph_guard, static_guard
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 random.seed(2021)
 
@@ -40,16 +40,21 @@ def find_output_shape(input_list):
             shape = list(reversed(x.shape))
             if i < len(shape) and shape[i] != 1:
                 output_shape[i] = shape[i]
-
+            if output_shape[i] == 0:
+                break
     return list(reversed(output_shape))
 
 
 def make_inputs_outputs(input_shapes, dtype, is_bfloat16=False):
     """Automatically generate formatted inputs and outputs from input_shapes"""
     input_list = [
-        (np.random.random(shape) + 1j * np.random.random(shape)).astype(dtype)
-        if dtype == 'complex64' or dtype == 'complex128'
-        else np.random.random(shape).astype(dtype)
+        (
+            (np.random.random(shape) + 1j * np.random.random(shape)).astype(
+                dtype
+            )
+            if dtype == 'complex64' or dtype == 'complex128'
+            else np.random.random(shape).astype(dtype)
+        )
         for shape in input_shapes
     ]
     output_shape = find_output_shape(input_list)
@@ -254,11 +259,12 @@ class TestBroadcastTensorsAPI(unittest.TestCase):
         self.dtype = 'float32'
 
     def test_api(self):
-        @test_with_pir_api
+
         def test_static():
-            prog = paddle.static.Program()
-            startup_prog = paddle.static.Program()
-            with paddle.static.program_guard(prog, startup_prog):
+            with (
+                static_guard(),
+                paddle.static.program_guard(paddle.static.Program()),
+            ):
                 inputs = [
                     paddle.static.data(
                         shape=[-1, 4, 1, 4, 1], dtype=self.dtype, name="x0"
@@ -270,8 +276,7 @@ class TestBroadcastTensorsAPI(unittest.TestCase):
                 paddle.broadcast_tensors(inputs)
 
         def test_dynamic():
-            paddle.disable_static()
-            try:
+            with dygraph_guard():
                 inputs = [
                     paddle.to_tensor(
                         np.random.random([4, 1, 4, 1]).astype(self.dtype)
@@ -291,8 +296,6 @@ class TestBroadcastTensorsAPI(unittest.TestCase):
                     ),
                 ]
                 paddle.broadcast_tensors(inputs)
-            finally:
-                paddle.enable_static()
 
         test_static()
         test_dynamic()
@@ -311,48 +314,68 @@ class TestBroadcastTensorsAPI_complex128(TestBroadcastTensorsAPI):
 class TestRaiseBroadcastTensorsError(unittest.TestCase):
     def test_errors(self):
         def test_type():
-            inputs = [
-                paddle.static.data(
-                    shape=[-1, 1, 1, 1, 1], dtype='float32', name="x4"
-                ),
-                paddle.static.data(
-                    shape=[-1, 1, 4, 1, 1], dtype='float64', name="x5"
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with (
+                static_guard(),
+                paddle.static.program_guard(paddle.static.Program()),
+            ):
+                inputs = [
+                    paddle.static.data(
+                        shape=[-1, 1, 1, 1, 1], dtype='float32', name="x4"
+                    ),
+                    paddle.static.data(
+                        shape=[-1, 1, 4, 1, 1], dtype='float64', name="x5"
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
         def test_dtype():
-            inputs = [
-                paddle.static.data(
-                    shape=[-1, 1, 1, 1, 1], dtype='int8', name="x6"
-                ),
-                paddle.static.data(
-                    shape=[-1, 1, 4, 1, 1], dtype='int8', name="x7"
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with (
+                static_guard(),
+                paddle.static.program_guard(paddle.static.Program()),
+            ):
+                inputs = [
+                    paddle.static.data(
+                        shape=[-1, 1, 1, 1, 1], dtype='int8', name="x6"
+                    ),
+                    paddle.static.data(
+                        shape=[-1, 1, 4, 1, 1], dtype='int8', name="x7"
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
         def test_bcast_semantics():
-            inputs = [
-                paddle.static.data(
-                    shape=[-1, 1, 3, 1, 1], dtype='float32', name="x9"
-                ),
-                paddle.static.data(
-                    shape=[-1, 1, 8, 1, 1], dtype='float32', name="x10"
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with (
+                static_guard(),
+                paddle.static.program_guard(paddle.static.Program()),
+            ):
+                inputs = [
+                    paddle.static.data(
+                        shape=[-1, 1, 3, 1, 1], dtype='float32', name="x9"
+                    ),
+                    paddle.static.data(
+                        shape=[-1, 1, 8, 1, 1], dtype='float32', name="x10"
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
         def test_bcast_semantics_complex64():
-            inputs = [
-                paddle.static.data(
-                    shape=[-1, 1, 3, 1, 1], dtype='complex64', name="x11"
-                ),
-                paddle.static.data(
-                    shape=[-1, 1, 8, 1, 1], dtype='complex64', name="x12"
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with (
+                static_guard(),
+                paddle.static.program_guard(paddle.static.Program()),
+            ):
+                inputs = [
+                    paddle.static.data(
+                        shape=[-1, 1, 3, 1, 1],
+                        dtype='complex64',
+                        name="x11",
+                    ),
+                    paddle.static.data(
+                        shape=[-1, 1, 8, 1, 1],
+                        dtype='complex64',
+                        name="x12",
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
         self.assertRaises(TypeError, test_type)
         self.assertRaises(TypeError, test_dtype)
@@ -367,43 +390,157 @@ class TestRaiseBroadcastTensorsError(unittest.TestCase):
 class TestRaiseBroadcastTensorsErrorDyGraph(unittest.TestCase):
     def test_errors(self):
         def test_type():
-            inputs = [
-                paddle.to_tensor(
-                    np.ones(shape=[1, 1, 1, 1], dtype='float32', name="x4")
-                ),
-                paddle.to_tensor(
-                    np.ones(shape=[1, 4, 1, 1], dtype='float64', name="x5")
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with dygraph_guard():
+                inputs = [
+                    paddle.to_tensor(
+                        np.ones(shape=[1, 1, 1, 1], dtype='float32', name="x4")
+                    ),
+                    paddle.to_tensor(
+                        np.ones(shape=[1, 4, 1, 1], dtype='float64', name="x5")
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
         def test_dtype():
-            inputs = [
-                paddle.to_tensor(
-                    np.ones(shape=[1, 1, 1, 1], dtype='int8', name="x6")
-                ),
-                paddle.to_tensor(
-                    np.ones(shape=[1, 4, 1, 1], dtype='int8', name="x7")
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with dygraph_guard():
+                inputs = [
+                    paddle.to_tensor(
+                        np.ones(shape=[1, 1, 1, 1], dtype='int8', name="x6")
+                    ),
+                    paddle.to_tensor(
+                        np.ones(shape=[1, 4, 1, 1], dtype='int8', name="x7")
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
         def test_bcast_semantics():
-            inputs = [
-                paddle.to_tensor(
-                    np.ones(shape=[1, 3, 1, 1], dtype='float32', name="x9")
-                ),
-                paddle.to_tensor(
-                    np.ones(shape=[1, 8, 1, 1], dtype='float32', name="x10")
-                ),
-            ]
-            paddle.broadcast_tensors(inputs)
+            with dygraph_guard():
+                inputs = [
+                    paddle.to_tensor(
+                        np.ones(shape=[1, 3, 1, 1], dtype='float32', name="x9")
+                    ),
+                    paddle.to_tensor(
+                        np.ones(shape=[1, 8, 1, 1], dtype='float32', name="x10")
+                    ),
+                ]
+                paddle.broadcast_tensors(inputs)
 
-        paddle.disable_static()
         self.assertRaises(TypeError, test_type)
         self.assertRaises(TypeError, test_dtype)
         self.assertRaises(TypeError, test_bcast_semantics)
-        paddle.enable_static()
+
+
+class TestBroadcastTensorsAPISingle(unittest.TestCase):
+    def setUp(self):
+        self.dtype = 'float32'
+        self.set_dtypes()
+
+    def set_dtypes(self):
+        pass
+
+    def test_single_static(self):
+        with (
+            static_guard(),
+            paddle.static.program_guard(paddle.static.Program()),
+        ):
+            inputs = [
+                paddle.static.data(
+                    shape=[1, 4, 1, 4], dtype=self.dtype, name="x0"
+                ),
+            ]
+            outputs = paddle.broadcast_tensors(inputs)
+            self.assertEqual(len(outputs), 1)
+
+    def test_single_dynamic(self):
+        with dygraph_guard():
+            inputs = [
+                paddle.to_tensor(
+                    np.random.random([1, 4, 1, 4]).astype(self.dtype)
+                ),
+            ]
+            outputs = paddle.broadcast_tensors(inputs)
+            self.assertEqual(len(outputs), 1)
+
+
+class TestBroadcastTensorsAPIZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.dtype = 'float64'
+        self.shape1 = [0, 4, 2]
+        self.shape2 = [1, 4, 1]
+        self.expected_shape = [0, 4, 2]
+        self.set_dtype()
+
+    def set_dtype(self):
+        pass
+
+    def test_zero_size_static(self):
+        with (
+            static_guard(),
+            paddle.static.program_guard(paddle.static.Program()),
+        ):
+            inputs = [
+                paddle.static.data(
+                    shape=self.shape1, dtype=self.dtype, name="x0"
+                ),
+                paddle.static.data(
+                    shape=self.shape2, dtype=self.dtype, name="x1"
+                ),
+            ]
+            outputs = paddle.broadcast_tensors(inputs)
+            self.assertEqual(outputs[0].shape, self.expected_shape)
+            self.assertEqual(outputs[1].shape, self.expected_shape)
+
+    def test_zero_size_dynamic(self):
+        with dygraph_guard():
+            data1 = np.zeros(self.shape1, dtype=self.dtype)
+            data2 = np.zeros(self.shape2, dtype=self.dtype)
+
+            inputs = [
+                paddle.to_tensor(data1, dtype=self.dtype),
+                paddle.to_tensor(data2, dtype=self.dtype),
+            ]
+            outputs = paddle.broadcast_tensors(inputs)
+            self.assertEqual(outputs[0].shape, self.expected_shape)
+            self.assertEqual(outputs[1].shape, self.expected_shape)
+
+
+class TestBroadcastTensorsAPIZeroSize_bool(TestBroadcastTensorsAPIZeroSize):
+    def set_dtype(self):
+        self.dtype = 'bool'
+
+
+class TestBroadcastTensorsAPIZeroSize_int32(TestBroadcastTensorsAPIZeroSize):
+    def set_dtype(self):
+        self.dtype = 'int32'
+
+
+class TestBroadcastTensorsAPIZeroSize_int64(TestBroadcastTensorsAPIZeroSize):
+    def set_dtype(self):
+        self.dtype = 'int64'
+
+
+class TestBroadcastTensorsAPIZeroSize_float32(TestBroadcastTensorsAPIZeroSize):
+    def set_dtype(self):
+        self.dtype = 'float32'
+
+
+class TestBroadcastTensorsAPIZeroSize_float16(TestBroadcastTensorsAPIZeroSize):
+    def set_dtype(self):
+        self.dtype = 'float16'
+
+
+class TestBroadcastTensorsAPIZeroSize_complex64(
+    TestBroadcastTensorsAPIZeroSize
+):
+    def set_dtype(self):
+        self.dtype = 'complex64'
+
+
+class TestBroadcastTensorsAPIZeroSize_complex128(
+    TestBroadcastTensorsAPIZeroSize
+):
+    def set_dtype(self):
+        self.dtype = 'complex128'
 
 
 if __name__ == '__main__':

@@ -33,7 +33,7 @@ class FillConstantOp : public framework::OperatorWithKernel {
         PADDLE_ENFORCE_GE(
             shape[i],
             0,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "Each value of attribute 'shape' is expected to be no less "
                 "than 0. But received: shape[%u] = %d; shape = [%s].",
                 i,
@@ -78,7 +78,7 @@ class FillConstantOp : public framework::OperatorWithKernel {
     // TODO(zyfncg) The force_cpu and place_type are conflicted, it's an issue
     // left before, and we may merge them in the future.
     // In order to invoke new fill_constant kernel, the place of OpKernelType
-    // will be setted by force_cpu and place_type here.
+    // will be set by force_cpu and place_type here.
     if (ctx.Attr<bool>("force_cpu")) {
       kt.set_backend(phi::Backend::CPU);
     }
@@ -96,7 +96,7 @@ class FillConstantOp : public framework::OperatorWithKernel {
           kt.set_backend(phi::Backend::XPU);
           break;
         default:
-          PADDLE_THROW(phi::errors::Unimplemented(
+          PADDLE_THROW(common::errors::Unimplemented(
               "Could NOT determine the place of variable, place_type = %d .",
               place_type));
       }

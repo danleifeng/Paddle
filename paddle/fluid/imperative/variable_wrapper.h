@@ -22,10 +22,10 @@
 #include "paddle/common/layout.h"
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/op_kernel_type.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/fluid/framework/variable.h"
 #include "paddle/fluid/imperative/hooks.h"
 #include "paddle/fluid/imperative/op_base.h"
+#include "paddle/phi/core/vocab/string_array.h"
 
 namespace paddle {
 namespace imperative {
@@ -109,8 +109,8 @@ class VariableWrapper {
       } else if (var_.IsType<phi::SelectedRows>()) {
         tensor = &(var_.Get<phi::SelectedRows>().value());
       } else {
-        PADDLE_THROW(phi::errors::PermissionDenied(
-            "Only support LoDTensor and SelectedRows for gradient var"));
+        PADDLE_THROW(common::errors::PermissionDenied(
+            "Only support DenseTensor and SelectedRows for gradient var"));
       }
       if (tensor && tensor->IsInitialized()) {
         is_empty = false;
@@ -152,13 +152,13 @@ class VariableWrapper {
   framework::proto::VarType::Type DataType() const {
     const phi::DenseTensor* tensor = nullptr;
     if (var_.IsInitialized()) {
-      if (type_ == framework::proto::VarType::LOD_TENSOR) {
+      if (type_ == framework::proto::VarType::DENSE_TENSOR) {
         tensor = &(var_.Get<phi::DenseTensor>());
       } else if (type_ == framework::proto::VarType::SELECTED_ROWS) {
         tensor = &(var_.Get<phi::SelectedRows>().value());
       } else if (type_ == framework::proto::VarType::VOCAB) {
-        const framework::Vocab* data = nullptr;
-        data = &(var_.Get<framework::Vocab>());
+        const phi::Vocab* data = nullptr;
+        data = &(var_.Get<phi::Vocab>());
         if (data && data->size() != 0) {
           VLOG(6) << "The tensor of variable " << name_
                   << " is not initialized";
@@ -195,7 +195,7 @@ class VariableWrapper {
     const phi::DenseTensor* tensor = nullptr;
     auto place = phi::CPUPlace();  // Default place for var not initialized.
     if (var_.IsInitialized()) {
-      if (type_ == framework::proto::VarType::LOD_TENSOR) {
+      if (type_ == framework::proto::VarType::DENSE_TENSOR) {
         tensor = &(var_.Get<phi::DenseTensor>());
       } else if (type_ == framework::proto::VarType::SELECTED_ROWS) {
         tensor = &(var_.Get<phi::SelectedRows>().value());
@@ -286,7 +286,7 @@ class VariableWrapper {
       PADDLE_ENFORCE_EQ(
           shared_var,
           nullptr,
-          phi::errors::PermissionDenied(
+          common::errors::PermissionDenied(
               "Cannot set gradient variable wrapper twice for %s", name_));
       grad_var_ = var;
     }
@@ -305,7 +305,7 @@ class VariableWrapper {
         PADDLE_ENFORCE_EQ(
             shared_node,
             nullptr,
-            phi::errors::PermissionDenied(
+            common::errors::PermissionDenied(
                 "Cannot set gradient op twice unless using Inplace Strategy."));
       } else if (shared_node) {
         VLOG(3) << "The gradient op of Var (" << Name()
@@ -331,7 +331,8 @@ class VariableWrapper {
   // calculation.
   uint32_t inplace_version_snapshot_{0};
 
-  framework::proto::VarType::Type type_{framework::proto::VarType::LOD_TENSOR};
+  framework::proto::VarType::Type type_{
+      framework::proto::VarType::DENSE_TENSOR};
   framework::proto::VarType::Type data_type_{framework::proto::VarType::FP32};
 
   // See [ Why need handle complex gradient to real gradient? ]

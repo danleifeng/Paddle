@@ -29,9 +29,9 @@ class TestFleet1(unittest.TestCase):
     def setUp(self):
         """Set up, set envs."""
         os.environ["PADDLE_TRAINERS_NUM"] = "2"
-        os.environ[
-            "PADDLE_PSERVERS_IP_PORT_LIST"
-        ] = "127.0.0.1:36001,127.0.0.2:36001"
+        os.environ["PADDLE_PSERVERS_IP_PORT_LIST"] = (
+            "127.0.0.1:36001,127.0.0.2:36001"
+        )
 
     def test_pslib_1(self):
         """Test cases for pslib."""
@@ -62,7 +62,6 @@ class TestFleet1(unittest.TestCase):
                 name="show",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=1,
             )
             emb = paddle.static.nn.embedding(
                 input=show,
@@ -76,7 +75,6 @@ class TestFleet1(unittest.TestCase):
                 name="click",
                 shape=[-1, 1],
                 dtype="int64",
-                lod_level=1,
             )
             label_cast = paddle.cast(label, dtype='float32')
             cost = paddle.nn.functional.log_loss(fc, label_cast)

@@ -4,18 +4,6 @@ endif()
 
 add_subdirectory(details)
 
-if(WITH_ONEDNN)
-  set(mkldnn_quantizer_cfg mkldnn_quantizer_config)
-  set(mkldnn_quantizer_src ${CMAKE_CURRENT_SOURCE_DIR}/onednn_quantizer.cc)
-  cc_library(
-    ${mkldnn_quantizer_cfg}
-    SRCS onednn_quantizer_config.cc
-    DEPS lod_tensor paddle_pass_builder)
-  set(mkldnn_quantizer_cfg
-      ${mkldnn_quantizer_cfg}
-      PARENT_SCOPE)
-endif()
-
 cc_library(
   paddle_infer_contrib
   SRCS paddle_infer_contrib.cc
@@ -58,8 +46,7 @@ endif()
 cc_library(
   analysis_config
   SRCS analysis_config.cc
-  DEPS ${mkldnn_quantizer_cfg} paddle_inference_api paddle_pass_builder
-       table_printer utf8proc)
+  DEPS paddle_inference_api paddle_pass_builder table_printer utf8proc)
 
 if(WIN32)
   target_link_libraries(paddle_inference_api phi common)
@@ -78,16 +65,14 @@ if(WITH_GPU AND TENSORRT_FOUND)
   set(inference_deps ${inference_deps} tensorrt_engine tensorrt_converter)
 endif()
 
+if(WITH_OPENVINO)
+  set(inference_deps ${inference_deps} openvino_engine)
+endif()
+
 set(ANALYSIS_PREDICTOR_SRCS analysis_predictor.cc resource_manager.cc
-                            infer_context.cc ${mkldnn_quantizer_src})
-set(ANALYSIS_PREDICTOR_DEPS
-    ${inference_deps}
-    zero_copy_tensor
-    ir_pass_manager
-    op_compatible_info
-    infer_io_utils
-    model_utils
-    fleet_executor)
+                            infer_context.cc)
+set(ANALYSIS_PREDICTOR_DEPS ${inference_deps} zero_copy_tensor ir_pass_manager
+                            op_compatible_info infer_io_utils model_utils)
 
 if(WITH_ONNXRUNTIME)
   set(ANALYSIS_PREDICTOR_SRCS ${ANALYSIS_PREDICTOR_SRCS}

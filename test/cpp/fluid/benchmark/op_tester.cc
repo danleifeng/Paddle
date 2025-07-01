@@ -22,8 +22,8 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #include "paddle/fluid/platform/init.h"
-#include "paddle/fluid/platform/profiler.h"
-#include "paddle/fluid/platform/timer.h"
+#include "paddle/phi/core/platform/profiler.h"
+#include "paddle/phi/core/platform/timer.h"
 
 // phi
 #include "paddle/phi/kernels/declarations.h"
@@ -51,7 +51,7 @@ void OpTester::Init(const OpTesterConfig &config) {
     CreateInputVarDesc();
     CreateOutputVarDesc();
   } else {
-    PADDLE_THROW(phi::errors::NotFound(
+    PADDLE_THROW(common::errors::NotFound(
         "Operator '%s' is not registered in OpTester.", config_.op_type));
   }
 
@@ -85,7 +85,7 @@ void OpTester::Run() {
       platform::EnableProfiler(platform::ProfilerState::kAll);
       platform::SetDeviceId(config_.device_id);
 #else
-      PADDLE_THROW(phi::errors::PermissionDenied(
+      PADDLE_THROW(common::errors::PermissionDenied(
           "'GPUPlace' is not supported in CPU only device."));
 #endif
     }
@@ -168,8 +168,8 @@ framework::proto::VarType::Type OpTester::TransToVarType(std::string str) {
   } else if (str == "fp64") {
     return framework::proto::VarType::FP64;
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented("Unsupported dtype %s in OpTester.",
-                                            str.c_str()));
+    PADDLE_THROW(common::errors::Unimplemented(
+        "Unsupported dtype %s in OpTester.", str.c_str()));
   }
 }
 
@@ -179,7 +179,7 @@ void OpTester::CreateInputVarDesc() {
     const OpInputConfig *input = config_.GetInput(name);
     PADDLE_ENFORCE_NOT_NULL(
         input,
-        phi::errors::NotFound(
+        common::errors::NotFound(
             "The input %s of operator %s is not correctly provided.",
             name,
             config_.op_type));
@@ -187,7 +187,7 @@ void OpTester::CreateInputVarDesc() {
     std::string var_name = config_.op_type + "." + name;
     framework::VarDesc *var = Var(var_name);
     // Need to support more type
-    var->SetType(framework::proto::VarType::LOD_TENSOR);
+    var->SetType(framework::proto::VarType::DENSE_TENSOR);
     var->SetPersistable(false);
     var->SetDataType(TransToVarType(input->dtype));
     var->SetShape(input->dims);
@@ -203,7 +203,7 @@ void OpTester::CreateOutputVarDesc() {
     std::string var_name = config_.op_type + "." + name;
     framework::VarDesc *var = Var(var_name);
     // Need to support more type
-    var->SetType(framework::proto::VarType::LOD_TENSOR);
+    var->SetType(framework::proto::VarType::DENSE_TENSOR);
     var->SetPersistable(false);
     var->SetDataType(framework::proto::VarType::FP32);
 
@@ -220,7 +220,7 @@ void OpTester::CreateOpDesc() {
     PADDLE_ENFORCE_NE(
         attr_types.find(name),
         attr_types.end(),
-        phi::errors::NotFound(
+        common::errors::NotFound(
             "Operator %s does not have attribute %d.", type_, name));
 
     const std::string &value_str = item.second;
@@ -243,7 +243,7 @@ void OpTester::CreateOpDesc() {
       case framework::proto::AttrType::INTS:
       case framework::proto::AttrType::FLOATS:
       case framework::proto::AttrType::STRINGS:
-        PADDLE_THROW(phi::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "Unsupported STRINGS type in OpTester yet."));
         break;
       case framework::proto::AttrType::LONG: {
@@ -252,8 +252,8 @@ void OpTester::CreateOpDesc() {
       } break;
       case framework::proto::AttrType::LONGS:
       default:
-        PADDLE_THROW(phi::errors::Unimplemented(
-            "Unsupport attr type %d in OpTester.", type));
+        PADDLE_THROW(common::errors::Unimplemented(
+            "Unsupported attr type %d in OpTester.", type));
     }
   }
 }
@@ -312,7 +312,7 @@ void OpTester::SetupTensor(phi::DenseTensor *tensor,
     }
     is.close();
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Unsupported initializer %s in OpTester.", initializer.c_str()));
   }
 
@@ -371,13 +371,13 @@ void OpTester::CreateVariables(framework::Scope *scope) {
                           item.second.initializer,
                           item.second.filename);
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unsupported dtype %d in OpTester.", data_type));
     }
 
     VLOG(3) << "Set lod for tensor " << var_name;
     std::vector<std::vector<size_t>> &lod_vec = item.second.lod;
-    framework::LoD lod;
+    phi::LegacyLoD lod;
     for (auto &item : lod_vec) {
       lod.push_back(item);
     }
@@ -401,7 +401,7 @@ std::string OpTester::DebugString() {
     ss << GenSpaces(count++) << "vars {\n";
     ss << GenSpaces(count) << "name: \"" << var->Name() << "\"\n";
     ss << GenSpaces(count++) << "type: {\n";
-    ss << GenSpaces(count) << "type: LOD_TENSOR\n";
+    ss << GenSpaces(count) << "type: DENSE_TENSOR\n";
     ss << GenSpaces(count++) << "lod_tensor {\n";
     ss << GenSpaces(count++) << "tensor {\n";
     const auto &data_type = var->GetDataType();
@@ -495,8 +495,8 @@ std::string OpTester::DebugString() {
            << "\n";
       } break;
       default:
-        PADDLE_THROW(phi::errors::Unimplemented(
-            "Unsupport attr type %d in OpTester.", attr_type));
+        PADDLE_THROW(common::errors::Unimplemented(
+            "Unsupported attr type %d in OpTester.", attr_type));
     }
     ss << GenSpaces(--count) << "}\n";
   }
@@ -510,8 +510,8 @@ TEST(op_tester, base) {
     PADDLE_ENFORCE_EQ(
         static_cast<bool>(fin),
         true,
-        phi::errors::InvalidArgument("OpTester cannot open file %s",
-                                     FLAGS_op_config_list.c_str()));
+        common::errors::InvalidArgument("OpTester cannot open file %s",
+                                        FLAGS_op_config_list.c_str()));
     std::vector<OpTesterConfig> op_configs;
     while (!fin.eof()) {
       VLOG(4) << "Reading config " << op_configs.size() << "...";

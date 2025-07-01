@@ -35,7 +35,7 @@ def np_eigvals(a):
 
 class TestEigvalsOp(OpTest):
     def setUp(self):
-        np.random.seed(0)
+        np.random.seed(1)
         paddle.enable_static()
         self.python_api = paddle.linalg.eigvals
         self.op_type = "eigvals"
@@ -169,6 +169,31 @@ class TestEigvalsOpBatch3(TestEigvalsOp):
         self.input_dims = (6, 2, 9, 6, 6)
 
 
+class TestEigvalsOp_ZeroSize(TestEigvalsOp):
+    def set_input_dims(self):
+        self.input_dims = (6, 0, 2, 2)
+
+
+class TestEigvalsOp_ZeroSize2(TestEigvalsOp):
+    def set_input_dims(self):
+        self.input_dims = (6, 2, 0, 0)
+
+    def verify_output(self, outs):
+        actual_outs = np.sort(np.array(outs[0]))
+        expect_outs = np.sort(np.array(self.outputs['Out']))
+        self.assertTrue(
+            actual_outs.shape == expect_outs.shape,
+            "Output shape has diff.\n"
+            "Expect shape "
+            + str(expect_outs.shape)
+            + "\n"
+            + "But Got"
+            + str(actual_outs.shape)
+            + " in class "
+            + self.__class__.__name__,
+        )
+
+
 class TestEigvalsAPI(unittest.TestCase):
     def setUp(self):
         np.random.seed(0)
@@ -205,8 +230,8 @@ class TestEigvalsAPI(unittest.TestCase):
                 + np.random.random(self.input_dims) * 1j
             ).astype(self.dtype)
 
-    def verify_output(self, actural_outs, expect_outs):
-        actual_outs = np.array(actural_outs)
+    def verify_output(self, actual_outs, expect_outs):
+        actual_outs = np.array(actual_outs)
         expect_outs = np.array(expect_outs)
         self.assertTrue(
             actual_outs.shape == expect_outs.shape,

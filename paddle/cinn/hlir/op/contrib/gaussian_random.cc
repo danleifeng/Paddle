@@ -17,9 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include "absl/types/variant.h"
+#include <variant>
 #include "glog/logging.h"
-#include "paddle/cinn/common/cas.h"
 #include "paddle/cinn/common/cinn_value.h"
 #include "paddle/cinn/common/common.h"
 #include "paddle/cinn/common/context.h"
@@ -39,7 +38,7 @@
 #include "paddle/cinn/ir/tensor.h"
 #include "paddle/cinn/lang/compute.h"
 #include "paddle/cinn/lang/packed_func.h"
-#include "paddle/cinn/poly/stage.h"
+#include "paddle/cinn/optim/ir_simplify.h"
 
 namespace cinn {
 namespace hlir {
@@ -56,7 +55,11 @@ std::shared_ptr<framework::OpStrategy> StrategyForGaussianRandom(
     const Target &target) {
   framework::CINNCompute gaussian_random_compute(
       [=](lang::Args args, lang::RetValue *ret) {
-        CHECK(attrs.attr_store.count("shape"));
+        PADDLE_ENFORCE_GT(attrs.attr_store.count("shape"),
+                          0,
+                          ::common::errors::InvalidArgument(
+                              "The attribute 'shape' must be present in the "
+                              "attribute store; please check your inputs."));
         ir::Tensor shape_tensor;
         std::string tensor_name = "gaussian_random_out";
         auto out = pe::Identity(shape_tensor, tensor_name).front();
@@ -64,10 +67,7 @@ std::shared_ptr<framework::OpStrategy> StrategyForGaussianRandom(
         *ret = CINNValuePack{res};
       });
   auto strategy = std::make_shared<framework::OpStrategy>();
-  strategy->AddImpl(gaussian_random_compute,
-                    GetElementwiseScheduleFunc(output_shapes, target),
-                    "strategy.gaussian_random.x86",
-                    1);
+  strategy->AddImpl(gaussian_random_compute, "strategy.gaussian_random.x86", 1);
   return strategy;
 }
 

@@ -12,9 +12,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_layout.h"
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class NearestInterpolateOpConverter : public OpConverter {
  public:
@@ -66,7 +64,7 @@ class NearestInterpolateOpConverter : public OpConverter {
       scale_w = scale;
     } else {
       // axis are different in static/dynamic mode
-      bool with_dynamic = engine_->with_dynamic_shape();
+      bool with_dynamic = true;
 
       if (!with_dynamic) {
         int h_axis = (data_layout == phi::DataLayout::kNCHW) + with_dynamic;
@@ -79,9 +77,7 @@ class NearestInterpolateOpConverter : public OpConverter {
       }
     }
 
-    if (engine_->with_dynamic_shape()) {
-      scales.push_back(1.f);
-    }
+    scales.push_back(1.f);
 
     if (data_layout == phi::DataLayout::kNCHW) {
       scales.push_back(1.f);
@@ -94,7 +90,7 @@ class NearestInterpolateOpConverter : public OpConverter {
       scales.push_back(1.f);
     } else {
       PADDLE_THROW(
-          phi::errors::InvalidArgument("Data layout must be NCHW or NHWC."));
+          common::errors::InvalidArgument("Data layout must be NCHW or NHWC."));
     }
     layer->setScales(scales.data(), scales.size());
 
@@ -102,8 +98,6 @@ class NearestInterpolateOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(nearest_interp, NearestInterpolateOpConverter);

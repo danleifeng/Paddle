@@ -21,7 +21,7 @@
 
 #include "paddle/fluid/framework/infershape_utils.h"
 #include "paddle/fluid/framework/new_executor/garbage_collector/garbage_collector.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 namespace paddle::framework {
 
@@ -35,7 +35,7 @@ VariableScope::VariableScope(Scope* scope)
   PADDLE_ENFORCE_NE(
       scope,
       nullptr,
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "You have passed a nullptr to construct VariableScope."));
 }
 
@@ -102,7 +102,7 @@ void VariableScope::AddVar(const std::string& name,
     PADDLE_ENFORCE_EQ(
         var_list_.size(),
         name2id_.size(),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The size of var_list and name2id map should be equal"));
   }
 }
@@ -136,7 +136,7 @@ bool VariableScope::GetVarSkipInplace(int id) const {
 void VariableScope::CheckExist(int id) const {
   PADDLE_ENFORCE_LT(id,
                     name2id_.size(),
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Required var_id < %d, but received var_id = %d.",
                         name2id_.size(),
                         id));
@@ -145,7 +145,7 @@ void VariableScope::CheckExist(int id) const {
 void VariableScope::CheckExist(const std::string& name) const {
   PADDLE_ENFORCE_EQ(HasVar(name),
                     true,
-                    phi::errors::NotFound("%s not in VariableScope.", name));
+                    common::errors::NotFound("%s not in VariableScope.", name));
 }
 
 Instruction::Instruction(size_t id,
@@ -170,21 +170,18 @@ Instruction::Instruction(size_t id,
   }
   PADDLE_ENFORCE_GE(id,
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Required id >= 0, but received id = %d", id));
 }
 
 void Instruction::WaitEvent(const Place& place) const {
-  // If InterpreterCore in on CPUPlace, do nothing.
-  if (phi::is_cpu_place(place)) {
-    return;
-  }
-
-  VLOG(6) << "Deal StreamWaitEventOrSync for " << this->OpBase()->Type();
-
   for (const EventInter& event_iter : events_to_wait_) {
-    platform::RecordEvent record(
-        "WaitStreamEvent", platform::TracerEventType::UserDefined, 10);
+    // If InterpreterCore in on CPUPlace, do nothing.
+    if (phi::is_cpu_place(place)) {
+      continue;
+    }
+    phi::RecordEvent record(
+        "WaitStreamEvent", phi::TracerEventType::UserDefined, 10);
     VLOG(6) << "Wait instruction: " << event_iter.instr_id_
             << " 's event with waiter_type: " << event_iter.waiter_type_;
     event_iter.event_->Wait(event_iter.waiter_type_, &dev_ctx_);
@@ -192,9 +189,9 @@ void Instruction::WaitEvent(const Place& place) const {
 }
 
 void Instruction::RecordEvent(const Place& place) const {
-  platform::RecordEvent record(
-      "RecordStreamEvent", platform::TracerEventType::UserDefined, 10);
   if (event_to_record_) {
+    phi::RecordEvent record(
+        "RecordStreamEvent", phi::TracerEventType::UserDefined, 10);
     VLOG(6) << "Record event at instruction: " << id_;
     event_to_record_->event_->Record(&dev_ctx_);
   }
@@ -226,7 +223,7 @@ OperatorBase* Instruction::OpBase() const {
   auto op_base = op_func_node_.operator_base_;
   PADDLE_ENFORCE_NOT_NULL(
       op_base,
-      phi::errors::PreconditionNotMet("op_base shall not be nullptr."));
+      common::errors::PreconditionNotMet("op_base shall not be nullptr."));
   return op_base.get();
 }
 
@@ -335,17 +332,11 @@ void Instruction::UpdateRecordStreamForGcInfo() {
   if ((operator_base_ptr->Type() == "send_v2") &&
       (operator_base_ptr->Attr<bool>("use_calc_stream") == false)) {
     int ring_id = operator_base_ptr->Attr<int>("ring_id");
-    if (FLAGS_dynamic_static_unified_comm) {
-      const auto& comm_context_manager =
-          phi::distributed::CommContextManager::GetInstance();
-      stream_ = static_cast<phi::distributed::NCCLCommContext*>(
-                    comm_context_manager.Get(std::to_string(ring_id)))
-                    ->GetStream();
-    } else {
-      stream_ = platform::NCCLCommContext::Instance()
-                    .Get(ring_id, DeviceContext().GetPlace())
-                    ->stream();
-    }
+    const auto& comm_context_manager =
+        phi::distributed::CommContextManager::GetInstance();
+    stream_ = static_cast<phi::distributed::NCCLCommContext*>(
+                  comm_context_manager.Get(std::to_string(ring_id)))
+                  ->GetStream();
   }
 #endif
 }

@@ -19,7 +19,6 @@
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/tensor_ref_array.h"
 #include "paddle/fluid/framework/variable.h"
@@ -37,9 +36,11 @@
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
 #include "paddle/fluid/pir/dialect/operator/utils/utils.h"
+#include "paddle/phi/common/memory_utils.h"
 #include "paddle/phi/core/enforce.h"
 #include "paddle/phi/core/kernel_context.h"
 #include "paddle/phi/core/meta_tensor.h"
+#include "paddle/phi/core/vocab/string_array.h"
 #include "paddle/pir/include/core/attribute.h"
 #include "paddle/pir/include/core/builtin_attribute.h"
 #include "paddle/pir/include/core/builtin_op.h"
@@ -49,8 +50,7 @@
 #include "paddle/pir/include/dialect/control_flow/ir/cf_op.h"
 #include "paddle/pir/include/dialect/control_flow/ir/cf_type.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 std::shared_ptr<ValueExecutionInfo> ValueExecutionInfo::NewChild(Scope* scope) {
   std::shared_ptr<ValueExecutionInfo> info =
       std::make_shared<ValueExecutionInfo>(scope);
@@ -66,7 +66,7 @@ std::shared_ptr<ValueExecutionInfo> ValueExecutionInfo::NewChild(Scope* scope) {
 void ValueExecutionInfo::Add(::pir::Value value, const std::string& var_name) {
   auto* var = scope_->FindVar(var_name);
   PADDLE_ENFORCE_NOT_NULL(
-      var, phi::errors::NotFound("Cannot find %s in scope.", var_name));
+      var, common::errors::NotFound("Cannot find %s in scope.", var_name));
 
   if (value_2_var_name_.count(value) == 0) {
     value_2_var_name_.emplace(value, var_name);
@@ -84,7 +84,7 @@ void ValueExecutionInfo::Add(::pir::Value value, const std::string& var_name) {
   PADDLE_ENFORCE_EQ(
       var_list_.size(),
       var_name_2_id_.size(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The size of variable_list and var_name_2_id map should be equal"));
 }
 
@@ -134,6 +134,16 @@ std::string ValueExecutionInfo::GetNameById(int id) const {
 
 Variable* ValueExecutionInfo::GetVarByValue(pir::Value value) const {
   return scope_->FindVar(GetVarName(value));
+}
+
+::pir::Value ValueExecutionInfo::GetValueByVar(const Variable* var) const {
+  for (const auto& pair : value_2_var_name_) {
+    if (pair.second == GetVarName(var)) {
+      return pair.first;
+    }
+  }
+  PADDLE_THROW(::common::errors::Unimplemented("Cannot find value by var %s",
+                                               GetVarName(var)));
 }
 
 const std::unordered_map<::pir::Value, std::string>&
@@ -235,9 +245,11 @@ const std::unordered_set<std::string> SpecialOps = {
     paddle::dialect::DataOp::name(),
     pir::ShadowOutputOp::name(),
     paddle::dialect::IfOp::name(),
+    paddle::dialect::CudaGraphOp::name(),
     paddle::dialect::PyLayerOp::name(),
     paddle::dialect::WhileOp::name(),
     pir::StackCreateOp::name(),
+    paddle::dialect::ShareVarOp::name(),
 };
 
 Variable* CreateVar(pir::Value value,
@@ -283,7 +295,7 @@ void CheckInputVars(pir::Operation* op,
         PADDLE_ENFORCE_EQ(
             execution_info->HasValue(value),
             true,
-            phi::errors::PreconditionNotMet(
+            common::errors::PreconditionNotMet(
                 "input should in execution_info, [%d] 'th input of [%s] op",
                 i,
                 op_name));
@@ -313,15 +325,19 @@ void DeepCopyVariable(const Variable* src_var,
     // have holder. In this case we only do set_meta but not copy Tensor.
     if (src_tensor.numel() == 0) {
       tmp_dst_tensor->set_meta(src_tensor.meta());
+      if (src_tensor.has_allocation()) {
+        tmp_dst_tensor->ResetHolder(
+            ::phi::memory_utils::AllocShared(src_tensor.place(), 0u));
+      }
       return;
     }
-    if (!src_tensor.initialized()) {
+    if (!src_tensor.has_allocation()) {
       if (is_optional) {
         (*dst_var) = nullptr;
         return;
       } else {
         PADDLE_THROW(
-            phi::errors::PermissionDenied("DenseTensor shouldn't be null"));
+            common::errors::PermissionDenied("DenseTensor shouldn't be null"));
       }
     }
     framework::TensorCopy(src_tensor, src_tensor.place(), tmp_dst_tensor);
@@ -336,26 +352,26 @@ void DeepCopyVariable(const Variable* src_var,
       dst_t->set_meta(src_t.meta());
       return;
     }
-    if (!src_slr.initialized()) {
+    if (!src_slr.has_allocation()) {
       if (is_optional) {
         (*dst_var) = nullptr;
         return;
       } else {
         PADDLE_THROW(
-            phi::errors::PermissionDenied("SelectedRows shouldn't be null"));
+            common::errors::PermissionDenied("SelectedRows shouldn't be null"));
       }
     }
     framework::TensorCopy(src_t, src_t.place(), dst_t);
   } else if (src_var->IsType<phi::TensorArray>()) {
     auto src_tensor_array = src_var->Get<phi::TensorArray>();
     auto* dst_tensor_array = (*dst_var)->GetMutable<phi::TensorArray>();
-    if (!src_tensor_array.initialized()) {
+    if (!src_tensor_array.has_allocation()) {
       if (is_optional) {
         (*dst_var) = nullptr;
         return;
       } else {
         PADDLE_THROW(
-            phi::errors::PermissionDenied("TensorArray shouldn't be null"));
+            common::errors::PermissionDenied("TensorArray shouldn't be null"));
       }
     }
     dst_tensor_array->resize(src_tensor_array.size());
@@ -387,7 +403,7 @@ void DeepCopyVariable(const Variable* src_var,
     }
 
   } else {
-    PADDLE_THROW(phi::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "Output only support DenseTensorType "
         "or SelectedRowsType or TensorArrayType or VariableRefArrayType"));
   }
@@ -435,15 +451,15 @@ void BuildValue(pir::Value value,
           value.type()
               .dyn_cast<pir::VectorType>()[i]
               .isa<paddle::dialect::AllocatedDenseTensorType>(),
-          phi::errors::Fatal("Element of VectorType output only support "
-                             "DenseTensorType"));
+          common::errors::Fatal("Element of VectorType output only support "
+                                "DenseTensorType"));
       auto var_i = CreateVar(value, var_name_prefix, false, value_exe_info);
 
       var_i->GetMutable<phi::DenseTensor>();
       tensor_array->emplace_back(var_i);
     }
   } else {
-    PADDLE_THROW(phi::errors::PreconditionNotMet(
+    PADDLE_THROW(common::errors::PreconditionNotMet(
         "Output only support DenseTensorType "
         "or SelectedRowsType or VectorType or StackType or SpasrCooTensorType "
         "or SpasreCsrTensorType"));
@@ -503,7 +519,7 @@ void HandleForSpecialOp(pir::Operation* op,
     }
     PADDLE_ENFORCE(
         var,
-        phi::errors::InvalidArgument("The variable %s should exist", name));
+        common::errors::InvalidArgument("The variable %s should exist", name));
 
     value_exe_info->Add(value, name);
   } else if (op->isa<pir::CombineOp>()) {
@@ -523,10 +539,10 @@ void HandleForSpecialOp(pir::Operation* op,
     size_t input_num = op->num_operands();
     for (size_t i = 0; i < input_num; ++i) {
       auto value = op->operand_source(i);
-      PADDLE_ENFORCE_EQ(
-          value_2_var_name.count(value),
-          true,
-          phi::errors::PreconditionNotMet("can not found input of combine op"));
+      PADDLE_ENFORCE_EQ(value_2_var_name.count(value),
+                        true,
+                        common::errors::PreconditionNotMet(
+                            "can not found input of combine op"));
       tensor_array->emplace_back(value_exe_info->GetVarByValue(value));
     }
   } else if (op->isa<pir::SetParameterOp>()) {
@@ -613,7 +629,7 @@ void HandleForSpecialOp(pir::Operation* op,
     auto in_value = op->operand_source(0);
     PADDLE_ENFORCE_EQ(value_exe_info->GetValue2VarName().count(in_value),
                       true,
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "input of builtin slice not in name map"));
 
     int index =
@@ -624,9 +640,9 @@ void HandleForSpecialOp(pir::Operation* op,
     PADDLE_ENFORCE_EQ(
         value_exe_info->GetVar2VarName().count(variable_array[index]),
         true,
-        phi::errors::PreconditionNotMet("[%d] the variable in build slice "
-                                        "input MUST in variable name map",
-                                        index));
+        common::errors::PreconditionNotMet("[%d] the variable in build slice "
+                                           "input MUST in variable name map",
+                                           index));
 
     std::string var_name =
         value_exe_info->GetVar2VarName().at(variable_array[index]);
@@ -636,7 +652,7 @@ void HandleForSpecialOp(pir::Operation* op,
     auto in_value = op->operand_source(0);
     PADDLE_ENFORCE_EQ(value_exe_info->GetValue2VarName().count(in_value),
                       true,
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "input of builtin split not in name map"));
 
     auto in_var = value_exe_info->GetVarByValue(in_value);
@@ -647,9 +663,9 @@ void HandleForSpecialOp(pir::Operation* op,
       PADDLE_ENFORCE_EQ(
           value_exe_info->GetVar2VarName().count(variable_array[idx]),
           true,
-          phi::errors::PreconditionNotMet("[%d] the variable in build split "
-                                          "input MUST in variable name map",
-                                          idx));
+          common::errors::PreconditionNotMet("[%d] the variable in build split "
+                                             "input MUST in variable name map",
+                                             idx));
       std::string var_name =
           value_exe_info->GetVar2VarName().at(variable_array[idx]);
       value_exe_info->AddValue2VarName(out_value, var_name);
@@ -674,6 +690,14 @@ void HandleForSpecialOp(pir::Operation* op,
       auto while_op_out_value = while_op->result(i);
       BuildValue(while_op_out_value, var_name_prefix, value_exe_info);
     }
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  } else if (op->isa<paddle::dialect::CudaGraphOp>()) {
+    auto cuda_graph_op = op->dyn_cast<paddle::dialect::CudaGraphOp>();
+    for (size_t i = 0; i < cuda_graph_op->num_results(); ++i) {
+      auto out_value = cuda_graph_op->result(i);
+      BuildValue(out_value, var_name_prefix, value_exe_info);
+    }
+#endif
   } else if (op->isa<pir::StackCreateOp>()) {
     auto stack_create_op = op->dyn_cast<pir::StackCreateOp>();
     auto stack_value = stack_create_op.stack();
@@ -685,6 +709,13 @@ void HandleForSpecialOp(pir::Operation* op,
     auto outlet_value = stack_create_op.outlet();
     value_exe_info->AddValue2VarName(inlet_value, stack_var_name);
     value_exe_info->AddValue2VarName(outlet_value, stack_var_name);
+  } else if (op_name == "pd_op.share_var") {
+    VLOG(6) << "Handle for pd_op.share_var";
+    auto first_name =
+        value_exe_info->GetValue2VarName().at(op->operand_source(0));
+    for (size_t idx = 1u; idx < op->num_operands(); ++idx) {
+      value_exe_info->UpdateValue2VarName(op->operand_source(idx), first_name);
+    }
   }
 }
 
@@ -692,7 +723,8 @@ bool IsNeedVarInplace(pir::Operation* op,
                       pir::Value value,
                       std::string op_name) {
   return (value.type().isa<paddle::dialect::DenseTensorArrayType>() ||
-          op_name == "pd_op.assign_value_");
+          op_name == "pd_op.assign_value_" || op_name == "pd_op.assign_out_" ||
+          op_name == "pd_op.coalesce_tensor_");
 }
 
 // NOTE(chenxi67): Here, we only perform inplace processing for variables that
@@ -777,8 +809,8 @@ void BuildScope(const pir::Block& block,
             << value_exe_info->GetScope();
     Variable* var = value_exe_info->GetScope()->FindVar(kwarg.first);
     PADDLE_ENFORCE(var,
-                   phi::errors::InvalidArgument("The variable %s should exist",
-                                                kwarg.first));
+                   common::errors::InvalidArgument(
+                       "The variable %s should exist", kwarg.first));
 
     value_exe_info->Add(kwarg.second, kwarg.first);
   }
@@ -842,7 +874,7 @@ void BuildRuntimeContext(pir::Operation* op,
     PADDLE_ENFORCE_EQ(
         name2id.count(name),
         true,
-        phi::errors::NotFound("param [%s] MUST in name2id map", name));
+        common::errors::NotFound("param [%s] MUST in name2id map", name));
     auto index = op_yaml_info.InputName2Id().at(name);
     pir::Value ptr = op->operand_source(index);
 
@@ -855,7 +887,7 @@ void BuildRuntimeContext(pir::Operation* op,
     auto in_var_name = value_exec_info.GetVarName(ptr);
     VLOG(6) << "ctx->EmplaceBackInput: " << name << "\t" << in_var_name;
     PADDLE_ENFORCE_NOT_NULL(inner_scope->FindVar(in_var_name),
-                            phi::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "can not find var[%s] in scope", in_var_name));
     auto var = inner_scope->FindVar(in_var_name);
     if (var->IsType<VariableRefArray>()) {
@@ -883,7 +915,7 @@ void BuildRuntimeContext(pir::Operation* op,
     VLOG(6) << "ctx->EmplaceBackOutput: " << name << "\t" << in_var_name;
 
     PADDLE_ENFORCE_NOT_NULL(inner_scope->FindVar(in_var_name),
-                            phi::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "can not find var[%s] in scope", in_var_name));
 
     auto var = inner_scope->FindVar(in_var_name);
@@ -903,7 +935,7 @@ void BuildRuntimeContext(pir::Operation* op,
       }
       runtime_ctx->outputs[legacy_arg_name] = vec_tmp;
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "only support AllocatedDenseTensor, AllocatedSelectedRowsType, "
           "AllocatedSparseCooTensorType, AllocatedSparseCsrTensorType, and "
           "pir::vector type"));
@@ -934,7 +966,7 @@ std::shared_ptr<OperatorBase> BuildOperatorBase(
     PADDLE_ENFORCE_EQ(
         name2id.count(name),
         true,
-        phi::errors::NotFound("param [%s] MUST in name2id map", name));
+        common::errors::NotFound("param [%s] MUST in name2id map", name));
     auto index = op_yaml_info.InputName2Id().at(name);
     pir::Value ptr = op->operand_source(index);
     auto legacy_attr_name = op_normalizer.GetLegacyArgName(fluid_op_name, name);
@@ -971,7 +1003,7 @@ std::shared_ptr<OperatorBase> BuildOperatorBase(
     } else if (val.isa<pir::ArrayAttribute>()) {
       auto array_list = val.dyn_cast<pir::ArrayAttribute>().AsVector();
       PADDLE_ENFORCE(array_list.size() > 0,
-                     phi::errors::Fatal("Attribute %s is empty", name));
+                     common::errors::Fatal("Attribute %s is empty", name));
       if (array_list[0].isa<pir::Int32Attribute>()) {
         std::vector<int> vec_int;
         for (auto attribute : array_list) {
@@ -1059,7 +1091,7 @@ std::shared_ptr<OperatorBase> BuildOperatorBase(
                 << value_exec_info.GetVarName(var_ref[k]);
       }
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "only support AllocatedDenseTensor, AllocatedSelectedRowsType, "
           "AllocatedSparseCooTensorType, AllocatedSparseCsrTensorType  and "
           "pir::vector type"));
@@ -1073,5 +1105,4 @@ std::shared_ptr<OperatorBase> BuildOperatorBase(
   return res;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

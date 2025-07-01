@@ -44,13 +44,13 @@ function gen_full_html_report_cinn(){
         '/paddle/paddle/cinn/adt/*' \
         '/paddle/paddle/cinn/api/*' \
         '/paddle/paddle/cinn/ast_gen_ius/*' \
-        '/paddle/paddle/cinn/auto_schedule/*' \
         '/paddle/paddle/cinn/backends/*' \
         '/paddle/paddle/cinn/common/*' \
         '/paddle/paddle/cinn/frontend/*' \
         '/paddle/paddle/cinn/hlir/*' \
         '/paddle/paddle/cinn/ir/*' \
         '/paddle/paddle/cinn/lang/*' \
+        '/paddle/paddle/cinn/operator_fusion/*' \
         '/paddle/paddle/cinn/optim/*' \
         '/paddle/paddle/cinn/poly/*' \
         '/paddle/paddle/cinn/pybind/*' \
@@ -250,13 +250,10 @@ fi
 
 if [ "$COVERAGE_LINES_ASSERT" = "1" ] || [ "$PYTHON_COVERAGE_LINES_ASSERT" = "1" ]; then
     echo "exit 9" > /tmp/paddle_coverage.result
-    if [ "${WITH_CINN}" == "ON" ]; then
-        echo "You must one RD(liuhongyu or lanxiang or zhenghuihuang or tianchao zhangliujie)to approval this PR."
-        exit 9
+    python ${PADDLE_ROOT}/tools/get_pr_title.py skip_coverage_check && NOT_CHECK_COVERAGE_PR=1
+    if [[ "${NOT_CHECK_COVERAGE_PR}" = "1" ]];then
+        echo "Skip coverage check in the PR-CI-Coverage pipeline."
+        exit 0
     fi
-    python ${PADDLE_ROOT}/tools/get_pr_title.py || NOT_CINN_PR=1
-    if [[ "${NOT_CINN_PR}" = "1" ]];then
-        exit 9
-    fi
-    echo "This PR belongs to the CINN direction, skip the coverage check in the PR-CI-Coverage pipeline."
+    exit 9
 fi

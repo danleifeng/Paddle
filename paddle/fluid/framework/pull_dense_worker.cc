@@ -19,8 +19,7 @@ namespace phi {
 class DenseTensor;
 }  // namespace phi
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class Scope;
 class Variable;
@@ -93,7 +92,7 @@ void PullDenseWorker::CreatePinVar() {
 
       phi::DenseTensor* tensor = var->GetMutable<phi::DenseTensor>();
       auto* ptr = root_scope_->Var(name + "pin");
-      InitializeVariable(ptr, proto::VarType::LOD_TENSOR);
+      InitializeVariable(ptr, proto::VarType::DENSE_TENSOR);
       phi::DenseTensor* pin_tensor = ptr->GetMutable<phi::DenseTensor>();
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
       pin_tensor->mutable_data<float>(tensor->dims(), phi::GPUPinnedPlace());
@@ -118,8 +117,8 @@ void PullDenseWorker::Wait(std::vector<::std::future<int32_t>>* status_vec) {
 
   size_t MAX_FAIL_NUM = 20;
   if (pull_dense_fail_times_ > MAX_FAIL_NUM) {
-    PADDLE_THROW(phi::errors::Fatal("Pull dense failed more than %d times.",
-                                    MAX_FAIL_NUM));
+    PADDLE_THROW(common::errors::Fatal("Pull dense failed more than %d times.",
+                                       MAX_FAIL_NUM));
     exit(-1);
   }
   status_vec->resize(0);
@@ -269,5 +268,4 @@ void PullDenseWorker::MergeDenseParam() {
   }
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

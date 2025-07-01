@@ -46,10 +46,55 @@ namespace {
 using ShapeOrDataDimExprs4ValueT =
     std::function<symbol::ShapeOrDataDimExprs(pir::Value)>;
 
+bool IsRootValueForSlice(
+    pir::Value value,
+    const ShapeOrDataDimExprs4ValueT& ShapeOrDataDimExprs4Value) {
+  if (!value || !value.type()) {
+    return false;
+  }
+  if (!value.dyn_cast<pir::OpResult>()) {
+    return false;
+  }
+  pir::Operation* owner = value.defining_op();
+  if (!owner->isa<paddle::dialect::SliceOp>()) {
+    return false;
+  }
+  const auto& value_shape = ShapeOrDataDimExprs4Value(value);
+  if (!value_shape.data().has_value()) {
+    return false;
+  }
+  if (value_shape.data().value().size() != 1) {
+    return false;
+  }
+  const auto& slice_in = ShapeOrDataDimExprs4Value(owner->operand_source(0));
+  if (!slice_in.data().has_value()) {
+    return true;
+  }
+  const auto& slice_start_data =
+      ShapeOrDataDimExprs4Value(owner->operand_source(1)).data().value();
+  const auto& slice_end_data =
+      ShapeOrDataDimExprs4Value(owner->operand_source(2)).data().value();
+
+  bool starts_ends_all_int =
+      std::all_of(slice_start_data.begin(),
+                  slice_start_data.end(),
+                  [](const symbol::DimExpr& e) { return e.isa<int64_t>(); }) &&
+      std::all_of(slice_end_data.begin(),
+                  slice_end_data.end(),
+                  [](const symbol::DimExpr& e) { return e.isa<int64_t>(); });
+  if (!starts_ends_all_int) {
+    return true;
+  }
+  return false;
+}
+
 std::vector<pir::Value> FindSourceDenseTensorOfDimTensor(
     pir::Value shape,
     const ShapeOrDataDimExprs4ValueT& ShapeOrDataDimExprs4Value) {
   std::vector<pir::Value> ret{};
+  if (IsRootValueForSlice(shape, ShapeOrDataDimExprs4Value)) {
+    return ret;
+  }
   const auto& Emplace = [&](pir::Value value) {
     if (std::find(ret.begin(), ret.end(), value) != ret.end()) return;
     ret.emplace_back(value);
@@ -58,7 +103,11 @@ std::vector<pir::Value> FindSourceDenseTensorOfDimTensor(
       [&](pir::Value value, const std::function<void(pir::Value)>& Visit) {
         // find input dimension tensor;
         pir::Operation* owner = value.defining_op();
+
         if (owner == nullptr) return;
+        if (owner->name() == "cf.tuple_pop") {
+          return;
+        }
         for (auto input_value : pir::GetUsedExternalValue(*owner)) {
           Visit(input_value);
         }
@@ -76,10 +125,14 @@ std::vector<pir::Value> FindSourceDenseTensorOfDimTensor(
       [](const symbol::NullShapeOrDataDimExpr& null_shape_or_data) {
         return false;
       }};
-  // For TensorListShapeOrDataDimExprs case, we should recursivly visit its
+  // For TensorListShapeOrDataDimExprs case, we should recursively visit its
   // each dim_expr, which is automatically in next step.
   const auto& NeedTrackUpstream = [&](pir::Value value) -> bool {
     const auto& sym_shape = ShapeOrDataDimExprs4Value(value);
+    if (sym_shape.isa<symbol::TensorShapeOrDataDimExprs>() &&
+        IsRootValueForSlice(value, ShapeOrDataDimExprs4Value)) {
+      return false;
+    }
     return std::visit(MayContainDimData, sym_shape.variant());
   };
   const auto& ForEachInputDimTensor =
@@ -116,10 +169,17 @@ bool MakeGenerateShapeOpAttribute(
     std::vector<pir::Attribute>* output_dim_expr_attrs,
     GenerateShapeOp::SymbolBindings* symbol_bindings) {
   const auto& shape_or_data_dim_exprs = ShapeOrDataDimExprs4Value(output_shape);
+  if (!paddle::dialect::details::HasCompleteData(shape_or_data_dim_exprs)) {
+    LOG(WARNING) << "The output_shape has no data.";
+    return false;
+  }
   ExprVec data_vec =
       paddle::dialect::details::GetExprVecFromData(shape_or_data_dim_exprs);
   // CHECK(shape_or_data_dim_exprs.data().has_value());
-  CHECK(data_vec.size());
+  PADDLE_ENFORCE_GT(
+      data_vec.size(),
+      0,
+      ::common::errors::PreconditionNotMet("The data_vec must not be empty."));
   // const auto& out_dim_exprs = shape_or_data_dim_exprs.data().value();
   const auto& out_dim_exprs = data_vec;
   return MakeGenerateShapeOpAttribute(ir_context,
@@ -411,11 +471,20 @@ class FuseSingleElementShapeOpsIntoGenerateShapeOpPattern
 
     // all user op's output should has no data of shape expr
     pir::Value output = op->result(0);
+    auto ShapeOrDataDimExprs4Value =
+        [&shape_analysis](
+            pir::Value value) -> const symbol::ShapeOrDataDimExprs& {
+      return shape_analysis.GetShapeOrDataForValue(value);
+    };
+    if (IsRootValueForSlice(output, ShapeOrDataDimExprs4Value)) {
+      return false;
+    }
     if (output.use_empty()) return false;
     for (auto iter = output.use_begin(); iter != output.use_end(); ++iter) {
       auto* user = iter->owner();
       if (IsSingleElementShapeOp(user, &shape_analysis)) return false;
       if (user->isa<cinn::dialect::GenerateShapeOp>()) return false;
+      if (user->isa<pir::ShadowOutputOp>()) return false;
     }
 
     return true;
@@ -435,7 +504,9 @@ class FuseSingleElementShapeOpsIntoGenerateShapeOpPattern
         GetOutOfRewrittenGenerateShapeOp(
             op->result(0), &rewriter, ShapeOrDataDimExprs4Value);
     if (!opt_generated_shape.has_value()) {
-      LOG(WARNING) << "Create GenerateShapeOp Failed.";
+      LOG(WARNING) << "Create GenerateShapeOp Failed." << op->name() << "["
+                   << op->id() << "] with ShapeOrDataDimExprs: "
+                   << shape_analysis.GetShapeOrDataForValue(op->result(0));
       return;
     }
 
@@ -480,6 +551,8 @@ class FuseShapeOpsIntoGenerateShapeOpPass : public pir::PatternRewritePass {
     ps.Add<FuseShapeOpsIntoGenerateShapeOpPattern<paddle::dialect::ExpandOp>>(
         context);
     ps.Add<FuseShapeOpsIntoGenerateShapeOpPattern<paddle::dialect::ReshapeOp>>(
+        context);
+    ps.Add<FuseShapeOpsIntoGenerateShapeOpPattern<paddle::dialect::Reshape_Op>>(
         context);
     ps.Add<FuseShapeOpsIntoGenerateShapeOpPattern<paddle::dialect::SliceOp>>(
         context);

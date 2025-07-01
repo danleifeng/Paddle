@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <absl/strings/string_view.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/Argument.h>
@@ -26,10 +25,12 @@
 #include <llvm/IR/Value.h>
 
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "paddle/cinn/common/type.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace backends {
@@ -44,7 +45,7 @@ std::string DumpToString(const T &entity) {
   // return "\033[33m" + buffer + "\033[0m"; // Green
 }
 
-inline llvm::StringRef AsStringRef(absl::string_view str) {
+inline llvm::StringRef AsStringRef(std::string_view str) {
   return llvm::StringRef(str.data(), str.size());
 }
 

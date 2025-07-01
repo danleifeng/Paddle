@@ -18,9 +18,7 @@
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/utils/string/pretty_log.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 using string::PrettyLogDetail;
 
@@ -33,7 +31,7 @@ void FuseFCActOneDNNPass::ApplyImpl(Graph *graph) const {
 void FuseFCActOneDNNPass::FuseFCAct(Graph *graph,
                                     const std::string &act_type) const {
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   FusePassBase::Init("fc_" + act_type + "_onednn_fuse_pass", graph);
 
   GraphPatternDetector gpd;
@@ -66,9 +64,7 @@ void FuseFCActOneDNNPass::FuseFCAct(Graph *graph,
         "---    fused %d fc with %s activation", found_fc_act_count, act_type);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(fc_act_onednn_fuse_pass,
               paddle::framework::ir::FuseFCActOneDNNPass);

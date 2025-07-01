@@ -60,6 +60,55 @@ class ProcessMeshAttrStorage : public pir::AttributeStorage {
   ParamKey process_mesh;
 };
 
+// NOTE (pkuzyc): now the Placements is only used for the ``local_reshape``
+// op, for the case when one tensor dimension is sharded by multiple mesh
+// dimensions. In the future, the dims_mapping in TensorDistAttr will be
+// replaced by this Placements.
+class PlacementsAttrStorage : public pir::AttributeStorage {
+ public:
+  ///
+  /// \brief Declare ParamKey according to parameter type.
+  ///
+  using ParamKey = phi::distributed::Placements;
+
+  PlacementsAttrStorage(ParamKey&& placements)  // NOLINT
+      : placements(std::move(placements)) {}
+
+  ///
+  /// \brief Each derived TypeStorage must define a Construct method, which
+  /// StorageManager uses to construct a derived TypeStorage.
+  ///
+  static PlacementsAttrStorage* Construct(ParamKey&& key) {
+    return new PlacementsAttrStorage(std::move(key));
+  }
+
+  static std::string to_string(const ParamKey& key) {
+    std::string s = "[";
+    for (const auto& p : key) {
+      s += p->to_string() + ", ";
+    }
+    s.pop_back();
+    s.pop_back();
+    return s + "]";
+  }
+
+  ///
+  /// \brief Each derived TypeStorage must provide a HashValue method.
+  ///
+  static std::size_t HashValue(const ParamKey& key) {
+    return std::hash<std::string>()(to_string(key));
+  }
+
+  ///
+  /// \brief Each derived TypeStorage needs to overload operator==.
+  ///
+  bool operator==(const ParamKey& key) const {
+    return phi::distributed::equal_placements(placements, key);
+  }
+
+  ParamKey placements;
+};
+
 class TensorDistAttrStorage : public pir::AttributeStorage {
  public:
   ///
@@ -67,12 +116,14 @@ class TensorDistAttrStorage : public pir::AttributeStorage {
   ///
   using ParamKey = std::tuple<ProcessMeshAttribute,
                               std::vector<int64_t>,
-                              flat_hash_map<int64_t, phi::ReduceType>>;
+                              flat_hash_map<int64_t, phi::ReduceType>,
+                              std::optional<PlacementsAttribute>>;
 
   TensorDistAttrStorage(ParamKey&& param)  // NOLINT
       : mesh_attr(std::get<0>(param)),
         dims_mapping(std::move(std::get<1>(param))),
-        partial_status(std::move(std::get<2>(param))) {}
+        partial_status(std::move(std::get<2>(param))),
+        placements_(std::move(std::get<3>(param))) {}
   ///
   /// \brief Each derived TypeStorage must define a Construct method, which
   /// StorageManager uses to construct a derived TypeStorage.
@@ -95,6 +146,10 @@ class TensorDistAttrStorage : public pir::AttributeStorage {
     }
     partial_status_str += "]";
     auto combine_hash = pir::detail::hash_combine(mesh_hash, dims_map_hash);
+    if (std::get<3>(key).has_value()) {
+      combine_hash =
+          pir::detail::hash_combine(combine_hash, std::get<3>(key)->hash());
+    }
     return pir::detail::hash_combine(
         combine_hash, std::hash<std::string>()(partial_status_str));
   }
@@ -104,7 +159,8 @@ class TensorDistAttrStorage : public pir::AttributeStorage {
   ///
   bool operator==(const ParamKey& key) const {
     return mesh_attr == std::get<0>(key) && dims_mapping == std::get<1>(key) &&
-           partial_status == std::get<2>(key);
+           partial_status == std::get<2>(key) &&
+           placements_ == std::get<3>(key);
   }
 
   ProcessMeshAttribute mesh_attr;
@@ -113,6 +169,7 @@ class TensorDistAttrStorage : public pir::AttributeStorage {
   // iterate operation (copy and comparison) would more frequency than random
   // element access. <key: dim on mesh, value: reduce type>
   flat_hash_map<int64_t, phi::ReduceType> partial_status;
+  std::optional<PlacementsAttribute> placements_;
 };
 
 class OperationDistAttrStorage : public pir::AttributeStorage {
@@ -122,11 +179,14 @@ class OperationDistAttrStorage : public pir::AttributeStorage {
   ///
   using ParamKey = std::tuple<ProcessMeshAttribute,
                               std::vector<pir::Attribute>,
-                              std::vector<pir::Attribute>>;
-  OperationDistAttrStorage(ParamKey&& param)  // NOLINT
+                              std::vector<pir::Attribute>,
+                              int64_t>;
+
+  explicit OperationDistAttrStorage(ParamKey&& param)
       : mesh_attr(std::get<0>(param)),
         operands(std::get<1>(param)),
-        results(std::get<2>(param)) {}
+        results(std::get<2>(param)),
+        chunk_id(std::get<3>(param)) {}
 
   ///
   /// \brief Each derived TypeStorage must define a Construct method, which
@@ -149,6 +209,7 @@ class OperationDistAttrStorage : public pir::AttributeStorage {
       auto tmp_value = std::hash<pir::Attribute>()(iter);
       hash_value = pir::detail::hash_combine(hash_value, tmp_value);
     }
+    hash_value = pir::detail::hash_combine(hash_value, std::get<3>(key));
     return hash_value;
   }
 
@@ -157,12 +218,13 @@ class OperationDistAttrStorage : public pir::AttributeStorage {
   ///
   bool operator==(const ParamKey& key) const {
     return mesh_attr == std::get<0>(key) && operands == std::get<1>(key) &&
-           results == std::get<2>(key);
+           results == std::get<2>(key) && chunk_id == std::get<3>(key);
   }
 
   ProcessMeshAttribute mesh_attr;
   std::vector<pir::Attribute> operands;
   std::vector<pir::Attribute> results;
+  int64_t chunk_id;
 };
 
 }  // namespace dialect

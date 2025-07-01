@@ -27,8 +27,7 @@ limitations under the License. */
 #include "paddle/phi/core/type_defs.h"
 #include "paddle/utils/string/string_helper.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 class KernelArgsNameMakerByOpProto : public KernelArgsNameMaker {
  public:
@@ -36,7 +35,8 @@ class KernelArgsNameMakerByOpProto : public KernelArgsNameMaker {
       const framework::proto::OpProto* op_proto)
       : op_proto_(op_proto), input_names_(), output_names_(), attr_names_() {
     PADDLE_ENFORCE_NOT_NULL(
-        op_proto_, phi::errors::InvalidArgument("Op proto cannot be nullptr."));
+        op_proto_,
+        common::errors::InvalidArgument("Op proto cannot be nullptr."));
   }
 
   ~KernelArgsNameMakerByOpProto() override = default;
@@ -96,7 +96,7 @@ phi::KernelKey TransOpKernelTypeToPhiKernelKey(
   }
   return phi::KernelKey(backend,
                         kernel_type.data_layout_,
-                        framework::TransToPhiDataType(kernel_type.data_type_));
+                        phi::TransToPhiDataType(kernel_type.data_type_));
 }
 
 phi::KernelKey FallBackToCpu(const phi::KernelKey& kernel_key,
@@ -137,10 +137,10 @@ phi::KernelKey FallBackToCpu(const phi::KernelKey& kernel_key,
   if (kernel_key.backend() == phi::Backend::GPU ||
       kernel_key.backend() == phi::Backend::GPUDNN) {
     PADDLE_THROW(
-        phi::errors::NotFound("The kernel (%s) with key %s is not found and "
-                              "GPU kernel cannot fallback to CPU one.",
-                              op.Type(),
-                              kernel_key));
+        common::errors::NotFound("The kernel (%s) with key %s is not found and "
+                                 "GPU kernel cannot fallback to CPU one.",
+                                 op.Type(),
+                                 kernel_key));
   }
 #endif
 
@@ -271,10 +271,10 @@ phi::Scalar MakePhiScalarFromVar(const framework::Variable& variable) {
     PADDLE_ENFORCE_EQ(
         tensor.numel(),
         1UL,
-        phi::errors::InvalidArgument("The DenseTensor used to construct "
-                                     "the Scalar contains more than 1 "
-                                     "value, it contains `%d` values.",
-                                     tensor.numel()));
+        common::errors::InvalidArgument("The DenseTensor used to construct "
+                                        "the Scalar contains more than 1 "
+                                        "value, it contains `%d` values.",
+                                        tensor.numel()));
     if (!phi::is_same_place(tensor.place(), expected_place)) {
       phi::DenseTensor tmp_tensor;
       framework::TensorCopySync(tensor, expected_place, &tmp_tensor);
@@ -283,8 +283,8 @@ phi::Scalar MakePhiScalarFromVar(const framework::Variable& variable) {
       return {tensor};
     }
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "Unsupport casting input `%s` type to Scalar when call pt "
+    PADDLE_THROW(common::errors::Unimplemented(
+        "Unsupported casting input `%s` type to Scalar when call pt "
         "kernel.",
         framework::ToTypeName(variable.Type())));
   }
@@ -295,8 +295,8 @@ phi::IntArray MakePhiIntArrayFromVar(const framework::Variable& variable) {
     const auto& tensor = variable.Get<phi::DenseTensor>();
     return phi::IntArray(tensor);
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "Unsupport casting input `%s` type to IntArray when call pt "
+    PADDLE_THROW(common::errors::Unimplemented(
+        "Unsupported casting input `%s` type to IntArray when call pt "
         "kernel.",
         framework::ToTypeName(variable.Type())));
   }
@@ -339,15 +339,15 @@ phi::IntArray MakePhiIntArrayFromVarList(
           vector_data.push_back(*tensor.data<int32_t>());
         }
       } else {
-        PADDLE_THROW(phi::errors::InvalidArgument(
-            "Data type error. When cast a LoDTensor to VectorTensor, "
-            "the data type of LoDTensor must be int32 or int64, "
+        PADDLE_THROW(common::errors::InvalidArgument(
+            "Data type error. When cast a DenseTensor to VectorTensor, "
+            "the data type of DenseTensor must be int32 or int64, "
             "but now data type is %s.",
             data_type));
       }
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
-          "Unsupport casting input `%s` type to VectorTensor when call pt "
+      PADDLE_THROW(common::errors::Unimplemented(
+          "Unsupported casting input `%s` type to VectorTensor when call pt "
           "kernel.",
           framework::ToTypeName(var->Type())));
     }
@@ -359,5 +359,4 @@ phi::IntArray MakePhiIntArrayFromVarList(
   return result;
 }
 
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

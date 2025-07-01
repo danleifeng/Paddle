@@ -16,10 +16,6 @@ typedef SSIZE_T ssize_t;
 #endif
 
 #include <Python.h>
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
 
 #include <string>
 #include <unordered_map>
@@ -36,9 +32,6 @@ typedef SSIZE_T ssize_t;
 #include "paddle/fluid/framework/custom_operator_utils.h"
 #include "paddle/fluid/framework/phi_utils.h"
 #include "paddle/fluid/framework/python_headers.h"
-#include "paddle/fluid/memory/allocation/allocator.h"
-#include "paddle/fluid/memory/memcpy.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/pybind/eager.h"
 #include "paddle/fluid/pybind/eager_utils.h"
@@ -52,6 +45,9 @@ typedef SSIZE_T ssize_t;
 #include "paddle/phi/common/data_type.h"
 #include "paddle/phi/core/compat/convert_utils.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/memory/allocation/allocator.h"
+#include "paddle/phi/core/memory/memcpy.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 #include "paddle/phi/core/sparse_coo_tensor.h"
 #include "paddle/phi/core/sparse_csr_tensor.h"
 #include "paddle/utils/string/string_helper.h"
@@ -74,6 +70,10 @@ typedef SSIZE_T ssize_t;
 #endif
 
 COMMON_DECLARE_string(tensor_operants_mode);
+COMMON_DECLARE_bool(check_cuda_error);
+
+using egr::ConvertAllInputsToDistTensor;
+using egr::InputsContainDistTensor;
 
 namespace paddle::pybind {
 
@@ -103,12 +103,12 @@ class EagerNumpyAllocation : public phi::Allocation {
         arr_(numpy_data) {
     PADDLE_ENFORCE_NOT_NULL(
         arr_,
-        phi::errors::InvalidArgument("The underlying PyObject pointer of "
-                                     "numpy array cannot be nullptr"));
+        common::errors::InvalidArgument("The underlying PyObject pointer of "
+                                        "numpy array cannot be nullptr"));
     PADDLE_ENFORCE_NE(
         arr_,
         Py_None,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "The underlying PyObject pointer of numpy array cannot be None"));
     Py_INCREF(arr_);
   }
@@ -136,6 +136,7 @@ static PyObject* eager_api_scale(PyObject* self,
   paddle::Tensor ret;
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     ret = egr::scale(tensor, scale, bias, bias_after_scale, trace_backward);
   }
   return ToPyObject(ret);
@@ -156,6 +157,7 @@ static PyObject* eager_api_run_backward(PyObject* self,
   }
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     egr::Backward(tensors, grad_tensors, retain_graph);
   }
   RETURN_PY_NONE
@@ -186,6 +188,7 @@ static PyObject* eager_api_run_partial_grad(PyObject* self,
   std::vector<paddle::Tensor> result;
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     result = egr::Grad(tensors,
                        inputs,
                        grad_tensors,
@@ -213,6 +216,7 @@ static PyObject* eager_api_tensor_copy(PyObject* self,
 
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     dst = src.copy_to(place, blocking);
     egr::EagerUtils::autograd_meta(&dst)->SetStopGradient(
         egr::EagerUtils::autograd_meta(&(src))->StopGradient());
@@ -237,7 +241,7 @@ PyObject* eager_api_get_all_grads(PyObject* self,
       ret.emplace_back(paddle::Tensor());
       continue;
     }
-    if (meta && meta->Grad().initialized()) {
+    if (meta && meta->Grad().has_allocation()) {
       ret.emplace_back(meta->Grad());
     } else {
       ret.emplace_back(paddle::Tensor());
@@ -258,7 +262,7 @@ PyObject* eager_api_get_grads_lists(PyObject* self,
   for (auto& tensor : tensor_list) {
     VLOG(6) << "Get grad for tensor: " << tensor.name();
     auto meta = egr::EagerUtils::nullable_autograd_meta(tensor);
-    if (meta && meta->Grad().initialized()) {
+    if (meta && meta->Grad().has_allocation()) {
       auto& grad = meta->Grad();
       switch (grad.dtype()) {
         case phi::DataType::FLOAT16:
@@ -298,7 +302,7 @@ PyObject* eager_api_get_grads_types(PyObject* self,
     }
 
     auto& grad = meta->Grad();
-    if (meta && grad.initialized()) {
+    if (meta && grad.has_allocation()) {
       if ((grad.is_dense_tensor() || grad.is_dist_tensor()) &&
           (tensor.dtype() == phi::DataType::FLOAT32 ||
            tensor.dtype() == phi::DataType::FLOAT16 ||
@@ -364,14 +368,14 @@ static void ConstructFwdAndBwdMap(
     PADDLE_ENFORCE_LE(
         grad_outputs_names.size(),
         inputs_names.size(),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Grad outputs num should be less equal than forward inputs num."));
     for (size_t i = 0; i < grad_outputs_names.size(); i++) {
       size_t end = grad_outputs_names[i].find("@GRAD");
       PADDLE_ENFORCE_NE(
           end,
           std::string::npos,
-          phi::errors::NotFound(
+          common::errors::NotFound(
               "All Grad outputs should be grad and we got %s is not grad var, "
               "please check your op and change to fit the rule.",
               grad_outputs_names[i]));
@@ -429,7 +433,7 @@ static void ConstructFwdAndBwdMap(
           attrs_names.begin(), attrs_names.end(), grad_attrs_names[i]);
       PADDLE_ENFORCE_NE(end,
                         attrs_names.end(),
-                        phi::errors::NotFound(
+                        common::errors::NotFound(
                             "All Grad attrs should be one of forward attrs and "
                             "we got %s is not one of them, please check your "
                             "op and change to fit the rule.",
@@ -458,6 +462,7 @@ static PyObject* eager_api_jit_function_call(PyObject* self,
   std::vector<paddle::Tensor> outs;
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     outs = (*function)(ins);
   }
   return ToPyObject(outs);
@@ -471,7 +476,7 @@ static PyObject* eager_api__get_custom_operator_inplace_reverse_idx(
   auto meta_info_map = egr::Controller::Instance().GetOpMetaInfoMap();
   PADDLE_ENFORCE_NE(meta_info_map.find(op_type),
                     meta_info_map.end(),
-                    phi::errors::NotFound(
+                    common::errors::NotFound(
                         "Can't find %s in Eager OpMetaInfoMap which should be "
                         "created by LoadOpMetaInfoAndRegisterOp, please make "
                         "sure you registered your op first and try again. ",
@@ -494,12 +499,12 @@ static PyObject* eager_api__get_custom_operator_inplace_reverse_idx(
       continue;
     }
     auto out_iter = find(outputs.begin(), outputs.end(), inplace_map.at(input));
-    PADDLE_ENFORCE(
-        out_iter != outputs.end(),
-        phi::errors::NotFound("Can't find the mapped value of %s, please check "
-                              "the input of `Inplace` again and make "
-                              "sure you registered your op accurately. ",
-                              input));
+    PADDLE_ENFORCE(out_iter != outputs.end(),
+                   common::errors::NotFound(
+                       "Can't find the mapped value of %s, please check "
+                       "the input of `Inplace` again and make "
+                       "sure you registered your op accurately. ",
+                       input));
     inplace_idx_map[distance(outputs.begin(), out_iter)] = in_idx;  // NOLINT
   }
 
@@ -539,11 +544,14 @@ PyObject* eager_api_run_custom_op(PyObject* self,
 
   std::string op_type = CastPyArg2AttrString(PyTuple_GET_ITEM(args, 0), 0);
   VLOG(7) << "Get things from python for Custom Op: " << op_type;
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("eager_api_run_custom_op " + op_type + " begin");
+  }
   paddle::CustomOpKernelContext ctx;
   auto meta_info_map = egr::Controller::Instance().GetOpMetaInfoMap();
   PADDLE_ENFORCE_NE(meta_info_map.find(op_type),
                     meta_info_map.end(),
-                    phi::errors::NotFound(
+                    common::errors::NotFound(
                         "Can't find %s in Eager OpMetaInfoMap which should be "
                         "created by LoadOpMetaInfoAndRegisterOp, please make "
                         "sure you registered your op first and try again. ",
@@ -636,6 +644,9 @@ PyObject* eager_api_run_custom_op(PyObject* self,
     } else if (attr_type_str == "float") {
       ctx.EmplaceBackAttr(
           CastPyArg2AttrFloat(obj, attr_start_idx + i));  // NOLINT
+    } else if (attr_type_str == "double") {
+      ctx.EmplaceBackAttr(
+          CastPyArg2AttrDouble(obj, attr_start_idx + i));  // NOLINT
     } else if (attr_type_str == "int64_t") {
       ctx.EmplaceBackAttr(
           CastPyArg2Long(obj, op_type, attr_start_idx + i));  // NOLINT
@@ -653,7 +664,7 @@ PyObject* eager_api_run_custom_op(PyObject* self,
       ctx.EmplaceBackAttr(
           CastPyArg2VectorOfString(obj, attr_start_idx + i));  // NOLINT
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Unsupported `%s` type value as custom attribute now. "
           "Supported data types include `bool`, `int`, `float`, "
           "`int64_t`, `std::string`, `std::vector<int>`, "
@@ -666,6 +677,7 @@ PyObject* eager_api_run_custom_op(PyObject* self,
 
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     ctx.ConstructInplaceIndex(inputs, outputs, inplace_map);
     const auto& inplace_reverse_idx_map = ctx.GetInplaceReverseIndexMap();
     for (size_t out_idx = 0; out_idx < outputs.size(); ++out_idx) {
@@ -678,7 +690,7 @@ PyObject* eager_api_run_custom_op(PyObject* self,
         const auto& input_tensor = ctx.InputAt(input_range.first);
         // inplace optional [Tensor or vector<Tensor>], un-initialized tensor.
         if (paddle::framework::detail::IsOptionalVar(output) &&
-            !input_tensor.initialized()) {
+            !input_tensor.has_allocation()) {
           VLOG(7) << "Custom operator add output " << output
                   << " to CustomOpKernelContext. Add un-initialized tensor "
                      "because the inplace optional input is None";
@@ -715,15 +727,16 @@ PyObject* eager_api_run_custom_op(PyObject* self,
       if (ctx.OutputRangeAt(i).first + 1 == ctx.OutputRangeAt(i).second) {
         paddle::Tensor* out_tensor =
             ctx.MutableOutputAt(ctx.OutputRangeAt(i).first);
-        if (!out_tensor->initialized()) {
+        if (!out_tensor->has_allocation()) {
           PADDLE_ENFORCE(
               paddle::framework::detail::IsOptionalVar(outputs.at(i)) ||
                   out_tensor->is_dist_tensor(),
-              phi::errors::InvalidArgument(
-                  "Custom operator's %d-th output is not initialized. "
+              common::errors::InvalidArgument(
+                  "Custom operator[%s]'s %d-th output is not initialized. "
                   "Please check your implementation again. If you are "
                   "using inplace optional output, then you must use "
                   "`paddle::Optional` to decorate this output",
+                  op_type,
                   i));
           // We can also consider using `autograd_meta` to tolerant nullptr.
           out_tensor->set_autograd_meta(std::make_shared<egr::AutogradMeta>());
@@ -851,6 +864,9 @@ PyObject* eager_api_run_custom_op(PyObject* self,
       grad_node->SetAttrs(attrs);
     }
   }
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("eager_api_run_custom_op " + op_type + " finish");
+  }
   return ToPyObject(*ctx.AllMutableOutput());
   EAGER_CATCH_AND_THROW_RETURN_NULL
 }
@@ -866,12 +882,13 @@ static PyObject* eager_api_sparse_coo_tensor(PyObject* self,
   paddle::Tensor tensor;
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     PADDLE_ENFORCE(
         non_zero_indices.is_dense_tensor(),
-        phi::errors::Fatal("the non-zero indices must be a DenseTensor."));
+        common::errors::Fatal("the non-zero indices must be a DenseTensor."));
     PADDLE_ENFORCE(
         non_zero_elements.is_dense_tensor(),
-        phi::errors::Fatal("the non-zero elements must be a DenseTensor."));
+        common::errors::Fatal("the non-zero elements must be a DenseTensor."));
     auto dense_indices =
         std::dynamic_pointer_cast<phi::DenseTensor>(non_zero_indices.impl());
     auto dense_elements =
@@ -910,15 +927,16 @@ static PyObject* eager_api_sparse_csr_tensor(PyObject* self,
   paddle::Tensor tensor;
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     PADDLE_ENFORCE(non_zero_crows.is_dense_tensor(),
-                   phi::errors::Fatal(
+                   common::errors::Fatal(
                        "the compressed non-zero rows must be a DenseTensor."));
     PADDLE_ENFORCE(
         non_zero_cols.is_dense_tensor(),
-        phi::errors::Fatal("the non-zero cols must be a DenseTensor."));
+        common::errors::Fatal("the non-zero cols must be a DenseTensor."));
     PADDLE_ENFORCE(
         non_zero_elements.is_dense_tensor(),
-        phi::errors::Fatal("the non-zero elements must be a DenseTensor."));
+        common::errors::Fatal("the non-zero elements must be a DenseTensor."));
 
     auto dense_crows =
         std::dynamic_pointer_cast<phi::DenseTensor>(non_zero_crows.impl());
@@ -990,40 +1008,41 @@ static PyObject* eager_api_async_read(PyObject* self,
 
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     PADDLE_ENFORCE_EQ(
         src.is_gpu_pinned(),
         true,
-        phi::errors::InvalidArgument("Required `src` device should be "
-                                     "CUDAPinnedPlace, but received %d.",
-                                     src.place()));
+        common::errors::InvalidArgument("Required `src` device should be "
+                                        "CUDAPinnedPlace, but received %d.",
+                                        src.place()));
     PADDLE_ENFORCE_EQ(
         dst.is_gpu(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required `dst` device should be CUDAPlace, but received %d.",
             dst.place()));
     PADDLE_ENFORCE_EQ(
         index.is_cpu(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required `index` device should be CPUPlace, but received %d.",
             index.place()));
     PADDLE_ENFORCE_EQ(buffer.is_gpu_pinned(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Required `buffer` device should be CUDAPinnedPlace, "
                           "but received %d.",
                           buffer.place()));
     PADDLE_ENFORCE_EQ(
         offset.is_cpu(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required `offset` device should be CPUPlace, but received %d.",
             offset.place()));
     PADDLE_ENFORCE_EQ(
         count.is_cpu(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required `count` device should be CPUPlace, but received %d.",
             count.place()));
 
@@ -1038,31 +1057,31 @@ static PyObject* eager_api_async_read(PyObject* self,
 
     PADDLE_ENFORCE_EQ(src_tensor.dims().size(),
                       dst_tensor->dims().size(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`src` and `dst` should have same tensor shape, "
                           "except for the first dimension."));
     PADDLE_ENFORCE_EQ(src_tensor.dims().size(),
                       buffer_tensor->dims().size(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`src` and `buffer` should have same tensor shape, "
                           "except for the first dimension."));
     for (int i = 1; i < src_tensor.dims().size(); i++) {
       PADDLE_ENFORCE_EQ(
           src_tensor.dims()[i],
           dst_tensor->dims()[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "`src` and `dst` should have the same tensor shape, "
               "except for the first dimension."));
       PADDLE_ENFORCE_EQ(
           src_tensor.dims()[i],
           buffer_tensor->dims()[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "`src` and `buffer` should have the same tensor shape, "
               "except for the first dimension."));
     }
     PADDLE_ENFORCE_EQ(index_tensor.dims().size(),
                       1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`index` tensor should be one-dimensional."));
 
     auto stream = paddle::platform::get_current_stream(deviceId)->raw_stream();
@@ -1074,15 +1093,15 @@ static PyObject* eager_api_async_read(PyObject* self,
     if (copy_flag != 0) {
       PADDLE_ENFORCE_EQ(offset_tensor.dims().size(),
                         1,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "`offset` tensor should be one-dimensional."));
       PADDLE_ENFORCE_EQ(count_tensor.dims().size(),
                         1,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "`count` tensor should be one-dimensional."));
       PADDLE_ENFORCE_EQ(offset_tensor.numel(),
                         count_tensor.numel(),
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "`offset` and `count` tensor size mismatch."));
       auto* offset_data = offset_tensor.data<int64_t>();
       auto* count_data = count_tensor.data<int64_t>();
@@ -1092,11 +1111,11 @@ static PyObject* eager_api_async_read(PyObject* self,
       PADDLE_ENFORCE_LE(
           numel + index_tensor.numel(),
           buffer_tensor->dims()[0],
-          phi::errors::InvalidArgument("Buffer tensor size is too small."));
+          common::errors::InvalidArgument("Buffer tensor size is too small."));
       PADDLE_ENFORCE_LE(
           numel + index_tensor.numel(),
           dst_tensor->dims()[0],
-          phi::errors::InvalidArgument("Target tensor size is too small."));
+          common::errors::InvalidArgument("Target tensor size is too small."));
 
       int64_t src_offset, dst_offset = 0, c;
       auto* src_data = src_tensor.data<float>();
@@ -1105,11 +1124,11 @@ static PyObject* eager_api_async_read(PyObject* self,
         PADDLE_ENFORCE_LE(
             src_offset + c,
             src_tensor.dims()[0],
-            phi::errors::InvalidArgument("Invalid offset or count index."));
+            common::errors::InvalidArgument("Invalid offset or count index."));
         PADDLE_ENFORCE_LE(
             dst_offset + c,
             dst_tensor->dims()[0],
-            phi::errors::InvalidArgument("Invalid offset or count index."));
+            common::errors::InvalidArgument("Invalid offset or count index."));
         cudaMemcpyAsync(dst_data + (dst_offset * size),
                         src_data + (src_offset * size),
                         c * size * sizeof(float),
@@ -1121,7 +1140,7 @@ static PyObject* eager_api_async_read(PyObject* self,
       PADDLE_ENFORCE_LE(
           index_tensor.numel(),
           buffer_tensor->dims()[0],
-          phi::errors::InvalidArgument("Buffer tensor size is too small."));
+          common::errors::InvalidArgument("Buffer tensor size is too small."));
     }
 
     // Select the index data to the buffer
@@ -1169,28 +1188,29 @@ static PyObject* eager_api_async_write(PyObject* self,
   }
   {
     eager_gil_scoped_release guard;
+    EagerSetDeviceId();
     PADDLE_ENFORCE_EQ(
         src.is_gpu(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required `src` device should be CUDAPlace, but received %d. ",
             src.place()));
     PADDLE_ENFORCE_EQ(dst.is_gpu_pinned(),
                       true,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Required `dst` device should be CUDAPinnedPlace, "
                           "but received %d. ",
                           dst.place()));
     PADDLE_ENFORCE_EQ(
         offset.is_cpu(),
         true,
-        phi::errors::InvalidArgument("Required `offset` device should "
-                                     "be CPUPlace, but received %d. ",
-                                     offset.place()));
+        common::errors::InvalidArgument("Required `offset` device should "
+                                        "be CPUPlace, but received %d. ",
+                                        offset.place()));
     PADDLE_ENFORCE_EQ(
         count.is_cpu(),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Required `count` device should be CPUPlace, but received %d. ",
             count.place()));
 
@@ -1204,26 +1224,26 @@ static PyObject* eager_api_async_write(PyObject* self,
 
     PADDLE_ENFORCE_EQ(offset_tensor.dims().size(),
                       1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`offset` tensor should be one-dimensional."));
     PADDLE_ENFORCE_EQ(count_tensor.dims().size(),
                       1,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`count` tensor should be one-dimensional."));
     PADDLE_ENFORCE_EQ(offset_tensor.numel(),
                       count_tensor.numel(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`offset` and `count` tensor size mismatch."));
     PADDLE_ENFORCE_EQ(src_tensor.dims().size(),
                       dst_tensor->dims().size(),
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "`src` and `dst` should have the same tensor shape, "
                           "except for the first dimension."));
     for (int i = 1; i < src_tensor.dims().size(); i++) {
       PADDLE_ENFORCE_EQ(
           src_tensor.dims()[i],
           dst_tensor->dims()[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "`src` and `dst` should have the same tensor shape, "
               "except for the first dimension."));
     }
@@ -1241,11 +1261,11 @@ static PyObject* eager_api_async_write(PyObject* self,
       PADDLE_ENFORCE_LE(
           src_offset + c,
           src_tensor.dims()[0],
-          phi::errors::InvalidArgument("Invalid offset or count index"));
+          common::errors::InvalidArgument("Invalid offset or count index"));
       PADDLE_ENFORCE_LE(
           dst_offset + c,
           dst_tensor->dims()[0],
-          phi::errors::InvalidArgument("Invalid offset or count index"));
+          common::errors::InvalidArgument("Invalid offset or count index"));
       cudaMemcpyAsync(dst_data + (dst_offset * size),
                       src_data + (src_offset * size),
                       c * size * sizeof(float),
@@ -1296,7 +1316,7 @@ static PyObject* eager_api_to_uva_tensor(PyObject* self,
   } else {
     // obj may be any type, obj.cast<py::array>() may be failed,
     // then the array.dtype will be string of unknown meaning.
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "Input object type error or incompatible array data type. "
         "tensor.set() supports array with bool, float16, float32, "
         "float64, int8, int16, int32, int64,"
@@ -1333,10 +1353,10 @@ static PyObject* eager_api_set_master_grads(PyObject* self,
     PADDLE_ENFORCE_NE(
         grad,
         nullptr,
-        phi::errors::Fatal("Detected nullptr grad"
-                           "Please check if you have manually cleared"
-                           "the grad inside autograd_meta"));
-    if (((*grad).initialized() || (*grad).is_dist_tensor()) &&
+        common::errors::Fatal("Detected nullptr grad"
+                              "Please check if you have manually cleared"
+                              "the grad inside autograd_meta"));
+    if (((*grad).has_allocation() || (*grad).is_dist_tensor()) &&
         ((*grad).dtype() == phi::DataType::FLOAT16 ||
          (*grad).dtype() == phi::DataType::BFLOAT16)) {
       auto master_grad =
@@ -1355,6 +1375,34 @@ PyObject* eager__is_run_in_backward(PyObject* self,
   EAGER_TRY
 
   return ToPyObject(egr::Controller::Instance().GetIsInBackward());
+
+  EAGER_CATCH_AND_THROW_RETURN_NULL
+}
+
+PyObject* eager__for_test_check_cuda_error(PyObject* self,
+                                           PyObject* args,
+                                           PyObject* kwargs) {
+  EAGER_TRY
+#ifdef PADDLE_WITH_CUDA
+  // 1. wait all kernel finish
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaDeviceSynchronize());
+
+  // 2. get error state
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaGetLastError());
+
+  // 3. check if cuda 700
+  size_t bytes = 256;
+  char* cuda_mem;
+  char* cpu_mem = new char[bytes + 1];
+
+  cudaMalloc(&cuda_mem, bytes + 1);
+  cudaMemset(cuda_mem, 0, bytes + 1);
+  cudaMemcpyAsync(cpu_mem, cuda_mem, bytes, cudaMemcpyDeviceToHost);
+
+  cudaFree(cuda_mem);
+  delete[] cpu_mem;
+#endif
+  RETURN_PY_NONE
 
   EAGER_CATCH_AND_THROW_RETURN_NULL
 }
@@ -1436,6 +1484,10 @@ PyMethodDef variable_functions[] = {  // NOLINT
      (PyCFunction)(void (*)())eager__is_run_in_backward,
      METH_VARARGS | METH_KEYWORDS,
      nullptr},
+    {"_for_test_check_cuda_error",
+     (PyCFunction)(void (*)())eager__for_test_check_cuda_error,
+     METH_VARARGS | METH_KEYWORDS,
+     nullptr},
 /**sparse functions**/
 #if defined(PADDLE_WITH_CUDA)
     {"async_read",
@@ -1455,7 +1507,7 @@ PyMethodDef variable_functions[] = {  // NOLINT
 
 void BindFunctions(PyObject* module) {
   if (PyModule_AddFunctions(module, variable_functions) < 0) {
-    PADDLE_THROW(phi::errors::Fatal(
+    PADDLE_THROW(common::errors::Fatal(
         "Init Paddle error in BindFunctions(PyModule_AddFunctions)."));
     return;
   }

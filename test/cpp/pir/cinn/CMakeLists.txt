@@ -30,10 +30,19 @@ if(WITH_TESTING AND WITH_CINN)
   paddle_test(test_tile_config_searcher SRCS tile_config_searcher_test.cc DEPS
               schedule_config_search)
 
+  paddle_test(
+    test_tile_config_searcher_pure_spatial SRCS
+    tile_config_searcher_pure_spatial_test.cc DEPS schedule_config_search)
+
   paddle_test(test_tile_config_performance SRCS tile_config_performance_test.cc
               DEPS schedule_config_search)
 
   paddle_test(test_file_tile_config SRCS file_tile_config_test.cc)
+
+  paddle_test(replace_cross_block_reduction_test SRCS
+              replace_cross_block_reduction_test.cc)
+
+  paddle_test(ir_simplify_test SRCS ir_simplify_test.cc)
 
   # DO NOT forget add test name here, otherwise it will not be executed in
   # CINN CI.
@@ -47,18 +56,16 @@ if(WITH_TESTING AND WITH_CINN)
       test_generate_shape_util_test
       merge_parallel_matmul_pass_test
       test_tile_config_searcher
-      test_file_tile_config)
+      test_tile_config_searcher_pure_spatial
+      test_file_tile_config
+      replace_cross_block_reduction_test)
 
   foreach(test_name ${cinn_unit_tests})
     get_property(
       env
       TEST ${test_name}
       PROPERTY ENVIRONMENT)
-    set_property(
-      TEST ${test_name}
-      PROPERTY ENVIRONMENT "FLAGS_cinn_new_group_scheduler=1"
-               "FLAGS_cinn_bucket_compile=1"
-               "FLAGS_group_schedule_tiling_first=1" ${env})
+    set_property(TEST ${test_name} PROPERTY ENVIRONMENT ${env})
     set_tests_properties(${test_name} PROPERTIES LABELS "RUN_TYPE=CINN")
   endforeach()
 

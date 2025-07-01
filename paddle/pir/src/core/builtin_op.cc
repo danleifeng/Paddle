@@ -18,10 +18,32 @@
 #include "paddle/pir/include/core/builtin_attribute.h"
 #include "paddle/pir/include/core/builtin_op.h"
 #include "paddle/pir/include/core/builtin_type.h"
-
+#include "paddle/pir/include/core/ir_printer.h"
+#include "paddle/pir/include/dialect/control_flow/ir/cf_op.h"
 namespace pir {
 
 const char *ModuleOp::attributes_name[attributes_num] = {"program"};  // NOLINT
+
+bool IsDynamicShapeTypeEqual(Type type1, Type type2) {
+  // Only support DenseTensorType now
+  bool are_equal = false;
+  if (type1.isa<DenseTensorType>() && type2.isa<DenseTensorType>()) {
+    auto type_l = type1.dyn_cast<DenseTensorType>();
+    auto type_r = type2.dyn_cast<DenseTensorType>();
+    auto vec1 = type_l.dims();
+    auto vec2 = type_r.dims();
+    if (vec1.size() != vec2.size()) return false;
+    for (auto i = 0; i < vec1.size(); ++i) {
+      are_equal = ((vec1[i] == -1 || vec2[i] == -1) || (vec1[i] == vec2[i])) |
+                  are_equal;
+    }
+    return static_cast<bool>(type_l.dtype() == type_r.dtype() &&
+                             type_l.data_layout() == type_r.data_layout() &&
+                             type_l.lod() == type_r.lod() &&
+                             type_l.offset() == type_r.offset() && are_equal);
+  }
+  return are_equal;
+}
 
 void PassStopGradientsDefaultly(OperationArgument &argument) {  // NOLINT
   VLOG(10) << "Builder construction stop gradient for OpResults.";
@@ -33,6 +55,17 @@ void PassStopGradientsDefaultly(OperationArgument &argument) {  // NOLINT
       break;
     }
   }
+  std::vector<pir::Attribute> outs_stop_gradient(
+      argument.output_types.size(),
+      pir::BoolAttribute::get(pir::IrContext::Instance(), stop_gradient));
+  argument.AddAttribute(
+      kStopGradientAttrName,
+      pir::ArrayAttribute::get(pir::IrContext::Instance(), outs_stop_gradient));
+}
+
+void TrueStopGradientsDefaultly(OperationArgument &argument) {  // NOLINT
+  VLOG(10) << "Builder construction stop gradient as True for OpResults.";
+  bool stop_gradient = true;
   std::vector<pir::Attribute> outs_stop_gradient(
       argument.output_types.size(),
       pir::BoolAttribute::get(pir::IrContext::Instance(), stop_gradient));
@@ -117,6 +150,74 @@ void ModuleOp::VerifySig() const {
                     0u,
                     common::errors::InvalidArgument(
                         "The size of inputs must be equal to 0."));
+}
+
+const char *GroupOp::attributes_name[attributes_num] = {"group_info"};
+
+void GroupOp::Build(Builder &builder,
+                    OperationArgument &argument,
+                    const std::vector<Type> &output_types) {
+  argument.AddRegion(nullptr);
+  argument.output_types = output_types;
+}
+
+void GroupOp::Build(Builder &builder,             // NOLINT
+                    OperationArgument &argument,  // NOLINT
+                    std::unique_ptr<Block> &&block) {
+  VLOG(4) << "Start build GroupOp";
+  if (block && !block->empty()) {
+    PADDLE_ENFORCE_EQ(block->back().isa<pir::YieldOp>(), true);
+    auto &op = block->back();
+    for (size_t i = 0; i < op.num_operands(); ++i) {
+      argument.AddOutput(op.operand(i).type());
+    }
+  }
+  argument.AddRegion().push_back(block.release());
+}
+
+Block *GroupOp::block() {
+  pir::Region &region = (*this)->region(0);
+  if (region.empty()) region.emplace_back();
+  return &region.front();
+}
+
+Block *GroupOp::block() const {
+  pir::Region &region = (*this)->region(0);
+  PADDLE_ENFORCE_EQ(region.empty(),
+                    false,
+                    ::common::errors::Unavailable(
+                        "Required GroupOp's region must not be emptpy."));
+  return &region.front();
+}
+
+std::vector<pir::Operation *> GroupOp::GetOperators() const {
+  std::vector<pir::Operation *> rt_ops;
+  for (auto &op : *block()) {
+    rt_ops.push_back(&op);
+  }
+  return rt_ops;
+}
+
+void GroupOp::VerifySig() {}
+
+void GroupOp::Print(IrPrinter &printer) {
+  auto &os = printer.os;
+  auto op = operation();
+  printer.PrintOpResult(*op);
+  os << " = ";
+  printer.PrintOpName(*op);
+  printer.PrintOpId(*op);
+  printer.PrintOpOperands(*op);
+  os << " -> ";
+  printer.PrintOpReturnType(*op);
+  os << " {\n";
+  printer.AddIndentation();
+  for (auto &sub_op : GetOperators()) {
+    printer.PrintOperation(*sub_op);
+    os << "\n";
+  }
+  printer.DecreaseIndentation();
+  os << printer.indentation() << "}";
 }
 
 const char *ParameterOp::attributes_name[attributes_num] = {  // NOLINT
@@ -273,11 +374,12 @@ void CombineOp::VerifySig() const {
           input_num));
 
   // forall i in inputs.size(): inputs[i].type == outputs[0][i].type
-  for (size_t i = 0; i < input_num; ++i) {
+  for (uint64_t i = 0; i < input_num; ++i) {
     auto type = (*this)->operand(i).type();
     PADDLE_ENFORCE_EQ(
-        output_type[i],
-        type,
+        (output_type[i] == type ||
+         IsDynamicShapeTypeEqual(output_type[i], type)),
+        true,
         common::errors::InvalidArgument("The type %s of outputs[0][%d] must be "
                                         "equal to type %s of inputs[%d].",
                                         output_type[i],
@@ -577,7 +679,7 @@ void ConstantTensorOp::VerifySig() const {
       common::errors::InvalidArgument("Type of value must be str attribute"));
 }
 
-ConstantTensorOp ConstantTensorOp::dyn_cast(Operation *op) {
+ConstantTensorOp ConstantTensorOp::dyn_cast(const Operation *op) {
   if (ConstantTensorOp::classof(op)) return ConstantTensorOp(op);
   return ConstantTensorOp(nullptr);
 }
@@ -610,3 +712,4 @@ IR_DEFINE_EXPLICIT_TYPE_ID(pir::SplitOp)
 IR_DEFINE_EXPLICIT_TYPE_ID(pir::ConstantLikeTrait)
 IR_DEFINE_EXPLICIT_TYPE_ID(pir::ConstantOp)
 IR_DEFINE_EXPLICIT_TYPE_ID(pir::ConstantTensorOp)
+IR_DEFINE_EXPLICIT_TYPE_ID(pir::GroupOp)

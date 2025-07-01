@@ -20,8 +20,7 @@
 
 #include "paddle/fluid/platform/enforce.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 std::string CipherUtils::GenKey(int length) {
   CryptoPP::AutoSeededRandomPool prng;
@@ -46,9 +45,9 @@ std::string CipherUtils::GenKeyToFile(int length, const std::string& filename) {
   PADDLE_ENFORCE_EQ(
       fout.is_open(),
       true,
-      phi::errors::Unavailable("Failed to open file : %s, "
-                               "make sure input filename is available.",
-                               filename));
+      common::errors::Unavailable("Failed to open file : %s, "
+                                  "make sure input filename is available.",
+                                  filename));
   fout.write(rng.c_str(), rng.size());  // NOLINT
   fout.close();
   return rng;
@@ -68,9 +67,9 @@ std::unordered_map<std::string, std::string> CipherUtils::LoadConfig(
   PADDLE_ENFORCE_EQ(
       fin.is_open(),
       true,
-      phi::errors::Unavailable("Failed to open file : %s, "
-                               "make sure input filename is available.",
-                               config_file));
+      common::errors::Unavailable("Failed to open file : %s, "
+                                  "make sure input filename is available.",
+                                  config_file));
   std::unordered_map<std::string, std::string> ret;
   char c = 0;
   std::string line;
@@ -84,7 +83,7 @@ std::unordered_map<std::string, std::string> CipherUtils::LoadConfig(
     std::string key;
     std::string value;
     if (!(iss >> key >> c >> value) && (c == ':')) {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "Parse config file error, "
           "check the format of configure in file %s.",
           config_file));
@@ -115,5 +114,4 @@ bool CipherUtils::GetValue<bool>(
 
 const int CipherUtils::AES_DEFAULT_IV_SIZE = 128;
 const int CipherUtils::AES_DEFAULT_TAG_SIZE = 128;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

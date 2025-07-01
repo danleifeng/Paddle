@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
-from typing import Optional
 
 import numpy as np
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 # from op_test import OpTest
 
@@ -27,8 +27,8 @@ from paddle.pir_utils import test_with_pir_api
 def np_nan_to_num(
     x: np.ndarray,
     nan: float = 0.0,
-    posinf: Optional[float] = None,
-    neginf: Optional[float] = None,
+    posinf: float | None = None,
+    neginf: float | None = None,
 ) -> np.ndarray:
     return np.nan_to_num(x, True, nan=nan, posinf=posinf, neginf=neginf)
 
@@ -62,7 +62,6 @@ class TestNanToNum(unittest.TestCase):
             else paddle.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_static(self):
         x_np = np.array([[1, np.nan, -2], [np.inf, 0, -np.inf]]).astype(
             np.float32
@@ -201,6 +200,40 @@ class TestNanToNum(unittest.TestCase):
 #             'replace_neginf_with_min': False,
 #             'neginf': -10
 #         }
+
+
+class TestNanToNum_ZeroSize(unittest.TestCase):
+    def setUp(self):
+        self.place = (
+            paddle.CUDAPlace(0)
+            if core.is_compiled_with_cuda()
+            else paddle.CPUPlace()
+        )
+        self.x_np = np.random.random([2, 0, 3]).astype(np.float32)
+
+    def test_dygraph(self):
+        paddle.disable_static(place=self.place)
+
+        with paddle.base.dygraph.guard():
+            x_tensor = paddle.to_tensor(self.x_np, stop_gradient=False)
+
+            out_tensor = paddle.nan_to_num(x_tensor)
+            out_np = np_nan_to_num(self.x_np)
+            np.testing.assert_allclose(out_tensor.numpy(), out_np)
+
+        paddle.enable_static()
+
+    def test_check_grad(self):
+        paddle.disable_static(place=self.place)
+        x_tensor = paddle.to_tensor(self.x_np, stop_gradient=False)
+        x_tensor.stop_gradient = False
+        y = paddle.nan_to_num(x_tensor)
+        loss = paddle.sum(y)
+        loss.backward()
+        np.testing.assert_allclose(x_tensor.grad.shape, x_tensor.shape)
+
+        paddle.enable_static()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 #include "paddle/phi/api/lib/kernel_dispatch.h"
 #include <glog/logging.h>
+#include "paddle/phi/core/tensor_array.h"
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
@@ -29,7 +30,7 @@ limitations under the License. */
 namespace paddle::experimental::detail {
 
 // We need judge whether the allocation is nullptr,
-// whether the allocation is initialized, wo we need GetHolder method
+// whether the allocation is initialized, so we need GetHolder method
 bool HasAllocation(const phi::TensorBase& t) {
   if (phi::DenseTensor::classof(&t)) {
     return phi::DenseTensorUtils::GetHolder(
@@ -50,6 +51,8 @@ bool HasAllocation(const phi::TensorBase& t) {
                static_cast<const phi::StringTensor&>(t)) != nullptr;
   } else if (phi::distributed::DistTensor::classof(&t)) {
     return static_cast<const phi::distributed::DistTensor&>(t).defined();
+  } else if (phi::TensorArray::classof(&t)) {
+    return t.has_allocation();
   } else {
     return false;
   }
@@ -125,7 +128,7 @@ DataType ParseDataType(const std::vector<Tensor>& tensors) {
   auto n = tensors.size();
   for (size_t i = 1; i < n; ++i) {
     if (tensors[i].type() != dtype) {
-      PADDLE_THROW(phi::errors::InvalidArgument(
+      PADDLE_THROW(common::errors::InvalidArgument(
           "The data_type of input tensor in list isn't consistent, "
           "the first tensor is %s, but %dth tensor is %s.",
           dtype,

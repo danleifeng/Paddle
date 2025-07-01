@@ -38,13 +38,13 @@ limitations under the License. */
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/program_desc.h"
-#include "paddle/fluid/framework/reader.h"
-#include "paddle/fluid/framework/trainer_desc.pb.h"
 #include "paddle/fluid/framework/variable_helper.h"
-#include "paddle/fluid/operators/reader/blocking_queue.h"
-#include "paddle/fluid/platform/timer.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/common/port.h"
+#include "paddle/phi/core/framework/reader.h"
+#include "paddle/phi/core/framework/trainer_desc.pb.h"
+#include "paddle/phi/core/operators/reader/blocking_queue.h"
+#include "paddle/phi/core/platform/timer.h"
 
 namespace paddle {
 namespace framework {
@@ -60,18 +60,18 @@ class Scope;
 namespace paddle {
 namespace framework {
 
-TEST_API std::string PrintLodTensor(phi::DenseTensor* tensor,
-                                    int64_t start,
-                                    int64_t end,
-                                    char separator = ',',
-                                    bool need_leading_separator = false);
-TEST_API void PrintLodTensor(phi::DenseTensor* tensor,
-                             int64_t start,
-                             int64_t end,
-                             std::string& output_str,  // NOLINT
-                             char separator = ',',
-                             bool need_leading_separator = false,
-                             int num_decimals = 9);
+TEST_API std::string PrintDenseTensor(phi::DenseTensor* tensor,
+                                      int64_t start,
+                                      int64_t end,
+                                      char separator = ',',
+                                      bool need_leading_separator = false);
+TEST_API void PrintDenseTensor(phi::DenseTensor* tensor,
+                               int64_t start,
+                               int64_t end,
+                               std::string& output_str,  // NOLINT
+                               char separator = ',',
+                               bool need_leading_separator = false,
+                               int num_decimals = 9);
 TEST_API std::pair<int64_t, int64_t> GetTensorBound(phi::DenseTensor* tensor,
                                                     int index);
 TEST_API bool CheckValidOutput(phi::DenseTensor* tensor, size_t batch_size);

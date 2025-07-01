@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(123)
 paddle.enable_static()
@@ -58,7 +57,7 @@ class PyArgsort:
 
 
 def create_tensor(np_data, place):
-    tensor = core.LoDTensor()
+    tensor = core.DenseTensor()
     tensor.set(np_data, place)
     return tensor
 
@@ -67,7 +66,6 @@ class TestArgsortErrorOnCPU(unittest.TestCase):
     def setUp(self):
         self.place = core.CPUPlace()
 
-    @test_with_pir_api
     def test_error(self):
         def test_base_var_type():
             with paddle.static.program_guard(paddle.static.Program()):
@@ -98,7 +96,6 @@ class TestArgsort(unittest.TestCase):
         self.axis = 0
         self.data = np.random.rand(*self.input_shape)
 
-    @test_with_pir_api
     def test_api_static1(self):
         if core.is_compiled_with_cuda():
             self.place = core.CUDAPlace(0)
@@ -119,7 +116,6 @@ class TestArgsort(unittest.TestCase):
 
             self.assertEqual((result == np_result).all(), True)
 
-    @test_with_pir_api
     def test_api_static2(self):
         if core.is_compiled_with_cuda():
             self.place = core.CUDAPlace(0)
@@ -159,6 +155,30 @@ class TestArgsort4(TestArgsort):
         self.axis = 1
 
 
+class TestArgsortZeroSize(TestArgsort):
+    def init(self):
+        self.input_shape = [0, 3]
+        self.axis = 0
+
+
+class TestArgsortZeroSize2(TestArgsort):
+    def init(self):
+        self.input_shape = [2, 0, 4]
+        self.axis = 0
+
+
+class TestArgsortZeroSize3(TestArgsort):
+    def init(self):
+        self.input_shape = [0, 3]
+        self.axis = 1
+
+
+class TestArgsortZeroSize4(TestArgsort):
+    def init(self):
+        self.input_shape = [2, 0, 4]
+        self.axis = 1
+
+
 class TestStableArgsort(unittest.TestCase):
     def init(self):
         self.input_shape = [
@@ -179,7 +199,6 @@ class TestStableArgsort(unittest.TestCase):
         else:
             self.place = core.CPUPlace()
 
-    @test_with_pir_api
     def test_api_static1_cpu(self):
         self.cpu_place()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -197,7 +216,6 @@ class TestStableArgsort(unittest.TestCase):
 
             self.assertEqual((result == np_result).all(), True)
 
-    @test_with_pir_api
     def test_api_static1_gpu(self):
         self.gpu_place()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -215,7 +233,6 @@ class TestStableArgsort(unittest.TestCase):
 
             self.assertEqual((result == np_result).all(), True)
 
-    @test_with_pir_api
     def test_api_static2_cpu(self):
         self.cpu_place()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -235,7 +252,6 @@ class TestStableArgsort(unittest.TestCase):
 
             self.assertEqual((result2 == np_result2).all(), True)
 
-    @test_with_pir_api
     def test_api_static2_gpu(self):
         self.gpu_place()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -289,6 +305,34 @@ class TestStableArgsort4(TestStableArgsort):
             ]
             * 20
         )
+
+
+class TestStableArgsortZeroSize(TestStableArgsort):
+    def init(self):
+        self.input_shape = [0, 30]
+        self.data = np.random.rand(*self.input_shape)
+        self.axis = 0
+
+
+class TestStableArgsortZeroSize2(TestStableArgsort):
+    def init(self):
+        self.input_shape = [2, 0, 40]
+        self.data = np.random.rand(*self.input_shape)
+        self.axis = 0
+
+
+class TestStableArgsortZeroSize3(TestStableArgsort):
+    def init(self):
+        self.input_shape = [0, 30]
+        self.data = np.random.rand(*self.input_shape)
+        self.axis = 1
+
+
+class TestStableArgsortZeroSize4(TestStableArgsort):
+    def init(self):
+        self.input_shape = [2, 0, 40]
+        self.data = np.random.rand(*self.input_shape)
+        self.axis = 1
 
 
 class TestArgsortImperative(unittest.TestCase):
@@ -454,7 +498,7 @@ class TestArgsortWithInputNaN(unittest.TestCase):
 
 
 class TestArgsortOpFp16(unittest.TestCase):
-    @test_with_pir_api
+
     def test_fp16(self):
         if base.core.is_compiled_with_cuda():
             paddle.enable_static()
@@ -476,6 +520,7 @@ class TestArgsortFP16Op(OpTest):
         self.init()
         self.init_direction()
         self.op_type = "argsort"
+        self.prim_op_type = "prim"
         self.python_api = paddle.argsort
         self.public_python_api = paddle.argsort
         self.python_out_sig = ["Out"]
@@ -504,7 +549,13 @@ class TestArgsortFP16Op(OpTest):
         self.check_output(check_pir=True)
 
     def test_check_grad(self):
-        self.check_grad(['X'], 'Out', check_dygraph=False, check_pir=True)
+        self.check_grad(
+            ['X'],
+            'Out',
+            check_dygraph=False,
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
 
 class TestArgsortFP16OpDescendingTrue(TestArgsortFP16Op):
@@ -522,6 +573,7 @@ class TestArgsortBF16Op(OpTest):
         self.init()
         self.init_direction()
         self.op_type = "argsort"
+        self.prim_op_type = "prim"
         self.python_api = paddle.argsort
         self.public_python_api = paddle.argsort
         self.python_out_sig = ["Out"]
@@ -554,7 +606,12 @@ class TestArgsortBF16Op(OpTest):
     def test_check_grad(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['X'], 'Out', check_dygraph=False, check_pir=True
+            place,
+            ['X'],
+            'Out',
+            check_dygraph=False,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
 

@@ -18,8 +18,7 @@
 
 #include "paddle/phi/core/enforce.h"
 
-namespace phi {
-namespace jit {
+namespace phi::jit {
 
 std::map<size_t, std::shared_ptr<void>>& GetFuncCacheMap() {
   static thread_local std::map<size_t, std::shared_ptr<void>> g_func_cache_map;
@@ -61,7 +60,7 @@ const char* to_string(KernelType kt) {
     ONE_CASE(kEmbSeqPool);
     ONE_CASE(kSgd);
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "JIT kernel do not support type: %d.", kt));
       return "NOT JITKernel";
   }
@@ -75,7 +74,7 @@ const char* to_string(SeqPoolType tp) {
     ONE_CASE(kAvg);
     ONE_CASE(kSqrt);
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "SeqPool JIT kernel do not support type: %d.", tp));
       return "NOT PoolType";
   }
@@ -97,7 +96,7 @@ KernelType to_kerneltype(const std::string& act) {
   } else if (lower == "tanh" || lower == "vtanh") {
     return kVTanh;
   }
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Act JIT kernel do not support type: %s.", act));
   return kNone;
 }
@@ -109,7 +108,7 @@ void pack_weights<float>(const float* src, float* dst, int n, int k) {
   std::for_each(groups.begin(), groups.end(), [&](int i) {
     PADDLE_ENFORCE_GT(i,
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Each element of groups should be larger than "
                           "0. However the element: %d doesn't satisfy.",
                           i));
@@ -118,7 +117,7 @@ void pack_weights<float>(const float* src, float* dst, int n, int k) {
   std::memset(dst, 0, k * sum * block * sizeof(float));
   PADDLE_ENFORCE_GE(sum * block,
                     n,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The packed n (sum * block) should be equal to or "
                         "larger than n (matmul row size). "
                         "However, the packed n is %d and n is %d.",
@@ -145,9 +144,8 @@ void pack_weights<float>(const float* src, float* dst, int n, int k) {
 template <typename T>
 typename std::enable_if<!std::is_same<T, float>::value>::type pack_weights(
     const T* src, T* dst, int n, int k) {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "Only supports pack weights with float type."));
 }
 
-}  // namespace jit
-}  // namespace phi
+}  // namespace phi::jit

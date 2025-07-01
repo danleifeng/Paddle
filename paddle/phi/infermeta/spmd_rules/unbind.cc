@@ -34,12 +34,12 @@ SpmdInfo UnbindInferSpmd(const DistMetaTensor& x, int axis) {
   PADDLE_ENFORCE_LT(
       axis,
       x_ndim,
-      phi::errors::InvalidArgument("[%d] [%d] The axis [%d] should be less "
-                                   "than the rank of input tensor [%d].",
-                                   __FILE__,
-                                   __LINE__,
-                                   axis,
-                                   x_ndim));
+      common::errors::InvalidArgument("[%d] [%d] The axis [%d] should be less "
+                                      "than the rank of input tensor [%d].",
+                                      __FILE__,
+                                      __LINE__,
+                                      axis,
+                                      x_ndim));
 
   // Step1: Build Einsum Notation
   std::string alphabet = "abcdefghijklmnopqrstuvwxyz";
@@ -102,14 +102,14 @@ SpmdInfo UnbindInferSpmdReverse(const DistMetaTensor& x,
     int ndim = static_cast<int>(shape.size());
     auto dist_attr = outs[i]->dist_attr();
     int dims_mapping_size = static_cast<int>(dist_attr.dims_mapping().size());
-    PADDLE_ENFORCE_EQ(
-        ndim,
-        dims_mapping_size,
-        phi::errors::InvalidArgument("The Tensor Out[%d]'s rank [%d] and Its "
-                                     "dims_mapping size [%d] are not matched.",
-                                     i,
-                                     ndim,
-                                     dims_mapping_size));
+    PADDLE_ENFORCE_EQ(ndim,
+                      dims_mapping_size,
+                      common::errors::InvalidArgument(
+                          "The Tensor Out[%d]'s rank [%d] and Its "
+                          "dims_mapping size [%d] are not matched.",
+                          i,
+                          ndim,
+                          dims_mapping_size));
   }
 
   // Step1: Build Einsum Notation
@@ -138,7 +138,7 @@ SpmdInfo UnbindInferSpmdReverse(const DistMetaTensor& x,
   TensorDistAttr x_dist_attr_dst = CopyTensorDistAttrForOutput(x_dist_attr_src);
   x_dist_attr_dst.set_dims_mapping(x_dims_mapping);
 
-  // step2.3 get new dist attribute for output. the splitted
+  // step2.3 get new dist attribute for output. the split
   // cannot be sharded, if it is sharded, set it to replicated.
   std::vector<TensorDistAttr> out_dist_attrs_dst;
   for (int i = 0; i < nouts; i++) {

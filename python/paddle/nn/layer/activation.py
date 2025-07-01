@@ -189,7 +189,7 @@ class GELU(Layer):
         GELU(x) = 0.5 * x * (1 + erf(\frac{x}{\sqrt{2}}))
 
     Parameters:
-        approximate (bool, optional): Wether to enable approximation. Default is False.
+        approximate (bool, optional): Whether to enable approximation. Default is False.
         name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 
@@ -1190,7 +1190,7 @@ class ThresholdedReLU(Layer):
 
     Parameters:
         threshold (float, optional): The value of threshold for ThresholdedReLU. Default is 1.0
-        value (float, optinal): The value to replace with when x is less than threshold. Default is 0.0
+        value (float, optional): The value to replace with when x is less than threshold. Default is 0.0
         name (str|None, optional): Name for the operation (optional, default is None).
             For more information, please refer to :ref:`api_guide_Name`.
 

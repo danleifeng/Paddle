@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def ref_logsumexp(x, axis=None, keepdim=False, reduce_all=False):
@@ -58,7 +57,9 @@ def logsumexp_ref_grad(x):
 class TestLogsumexp(OpTest):
     def setUp(self):
         self.op_type = 'logsumexp'
+        self.prim_op_type = "prim"
         self.python_api = logsumexp_wrapper
+        self.public_python_api = logsumexp_wrapper
         self.shape = [2, 3, 4, 5]
         self.dtype = 'float64'
         self.axis = [-1]
@@ -88,7 +89,10 @@ class TestLogsumexp(OpTest):
         pass
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
     def test_check_grad(self):
         self.check_grad(
@@ -97,6 +101,7 @@ class TestLogsumexp(OpTest):
             user_defined_grads=self.user_defined_grads,
             user_defined_grad_outputs=self.user_defined_grad_outputs,
             check_pir=True,
+            check_prim_pir=True,
         )
 
     def calc_grad(self):
@@ -166,24 +171,25 @@ class TestLogsumexp_FP16(TestLogsumexp):
         self.dtype = 'float16'
 
     def test_check_output(self):
-        ref_x = self.inputs['X'].astype(np.float32)
-        out_ref = ref_logsumexp(ref_x)
-        paddle.disable_static()
-        x = self.inputs['X'].astype(np.float16)
-        tensor_x = paddle.to_tensor(x)
-        out_pad = logsumexp_wrapper(tensor_x)
-        paddle.enable_static()
-        np.testing.assert_allclose(
-            out_pad.numpy(), out_ref, rtol=1e-03, atol=1e-08
+        place = core.CUDAPlace(0)
+        self.check_output_with_place(
+            place,
+            check_pir=True,
+            check_prim_pir=True,
         )
 
     def test_check_grad(self):
-        self.__class__.dtype = self.dtype
-        ref_x = self.inputs['X'].astype(np.float32)
-        ref_x_grad = logsumexp_ref_grad(ref_x)
-        x = self.inputs['X'].astype(np.float16)
-        x_grad = logsumexp_op_grad(x)
-        np.testing.assert_allclose(x_grad, ref_x_grad, rtol=1e-03, atol=1e-05)
+        place = core.CUDAPlace(0)
+        self.check_grad_with_place(
+            place,
+            ['X'],
+            'Out',
+            check_pir=True,
+            check_prim_pir=True,
+        )
+
+    def set_attrs_addition(self):
+        pass
 
 
 @unittest.skipIf(
@@ -194,7 +200,9 @@ class TestLogsumexp_FP16(TestLogsumexp):
 class TestLogsumexpBF16Op(TestLogsumexp):
     def setUp(self):
         self.op_type = 'logsumexp'
+        self.prim_op_type = "prim"
         self.python_api = logsumexp_wrapper
+        self.public_python_api = logsumexp_wrapper
         self.dtype = np.uint16
         self.shape = [2, 3, 4, 5]
         self.axis = [-1]
@@ -214,11 +222,21 @@ class TestLogsumexpBF16Op(TestLogsumexp):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(
+            place,
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
-        self.check_grad_with_place(place, ['X'], 'Out', check_pir=True)
+        self.check_grad_with_place(
+            place,
+            ['X'],
+            'Out',
+            check_pir=True,
+            check_prim_pir=True,
+        )
 
     def set_attrs(self):
         pass
@@ -228,11 +246,10 @@ class TestLogsumexpBF16Op(TestLogsumexp):
 
 
 class TestLogsumexpError(unittest.TestCase):
-    @test_with_pir_api
     def test_errors(self):
         with paddle.static.program_guard(paddle.static.Program()):
             self.assertRaises(TypeError, paddle.logsumexp, 1)
-            x1 = paddle.static.data(name='x1', shape=[120], dtype="int32")
+            x1 = paddle.static.data(name='x1', shape=[120], dtype="bool")
             self.assertRaises(TypeError, paddle.logsumexp, x1)
 
 
@@ -261,7 +278,6 @@ class TestLogsumexpAPI(unittest.TestCase):
         np.testing.assert_allclose(out.numpy(), out_ref, rtol=1e-05)
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_api(self):
         self.api_case()
         self.api_case(2)
@@ -282,19 +298,50 @@ class TestLogsumexpAPI(unittest.TestCase):
         paddle.enable_static()
 
 
-# Test logsumexp bug
-class TestLogZeroError(unittest.TestCase):
-    def test_errors(self):
-        with paddle.base.dygraph.guard():
+class TestLogsumexp_ZeroSize(OpTest):
+    def setUp(self):
+        self.op_type = 'logsumexp'
+        self.python_api = logsumexp_wrapper
+        self.public_python_api = logsumexp_wrapper
+        self.dtype = 'float64'
+        self.shape = [2, 3, 0]
+        self.axis = [-1]  # out return shape [2, 3], value -inf
+        self.keepdim = False
+        self.reduce_all = False
+        self.set_attrs()
 
-            def test_0_size():
-                array = np.array([], dtype=np.float32)
-                x = paddle.to_tensor(
-                    np.reshape(array, [0, 0, 0]), dtype='float32'
-                )
-                paddle.logsumexp(x, axis=1)
+        np.random.seed(10)
+        x = np.random.uniform(-1, 1, self.shape).astype(self.dtype)
+        out = ref_logsumexp(x, self.axis, self.keepdim, self.reduce_all)
 
-            self.assertRaises(ValueError, test_0_size)
+        self.inputs = {'X': x}
+        self.outputs = {'Out': out}
+        self.attrs = {
+            'axis': self.axis,
+            'keepdim': self.keepdim,
+            'reduce_all': self.reduce_all,
+        }
+
+    def set_attrs(self):
+        pass
+
+    def test_check_output(self):
+        self.check_output(
+            check_pir=True,
+        )
+
+    def test_check_grad(self):
+        self.check_grad(
+            ['X'],
+            ['Out'],
+            check_pir=True,
+        )
+
+
+class TestLogsumexp_ZeroSize2(TestLogsumexp_ZeroSize):
+    def set_attrs(self):
+        self.shape = [2, 3, 0]
+        self.axis = [1]  # out return shape [2, 0]
 
 
 if __name__ == '__main__':

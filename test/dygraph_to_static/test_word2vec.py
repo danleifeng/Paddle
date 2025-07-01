@@ -20,7 +20,6 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
@@ -87,11 +86,10 @@ def build_dict(corpus, min_freq=3):
 
 word2id_freq, word2id_dict, id2word_dict = build_dict(corpus)
 vocab_size = len(word2id_freq)
-print("there are totoally %d different words in the corpus" % vocab_size)
+print(f"there are totoally {vocab_size} different words in the corpus")
 for _, (word, word_id) in zip(range(50), word2id_dict.items()):
     print(
-        "word %s, its id %d, its word freq %d"
-        % (word, word_id, word2id_freq[word_id])
+        f"word {word}, its id {word_id}, its word freq {word2id_freq[word_id]}"
     )
 
 
@@ -99,9 +97,11 @@ def convert_corpus_to_id(corpus, word2id_dict):
     new_corpus = []
     for line in corpus:
         new_line = [
-            word2id_dict[word]
-            if word in word2id_dict
-            else word2id_dict['[oov]']
+            (
+                word2id_dict[word]
+                if word in word2id_dict
+                else word2id_dict['[oov]']
+            )
             for word in line
         ]
         new_corpus.append(new_line)
@@ -173,8 +173,7 @@ def build_data(
 dataset = build_data(corpus, word2id_dict, word2id_freq)
 for _, (center_word, target_word, label) in zip(range(50), dataset):
     print(
-        "center_word %s, target %s, label %d"
-        % (id2word_dict[center_word], id2word_dict[target_word], label)
+        f"center_word {id2word_dict[center_word]}, target {id2word_dict[target_word]}, label {label}"
     )
 
 
@@ -312,13 +311,12 @@ def train():
 
             step += 1
             mean_loss = np.mean(loss.numpy())
-            print("step %d / %d, loss %f" % (step, total_steps, mean_loss))
+            print(f"step {step} / {total_steps}, loss {mean_loss:f}")
             ret.append(mean_loss)
         return np.array(ret)
 
 
 class TestWord2Vec(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_dygraph_static_same_loss(self):
         with enable_to_static_guard(False):
             dygraph_loss = train()

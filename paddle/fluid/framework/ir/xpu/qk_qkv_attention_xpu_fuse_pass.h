@@ -60,6 +60,10 @@ Origin subgraph:
                   |           |
                   |           |
                   |           |
+                  |         (scale)
+                  |           |
+                  |           |
+                  |           |
                    \        qk_softmax
                      \        |
                        \      |
@@ -78,6 +82,8 @@ Origin subgraph:
                               |
                             output
 
+The scale can be placed either above or below the qk_matmul. These two
+positions are mathematically equivalent.
 -------------------------------------------------------
 Fused subgraph:
                          input
@@ -97,7 +103,9 @@ class QkQkvAttentionXPUFusePass : public FusePassBase {
   void ApplyImpl(ir::Graph* graph) const override;
 
  private:
-  void ApplyQkQkvAttentionXPUFuse(ir::Graph* graph, bool with_q_scale) const;
+  void ApplyQkQkvAttentionXPUFuse(ir::Graph* graph,
+                                  bool with_q_scale,
+                                  bool scale_above_qk) const;
 
   const std::string name_scope_{"qk_qkv_attention_xpu_fuse_pass"};
 };

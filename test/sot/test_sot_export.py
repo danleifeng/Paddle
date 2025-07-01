@@ -17,7 +17,7 @@ import tempfile
 import unittest
 
 import paddle
-from paddle.jit.sot.utils import min_graph_size_guard, with_export_guard
+from paddle.jit.sot.utils import export_guard, min_graph_size_guard
 
 
 class Net(paddle.nn.Layer):
@@ -43,7 +43,7 @@ class TestSotExport(unittest.TestCase):
         temp_dir_name = temp_dir.name
         net = Net()
         x = paddle.to_tensor([2, 3], dtype="float32", stop_gradient=True)
-        with with_export_guard(temp_dir_name):
+        with export_guard(temp_dir_name):
             y = paddle.jit.to_static(net)(x)
         assert os.path.exists(os.path.join(temp_dir_name, "SIR_0.py"))
         temp_dir.cleanup()

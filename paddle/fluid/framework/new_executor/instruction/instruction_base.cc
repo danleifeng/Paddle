@@ -17,10 +17,10 @@
 #include "paddle/fluid/framework/new_executor/instruction/instruction_util.h"
 #include "paddle/fluid/framework/new_executor/interpreter/interpreter_util.h"
 #include "paddle/fluid/framework/new_executor/pir_adaptor/pir_adaptor_util.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 #include "paddle/fluid/framework/new_executor/interpreter/stream_analyzer.h"
-#include "paddle/fluid/platform/collective_helper.h"
+#include "paddle/phi/core/platform/collective_helper.h"
 #include "paddle/pir/include/core/builtin_attribute.h"
 
 namespace paddle::framework {
@@ -63,13 +63,13 @@ static std::string GetDtype(const Scope& scope, const std::string& name) {
 
   if (var->IsType<phi::DenseTensor>()) {
     const phi::DenseTensor& tensor = var->Get<phi::DenseTensor>();
-    if (UNLIKELY(!tensor.IsInitialized())) {
+    if (UNLIKELY(!tensor.has_allocation())) {
       return "";
     }
     return DataTypeToString(framework::TransToProtoVarType(tensor.dtype()));
   } else if (var->IsType<phi::SelectedRows>()) {
     auto tensor = var->Get<phi::SelectedRows>().value();
-    if (UNLIKELY(!tensor.IsInitialized())) {
+    if (UNLIKELY(!tensor.has_allocation())) {
       return "uninited";
     } else {
       return DataTypeToString(framework::TransToProtoVarType(tensor.dtype()));
@@ -94,13 +94,13 @@ static std::string GetPlace(const Scope& scope, const std::string& name) {
 
   if (var->IsType<phi::DenseTensor>()) {
     const phi::DenseTensor& tensor = var->Get<phi::DenseTensor>();
-    if (UNLIKELY(!tensor.IsInitialized())) {
+    if (UNLIKELY(!tensor.has_allocation())) {
       return "";
     }
     return to_string(tensor.place());
   } else if (var->IsType<phi::SelectedRows>()) {
     auto tensor = var->Get<phi::SelectedRows>().value();
-    if (UNLIKELY(!tensor.IsInitialized())) {
+    if (UNLIKELY(!tensor.has_allocation())) {
       return "uninited";
     } else {
       return to_string(tensor.place());
@@ -127,9 +127,9 @@ static int GetRowSize(const Scope& scope, const std::string& name) {
   return -1;
 }
 
-static LoD GetLoDDebug(const Scope& scope, const std::string& name) {
+static LegacyLoD GetLoDDebug(const Scope& scope, const std::string& name) {
   Variable* var = scope.FindVar(name);
-  auto default_lod = LoD({{}});
+  auto default_lod = LegacyLoD({{}});
 
   if (var == nullptr) {
     return default_lod;
@@ -197,15 +197,13 @@ InstructionBase::InstructionBase(size_t id, const phi::Place& place)
       no_need_buffer_values_() {
   id_ = id;
 
-  is_artificial_ = false;
-
   if (phi::is_cpu_place(place)) {
     type_ = OpFuncType::kCpuSync;
   } else {
     PADDLE_ENFORCE_EQ(
         interpreter::IsSupportedHeterPlace(place),
         true,
-        phi::errors::Fatal("Unsupported current place %s", place));
+        common::errors::Fatal("Unsupported current place %s", place));
     type_ = OpFuncType::kGpuAsync;
   }
 
@@ -219,22 +217,22 @@ const phi::DeviceContext& InstructionBase::DeviceContext() const {
 }
 
 void InstructionBase::RecordEvent(const Place& place) const {
-  platform::RecordEvent record(
-      "RecordStreamEvent", platform::TracerEventType::UserDefined, 10);
   if (event_to_record_) {
+    phi::RecordEvent record(
+        "RecordStreamEvent", phi::TracerEventType::UserDefined, 10);
     VLOG(6) << "Record event at instruction: " << id_;
     event_to_record_->event_->Record(dev_ctx_);
   }
 }
 
 void InstructionBase::WaitEvent(const Place& place) const {
-  // If InterpreterCore in on CPUPlace, do nothing.
-  if (phi::is_cpu_place(place)) {
-    return;
-  }
   for (const EventInter& event_iter : events_to_wait_) {
-    platform::RecordEvent record(
-        "WaitStreamEvent", platform::TracerEventType::UserDefined, 10);
+    // If InterpreterCore in on CPUPlace, do nothing.
+    if (phi::is_cpu_place(place)) {
+      continue;
+    }
+    phi::RecordEvent record(
+        "WaitStreamEvent", phi::TracerEventType::UserDefined, 10);
     VLOG(6) << "Wait instruction: " << event_iter.instr_id_
             << " 's event with waiter_type: " << event_iter.waiter_type_;
     event_iter.event_->Wait(event_iter.waiter_type_, dev_ctx_);
@@ -308,7 +306,7 @@ void InstructionBase::InitInputsOutputsIds(
       PADDLE_ENFORCE_EQ(
           value_exec_info.HasValue(value),
           true,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "input should in name map, [%d] 'th input of [%s] op",
               i,
               op_name));
@@ -325,7 +323,7 @@ void InstructionBase::InitInputsOutputsIds(
       PADDLE_ENFORCE_EQ(
           value_exec_info.HasValue(value),
           true,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "input should in name map, [%d] 'th input of [%s] op",
               i,
               op_name));

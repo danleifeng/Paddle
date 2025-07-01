@@ -38,6 +38,7 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/enforce.h"
 #include "paddle/fluid/distributed/ps/table/accessor.h"
 #include "paddle/fluid/distributed/ps/table/common_table.h"
 #include "paddle/fluid/distributed/ps/table/graph/class_macro.h"
@@ -47,7 +48,7 @@
 #include "paddle/utils/string/string_helper.h"
 
 #ifdef PADDLE_WITH_HETERPS
-#include "paddle/fluid/distributed/ps/table/depends/rocksdb_warpper.h"
+#include "paddle/fluid/distributed/ps/table/depends/rocksdb_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 #endif
 namespace paddle {
@@ -591,10 +592,10 @@ class GraphTable : public Table {
       std::string graph_data_local_path,
       std::vector<std::string> &res_type,                            // NOLINT
       std::unordered_map<std::string, std::string> &res_type2path);  // NOLINT
-  int32_t load_edges(const std::string &path,
-                     bool reverse,
-                     const std::string &edge_type,
-                     bool use_weight = false);
+  std::pair<uint64_t, uint64_t> load_edges(const std::string &path,
+                                           bool reverse,
+                                           const std::string &edge_type,
+                                           bool use_weight = false);
   int get_all_id(GraphTableType table_type,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);

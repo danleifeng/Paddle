@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import unittest
 from functools import partial
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 from program_config import ProgramConfig, TensorConfig
@@ -39,7 +41,7 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
         return True
 
     def sample_program_configs(self):
-        def generate_input1(attrs: List[Dict[str, Any]], batch):
+        def generate_input1(attrs: list[dict[str, Any]], batch):
             if self.dims == 4:
                 return np.ones([batch, 3, 24, 24]).astype(np.float32)
             elif self.dims == 3:
@@ -49,7 +51,7 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
             elif self.dims == 1:
                 return np.ones([24]).astype(np.float32)
 
-        def generate_input2(attrs: List[Dict[str, Any]], batch):
+        def generate_input2(attrs: list[dict[str, Any]], batch):
             if self.dims == 4:
                 return np.ones([batch, 3, 24, 24]).astype(np.float32)
             elif self.dims == 3:
@@ -59,7 +61,7 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
             elif self.dims == 1:
                 return np.ones([24]).astype(np.float32)
 
-        def generate_input3(attrs: List[Dict[str, Any]], batch):
+        def generate_input3(attrs: list[dict[str, Any]], batch):
             if self.dims == 4:
                 return np.ones([batch, 3, 24, 24]).astype(np.float32)
             elif self.dims == 3:
@@ -69,7 +71,7 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
             elif self.dims == 1:
                 return np.ones([24]).astype(np.float32)
 
-        def generate_weight1(attrs: List[Dict[str, Any]]):
+        def generate_weight1(attrs: list[dict[str, Any]]):
             return np.zeros([1]).astype(np.int32)
 
         for dims in [2, 3, 4]:
@@ -98,29 +100,12 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
                         ]
                         dics_inputs = [
                             {
-                                "concat_input1": TensorConfig(
-                                    data_gen=partial(
-                                        generate_input1, dics, batch
-                                    )
-                                ),
-                                "concat_input2": TensorConfig(
-                                    data_gen=partial(
-                                        generate_input2, dics, batch
-                                    )
-                                ),
-                                "concat_input3": TensorConfig(
-                                    data_gen=partial(
-                                        generate_input3, dics, batch
-                                    )
-                                ),
                                 "AxisTensor": TensorConfig(
                                     data_gen=partial(generate_weight1, dics)
                                 ),
-                            },
-                            {
-                                "concat_input1": TensorConfig(
+                                "concat_input3": TensorConfig(
                                     data_gen=partial(
-                                        generate_input1, dics, batch
+                                        generate_input3, dics, batch
                                     )
                                 ),
                                 "concat_input2": TensorConfig(
@@ -128,9 +113,26 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
                                         generate_input2, dics, batch
                                     )
                                 ),
+                                "concat_input1": TensorConfig(
+                                    data_gen=partial(
+                                        generate_input1, dics, batch
+                                    )
+                                ),
+                            },
+                            {
                                 "concat_input3": TensorConfig(
                                     data_gen=partial(
                                         generate_input3, dics, batch
+                                    )
+                                ),
+                                "concat_input2": TensorConfig(
+                                    data_gen=partial(
+                                        generate_input2, dics, batch
+                                    )
+                                ),
+                                "concat_input1": TensorConfig(
+                                    data_gen=partial(
+                                        generate_input1, dics, batch
                                     )
                                 ),
                             },
@@ -153,152 +155,154 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
 
                         yield program_config
 
+    def generate_dynamic_shape(self, attrs):
+        if self.num_input == 0:
+            if self.dims == 4:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [1, 3, 24, 24],
+                    "concat_input2": [1, 3, 24, 24],
+                    "concat_input3": [1, 3, 24, 24],
+                    "AxisTensor": [1],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [4, 3, 48, 48],
+                    "concat_input2": [4, 3, 48, 48],
+                    "concat_input3": [4, 3, 48, 48],
+                    "AxisTensor": [1],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [1, 3, 24, 24],
+                    "concat_input2": [1, 3, 24, 24],
+                    "concat_input3": [1, 3, 24, 24],
+                    "AxisTensor": [1],
+                }
+            elif self.dims == 3:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [1, 3, 24],
+                    "concat_input2": [1, 3, 24],
+                    "concat_input3": [1, 3, 24],
+                    "AxisTensor": [1],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [4, 12, 48],
+                    "concat_input2": [4, 12, 48],
+                    "concat_input3": [4, 12, 48],
+                    "AxisTensor": [1],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [1, 3, 24],
+                    "concat_input2": [1, 3, 24],
+                    "concat_input3": [1, 3, 24],
+                    "AxisTensor": [1],
+                }
+            elif self.dims == 2:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [1, 24],
+                    "concat_input2": [1, 24],
+                    "concat_input3": [1, 24],
+                    "AxisTensor": [1],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [4, 48],
+                    "concat_input2": [4, 48],
+                    "concat_input3": [4, 48],
+                    "AxisTensor": [1],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [1, 24],
+                    "concat_input2": [1, 24],
+                    "concat_input3": [1, 24],
+                    "AxisTensor": [1],
+                }
+            elif self.dims == 1:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [24],
+                    "concat_input2": [24],
+                    "concat_input3": [24],
+                    "AxisTensor": [0],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [48],
+                    "concat_input2": [48],
+                    "concat_input3": [48],
+                    "AxisTensor": [0],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [24],
+                    "concat_input2": [24],
+                    "concat_input3": [24],
+                    "AxisTensor": [0],
+                }
+        elif self.num_input == 1:
+            if self.dims == 4:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [1, 3, 24, 24],
+                    "concat_input2": [1, 3, 24, 24],
+                    "concat_input3": [1, 3, 24, 24],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [4, 3, 48, 48],
+                    "concat_input2": [4, 3, 48, 48],
+                    "concat_input3": [4, 3, 48, 48],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [1, 3, 24, 24],
+                    "concat_input2": [1, 3, 24, 24],
+                    "concat_input3": [1, 3, 24, 24],
+                }
+            elif self.dims == 3:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [1, 3, 24],
+                    "concat_input2": [1, 3, 24],
+                    "concat_input3": [1, 3, 24],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [4, 12, 48],
+                    "concat_input2": [4, 12, 48],
+                    "concat_input3": [4, 12, 48],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [1, 3, 24],
+                    "concat_input2": [1, 3, 24],
+                    "concat_input3": [1, 3, 24],
+                }
+            elif self.dims == 2:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [1, 24],
+                    "concat_input2": [1, 24],
+                    "concat_input3": [1, 24],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [4, 48],
+                    "concat_input2": [4, 48],
+                    "concat_input3": [4, 48],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [1, 24],
+                    "concat_input2": [1, 24],
+                    "concat_input3": [1, 24],
+                }
+            elif self.dims == 1:
+                self.dynamic_shape.min_input_shape = {
+                    "concat_input1": [24],
+                    "concat_input2": [24],
+                    "concat_input3": [24],
+                }
+                self.dynamic_shape.max_input_shape = {
+                    "concat_input1": [48],
+                    "concat_input2": [48],
+                    "concat_input3": [48],
+                }
+                self.dynamic_shape.opt_input_shape = {
+                    "concat_input1": [24],
+                    "concat_input2": [24],
+                    "concat_input3": [24],
+                }
+        return self.dynamic_shape
+
     def sample_predictor_configs(
-        self, program_config
-    ) -> (paddle_infer.Config, List[int], float):
-        def generate_dynamic_shape(attrs):
-            if self.num_input == 0:
-                if self.dims == 4:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [1, 3, 24, 24],
-                        "concat_input2": [1, 3, 24, 24],
-                        "concat_input3": [1, 3, 24, 24],
-                        "AxisTensor": [1],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [4, 3, 48, 48],
-                        "concat_input2": [4, 3, 48, 48],
-                        "concat_input3": [4, 3, 48, 48],
-                        "AxisTensor": [1],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [1, 3, 24, 24],
-                        "concat_input2": [1, 3, 24, 24],
-                        "concat_input3": [1, 3, 24, 24],
-                        "AxisTensor": [1],
-                    }
-                elif self.dims == 3:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [1, 3, 24],
-                        "concat_input2": [1, 3, 24],
-                        "concat_input3": [1, 3, 24],
-                        "AxisTensor": [1],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [4, 12, 48],
-                        "concat_input2": [4, 12, 48],
-                        "concat_input3": [4, 12, 48],
-                        "AxisTensor": [1],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [1, 3, 24],
-                        "concat_input2": [1, 3, 24],
-                        "concat_input3": [1, 3, 24],
-                        "AxisTensor": [1],
-                    }
-                elif self.dims == 2:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [1, 24],
-                        "concat_input2": [1, 24],
-                        "concat_input3": [1, 24],
-                        "AxisTensor": [1],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [4, 48],
-                        "concat_input2": [4, 48],
-                        "concat_input3": [4, 48],
-                        "AxisTensor": [1],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [1, 24],
-                        "concat_input2": [1, 24],
-                        "concat_input3": [1, 24],
-                        "AxisTensor": [1],
-                    }
-                elif self.dims == 1:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [24],
-                        "concat_input2": [24],
-                        "concat_input3": [24],
-                        "AxisTensor": [0],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [48],
-                        "concat_input2": [48],
-                        "concat_input3": [48],
-                        "AxisTensor": [0],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [24],
-                        "concat_input2": [24],
-                        "concat_input3": [24],
-                        "AxisTensor": [0],
-                    }
-            elif self.num_input == 1:
-                if self.dims == 4:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [1, 3, 24, 24],
-                        "concat_input2": [1, 3, 24, 24],
-                        "concat_input3": [1, 3, 24, 24],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [4, 3, 48, 48],
-                        "concat_input2": [4, 3, 48, 48],
-                        "concat_input3": [4, 3, 48, 48],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [1, 3, 24, 24],
-                        "concat_input2": [1, 3, 24, 24],
-                        "concat_input3": [1, 3, 24, 24],
-                    }
-                elif self.dims == 3:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [1, 3, 24],
-                        "concat_input2": [1, 3, 24],
-                        "concat_input3": [1, 3, 24],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [4, 12, 48],
-                        "concat_input2": [4, 12, 48],
-                        "concat_input3": [4, 12, 48],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [1, 3, 24],
-                        "concat_input2": [1, 3, 24],
-                        "concat_input3": [1, 3, 24],
-                    }
-                elif self.dims == 2:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [1, 24],
-                        "concat_input2": [1, 24],
-                        "concat_input3": [1, 24],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [4, 48],
-                        "concat_input2": [4, 48],
-                        "concat_input3": [4, 48],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [1, 24],
-                        "concat_input2": [1, 24],
-                        "concat_input3": [1, 24],
-                    }
-                elif self.dims == 1:
-                    self.dynamic_shape.min_input_shape = {
-                        "concat_input1": [24],
-                        "concat_input2": [24],
-                        "concat_input3": [24],
-                    }
-                    self.dynamic_shape.max_input_shape = {
-                        "concat_input1": [48],
-                        "concat_input2": [48],
-                        "concat_input3": [48],
-                    }
-                    self.dynamic_shape.opt_input_shape = {
-                        "concat_input1": [24],
-                        "concat_input2": [24],
-                        "concat_input3": [24],
-                    }
+        self, program_config, run_pir=False
+    ) -> tuple[paddle_infer.Config, list[int], float]:
 
         def clear_dynamic_shape():
             self.dynamic_shape.min_input_shape = {}
@@ -317,21 +321,22 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
         attrs = [
             program_config.ops[i].attrs for i in range(len(program_config.ops))
         ]
-        # for static_shape
-        clear_dynamic_shape()
-        self.trt_param.precision = paddle_infer.PrecisionType.Float32
-        program_config.set_input_type(np.float32)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-5
-        self.trt_param.precision = paddle_infer.PrecisionType.Half
-        program_config.set_input_type(np.float16)
-        yield self.create_inference_config(), generate_trt_nodes_num(
-            attrs, False
-        ), 1e-3
+        if not run_pir:
+            # for static_shape
+            clear_dynamic_shape(attrs)
+            self.trt_param.precision = paddle_infer.PrecisionType.Float32
+            program_config.set_input_type(np.float32)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                attrs, False
+            ), 1e-5
+            self.trt_param.precision = paddle_infer.PrecisionType.Half
+            program_config.set_input_type(np.float16)
+            yield self.create_inference_config(), generate_trt_nodes_num(
+                attrs, False
+            ), 1e-3
 
         # for dynamic_shape
-        generate_dynamic_shape(attrs)
+        self.generate_dynamic_shape(attrs)
         self.trt_param.precision = paddle_infer.PrecisionType.Float32
         program_config.set_input_type(np.float32)
         yield self.create_inference_config(), generate_trt_nodes_num(
@@ -355,7 +360,7 @@ class TrtConvertConcatTest(TrtLayerAutoScanTest):
 
     def test(self):
         self.add_skip_trt_case()
-        self.run_test()
+        self.run_test(run_pir=True)
 
 
 if __name__ == "__main__":

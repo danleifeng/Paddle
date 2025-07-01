@@ -13,10 +13,9 @@
 // limitations under the License.
 
 #pragma once
-#include <absl/container/flat_hash_map.h>
-#include <absl/types/any.h>
-#include <glog/logging.h>
 
+#include <glog/logging.h>
+#include <any>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -29,6 +28,7 @@
 #include "paddle/cinn/utils/registry.h"
 #include "paddle/cinn/utils/type_defs.h"
 #include "paddle/common/enforce.h"
+#include "paddle/utils/flat_hash_map.h"
 template <typename R, typename... Args>
 inline auto MakeOpFunction(R (*func)(Args...)) {
   return std::function<R(Args...)>(func);
@@ -71,7 +71,7 @@ enum OpPatternKind {
 struct OpRegistry : public Registry<Operator> {
   std::recursive_mutex mutex;
   std::atomic<int> op_counter{0};
-  absl::flat_hash_map<std::string, std::unique_ptr<absl::any>> attrs;
+  paddle::flat_hash_map<std::string, std::unique_ptr<std::any>> attrs;
 
   static OpRegistry* Global() {
     static OpRegistry x;
@@ -137,21 +137,23 @@ class Operator {
    */
   static const Operator* Get(const std::string& op_name) {
     const Operator* op = OpRegistry::Global()->Find(op_name);
-    CHECK(op) << "Operator [" << op_name << "] is not registered";
+    PADDLE_ENFORCE_NOT_NULL(op,
+                            ::common::errors::PreconditionNotMet(
+                                "Operator [%s] is not registered", op_name));
     return op;
   }
 
   template <typename ValueType>
   inline Operator& set_attr(const std::string& attr_name,
                             const ValueType& value) {
-    UpdateAttrMap(attr_name, [this, attr_name, value](absl::any* pmap) {
+    UpdateAttrMap(attr_name, [this, attr_name, value](std::any* pmap) {
       if (!pmap->has_value()) {
         OpValueType<ValueType> pm;
         pm.attr_name = attr_name;
         *pmap = std::move(pm);
       }
       std::vector<ValueType>& vec =
-          absl::any_cast<OpValueType<ValueType>&>(*pmap).data;
+          std::any_cast<OpValueType<ValueType>&>(*pmap).data;
       // resize the value type.
       if (vec.size() <= index) {
         vec.resize(index + 1, ValueType());
@@ -162,10 +164,10 @@ class Operator {
   }
   template <typename ValueType>
   static const OpValueType<ValueType>& GetAttrs(const std::string& attr_name) {
-    const absl::any* ref = GetAttrMap(attr_name);
+    const std::any* ref = GetAttrMap(attr_name);
     if (ref == nullptr) {
       //! update the attribute map of the key by creating new empty OpMap
-      UpdateAttrMap(attr_name, [attr_name](absl::any* pmap) {
+      UpdateAttrMap(attr_name, [attr_name](std::any* pmap) {
         if (!pmap->has_value()) {
           OpValueType<ValueType> pm;
           pm.attr_name = attr_name;
@@ -174,7 +176,7 @@ class Operator {
       });
       ref = GetAttrMap(attr_name);
     }
-    return absl::any_cast<const OpValueType<ValueType>&>(*ref);
+    return std::any_cast<const OpValueType<ValueType>&>(*ref);
   }
 
   auto get_index() const { return index; }
@@ -185,7 +187,7 @@ class Operator {
   friend class Registry<Operator>;
   uint32_t index{0};
   Operator() { index = OpRegistry::Global()->op_counter++; }
-  static const absl::any* GetAttrMap(const std::string& key) {
+  static const std::any* GetAttrMap(const std::string& key) {
     auto& dict = OpRegistry::Global()->attrs;
     auto it = dict.find(key);
     if (it != dict.end()) {
@@ -196,22 +198,25 @@ class Operator {
   }
   //! update the attribute OpValueType
   static void UpdateAttrMap(const std::string& key,
-                            std::function<void(absl::any*)> updater) {
+                            std::function<void(std::any*)> updater) {
     OpRegistry* reg = OpRegistry::Global();
     std::lock_guard<std::recursive_mutex>(reg->mutex);
-    std::unique_ptr<absl::any>& value = reg->attrs[key];
-    if (value.get() == nullptr) value.reset(new absl::any());
+    std::unique_ptr<std::any>& value = reg->attrs[key];
+    if (value.get() == nullptr) value.reset(new std::any());
     if (updater != nullptr) updater(value.get());
   }
 };
 
 template <typename ValueType>
 const ValueType& OpValueType<ValueType>::operator[](const Operator* op) const {
-  CHECK(op) << "The input op is nullptr and it is invalid! Please check again.";
+  PADDLE_ENFORCE_NOT_NULL(
+      op,
+      ::common::errors::PreconditionNotMet(
+          "The input op is nullptr and it is invalid! Please check again."));
   const uint32_t idx = op->index;
   PADDLE_ENFORCE_LT(idx,
                     data.size(),
-                    phi::errors::InvalidArgument(
+                    ::common::errors::InvalidArgument(
                         "Attribute  has not been registered for Operator"));
   return data[idx];
 }

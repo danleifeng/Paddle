@@ -176,6 +176,12 @@ class IR_API Block {
     return num;
   }
 
+  OpListType get_recursive_ops() {
+    OpListType ops;
+    Walk([&ops](Operation *op) { ops.push_back(op); });
+    return ops;
+  }
+
  private:
   Block(Block &) = delete;
   Block &operator=(const Block &) = delete;
@@ -197,6 +203,8 @@ class IR_API Block {
   KwargsType kwargs_;  // owned
   Region *parent_;     // not owned
 };
+
+std::ostream &operator<<(std::ostream &os, const Block &block);
 
 template <class TypeIter>
 void Block::AddArgs(TypeIter first, TypeIter last) {

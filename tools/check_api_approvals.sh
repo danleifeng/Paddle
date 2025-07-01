@@ -48,8 +48,8 @@ if [ "$api_spec_diff" != "" -o "${api_params_diff}" != "" ]; then
 fi
 
 if [ "$api_annotation_diff" != "" ]; then
-    echo_line="You must have one member of Typing group (SigureMo, megemini, zrr1999, sunzhongkai588, luotao1) approval for API annotation change.\n"
-    check_approval 1 SigureMo megemini zrr1999 sunzhongkai588 luotao1
+    echo_line="You must have one member of Typing group (SigureMo, zrr1999, megemini, sunzhongkai588) approval for API annotation change.\n"
+    check_approval 1 SigureMo zrr1999 megemini sunzhongkai588
 fi
 
 api_yaml_diff=`python ${PADDLE_ROOT}/tools/check_api_yaml_same.py ${PADDLE_ROOT}/paddle/fluid/API_DEV.spec  ${PADDLE_ROOT}/paddle/fluid/API_PR.spec ${BRANCH} ${PADDLE_ROOT}`
@@ -59,14 +59,6 @@ if [ "$api_yaml_diff" != "" ]; then
     echo_line="${echo_line} please request one of the RD (YuanRisheng, zyfncg, phlrain) review and approve.\n"
     echo_line="${echo_line}\r\n ${api_yaml_diff}\n"
     check_approval 1 YuanRisheng zyfncg phlrain
-fi
-
-api_src_spec_diff=`python ${PADDLE_ROOT}/tools/check_api_source_without_core_ops.py ${PADDLE_ROOT}/paddle/fluid/API_DEV.source.md5  ${PADDLE_ROOT}/paddle/fluid/API_PR.source.md5`
-if [ "$api_src_spec_diff" != "" ]; then
-    echo_line="APIs without core.ops: \n${api_src_spec_diff}\n"
-    echo_line="${echo_line}You must have one RD (JiabinYang (Recommend) or wanghuancoder, phlrain) approval for the api change for the opreator-related api without '_C_ops'.\n"
-    echo_line="${echo_line}For more details, please click [https://github.com/PaddlePaddle/Paddle/wiki/paddle_api_development_manual.md]\n"
-    check_approval 1 JiabinYang wanghuancoder phlrain
 fi
 
 op_type_spec_diff=`python ${PADDLE_ROOT}/tools/check_op_register_type.py ${PADDLE_ROOT}/paddle/fluid/OP_TYPE_DEV.spec  ${PADDLE_ROOT}/paddle/fluid/OP_TYPE_PR.spec`
@@ -138,7 +130,7 @@ if [ -n "${echo_list}" ];then
   echo "There are ${failed_num} approved errors."
   echo "**************************************************************"
 
-  # L40 L48 L62 has fetch the result out, but there are splitted.
+  # L40 L48 L62 has fetch the result out, but there are split.
   if [ "${api_spec_diff}" != "" -o "${api_annotation_diff}" != "" ] ; then
     python ${PADDLE_ROOT}/tools/diff_api.py ${PADDLE_ROOT}/paddle/fluid/API_DEV.spec  ${PADDLE_ROOT}/paddle/fluid/API_PR.spec
   fi

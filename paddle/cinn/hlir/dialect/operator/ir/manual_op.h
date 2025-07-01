@@ -31,7 +31,9 @@ namespace cinn {
 namespace dialect {
 
 class IR_API GroupOp
-    : public pir::Op<GroupOp, paddle::dialect::InferSymbolicShapeInterface> {
+    : public pir::Op<GroupOp,
+                     paddle::dialect::InferSymbolicShapeInterface,
+                     pir::SideEffectTrait> {
  public:
   using Op::Op;
   static const char *name() { return "cinn_op.group"; }
@@ -67,7 +69,7 @@ class IR_API FusionOp
  public:
   using Op::Op;
   static const char *name() { return "cinn_op.fusion"; }
-  static constexpr uint32_t attributes_num = 1;
+  static constexpr uint32_t attributes_num = 2;
   static const char *attributes_name[attributes_num];
   static void Build(pir::Builder &builder,             // NOLINT
                     pir::OperationArgument &argument,  // NOLINT
@@ -76,7 +78,8 @@ class IR_API FusionOp
   static void Build(pir::Builder &builder,             // NOLINT
                     pir::OperationArgument &argument,  // NOLINT
                     const std::vector<pir::Type> &output_types,
-                    const cinn::dialect::GroupInfo &group_info);
+                    const cinn::dialect::GroupInfo &group_info,
+                    const cinn::fusion::FusionTrackerPtr &tracker);
 
   pir::Block *block();
   pir::Block *block() const;
@@ -90,7 +93,7 @@ class IR_API FusionOp
 };
 
 // YieldStoreOp represents a store operation for
-// seperate local variable and ouptut
+// separate local variable and output
 class IR_API YieldStoreOp
     : public pir::Op<YieldStoreOp,
                      paddle::dialect::InferSymbolicShapeInterface> {
@@ -130,7 +133,8 @@ class IR_API ConcatOp
   bool InferSymbolicShape(pir::InferSymbolicShapeContext *infer_context);
 };
 
-class IR_API SplitOp : public pir::Op<SplitOp> {
+class IR_API SplitOp
+    : public pir::Op<SplitOp, paddle::dialect::InferSymbolicShapeInterface> {
  public:
   using Op::Op;
 
@@ -147,6 +151,8 @@ class IR_API SplitOp : public pir::Op<SplitOp> {
                     int axis);
 
   void VerifySig() const {}
+
+  bool InferSymbolicShape(pir::InferSymbolicShapeContext *infer_context);
 };
 
 class IR_API GenerateShapeOp
@@ -183,24 +189,6 @@ class IR_API GenerateShapeOp
       const pir::Attribute &symbol_bindings);
 };
 
-class IR_API GenerateXShapeOp
-    : public pir::Op<GenerateXShapeOp,
-                     paddle::dialect::InferSymbolicShapeInterface> {
- public:
-  using Op::Op;
-  static const char *name() { return "cinn_op.generate_xshape"; }
-  static constexpr uint32_t attributes_num = 0;
-  static constexpr const char **attributes_name = nullptr;
-  static void Build(pir::Builder &builder,             // NOLINT
-                    pir::OperationArgument &argument,  // NOLINT
-                    pir::Value input);
-  void VerifySig() {}
-  pir::Value out() { return result(0); }
-  bool InferSymbolicShape(pir::InferSymbolicShapeContext *infer_context);
-  static std::vector<pir::Type> InferMeta(
-      const std::vector<pir::Value> &input_values);
-};
-
 }  // namespace dialect
 }  // namespace cinn
 
@@ -209,5 +197,4 @@ IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(cinn::dialect::FusionOp)
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(cinn::dialect::ConcatOp)
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(cinn::dialect::SplitOp)
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(cinn::dialect::GenerateShapeOp);
-IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(cinn::dialect::GenerateXShapeOp);
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(cinn::dialect::YieldStoreOp);

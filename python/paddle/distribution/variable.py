@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import paddle
 from paddle.distribution import constraint
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
     from paddle.distribution.constraint import Constraint
 
@@ -30,6 +32,7 @@ class Variable:
     Args:
         is_discrete (bool): Is the variable discrete or continuous.
         event_rank (int): The rank of event dimensions.
+        constraint (Constraint|None, optional): The constraint of the variable.
     """
 
     def __init__(
@@ -54,7 +57,7 @@ class Variable:
         """Check whether the 'value' meet the constraint conditions of this
         random variable."""
         assert self._constraint is not None
-        return self._constraint(value)
+        return self._constraint.check(value)
 
 
 class Real(Variable):
@@ -90,7 +93,7 @@ class Independent(Variable):
                 f"Input dimensions must be equal or grater than  {self._reinterpreted_batch_rank}"
             )
         return ret.reshape(
-            ret.shape[: ret.dim() - self.reinterpreted_batch_rank] + (-1,)
+            (*ret.shape[: ret.dim() - self.reinterpreted_batch_rank], -1)
         ).all(-1)
 
 

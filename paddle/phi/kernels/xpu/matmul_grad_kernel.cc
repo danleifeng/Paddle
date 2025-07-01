@@ -37,6 +37,9 @@ void MatmulGradKernel(const Context& dev_ctx,
     dev_ctx.template Alloc<T>(dy);
   }
 
+  if (!transpose_x && transpose_y && y.dims().size() < 2) {
+    transpose_y = false;
+  }
   const XPUType* dout_ptr = reinterpret_cast<const XPUType*>(dout.data<T>());
   const XPUType* x_ptr = reinterpret_cast<const XPUType*>(x.data<T>());
   const XPUType* y_ptr = reinterpret_cast<const XPUType*>(y.data<T>());
@@ -91,24 +94,28 @@ void MatmulGradKernel(const Context& dev_ctx,
   if (dx) {
     MatMulXPUFunction<XPUType>(xpu_ctx, a_1, b_1, c_1, info_dx, 1.0f);
     if (info_forward.is_x_need_broadcast) {
-      int r = xpu::reduce_sum<XPUType>(
-          xpu_ctx,
-          c_1,
-          reinterpret_cast<XPUType*>(dx->data<T>()),
-          {info_forward.bs, info_forward.m, info_forward.k},
-          {0});
+      int r =
+          xpu::reduce_sum<XPUType>(xpu_ctx,
+                                   c_1,
+                                   reinterpret_cast<XPUType*>(dx->data<T>()),
+                                   {(int64_t)info_forward.bs,
+                                    (int64_t)info_forward.m,
+                                    (int64_t)info_forward.k},
+                                   {0LL});
       PADDLE_ENFORCE_XDNN_SUCCESS(r, "reduce_sum");
     }
   }
   if (dy) {
     MatMulXPUFunction<XPUType>(xpu_ctx, a_2, b_2, c_2, info_dy, 1.0f);
     if (info_forward.is_y_need_broadcast) {
-      int r = xpu::reduce_sum<XPUType>(
-          xpu_ctx,
-          c_2,
-          reinterpret_cast<XPUType*>(dy->data<T>()),
-          {info_forward.bs, info_forward.k, info_forward.n},
-          {0});
+      int r =
+          xpu::reduce_sum<XPUType>(xpu_ctx,
+                                   c_2,
+                                   reinterpret_cast<XPUType*>(dy->data<T>()),
+                                   {(int64_t)info_forward.bs,
+                                    (int64_t)info_forward.k,
+                                    (int64_t)info_forward.n},
+                                   {0LL});
       PADDLE_ENFORCE_XDNN_SUCCESS(r, "reduce_sum");
     }
   }
@@ -188,6 +195,19 @@ void MatmulWithFlattenGradKernel(const Context& dev_ctx,
   }
 }
 
+template <typename T, typename Context>
+void LegacyMatmulGradKernel(const Context& dev_ctx,
+                            const DenseTensor& x,
+                            const DenseTensor& y,
+                            const DenseTensor& dout,
+                            bool transpose_x,
+                            bool transpose_y,
+                            float alpha UNUSED,
+                            DenseTensor* dx,
+                            DenseTensor* dy) {
+  MatmulGradKernel<T, Context>(
+      dev_ctx, x, y, dout, transpose_x, transpose_y, dx, dy);
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(matmul_grad,
@@ -202,6 +222,14 @@ PD_REGISTER_KERNEL(matmul_with_flatten_grad,
                    XPU,
                    ALL_LAYOUT,
                    phi::MatmulWithFlattenGradKernel,
+                   float,
+                   phi::dtype::bfloat16,
+                   phi::dtype::float16) {}
+
+PD_REGISTER_KERNEL(legacy_matmul_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::LegacyMatmulGradKernel,
                    float,
                    phi::dtype::bfloat16,
                    phi::dtype::float16) {}

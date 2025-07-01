@@ -52,7 +52,7 @@ struct UniqueOpFunctor {
     PADDLE_ENFORCE_LT(
         in_->numel(),
         pow(2, 31),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The num of Input(X) elements should be less then INT_MAX, "
             "but received num is %d.",
             in_->numel()));
@@ -81,7 +81,7 @@ struct UniqueOpFunctor {
           index_type == DataType::INT32 || index_type == DataType::INT64;
       PADDLE_ENFORCE_EQ(index_type_match,
                         true,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Index holds the wrong type, it holds %s, "
                             "but desires to be %s or %s",
                             DataTypeToString(index_type),
@@ -130,15 +130,15 @@ static bool Equal(const DenseTensor& a, const DenseTensor& b) {
 }
 
 template <typename Context, typename InT, typename IndexT>
-static void UniqueFlattendTensor(const Context& context,
-                                 const DenseTensor& in,
-                                 DenseTensor* out,
-                                 DenseTensor* indices,
-                                 DenseTensor* index,
-                                 DenseTensor* count,
-                                 bool return_index,
-                                 bool return_inverse,
-                                 bool return_counts) {
+static void UniqueFlattenedTensor(const Context& context,
+                                  const DenseTensor& in,
+                                  DenseTensor* out,
+                                  DenseTensor* indices,
+                                  DenseTensor* index,
+                                  DenseTensor* count,
+                                  bool return_index,
+                                  bool return_inverse,
+                                  bool return_counts) {
   const InT* in_data = in.data<InT>();
   std::set<InT> unique(in_data, in_data + in.numel());
   out->Resize(common::make_ddim({static_cast<int64_t>(unique.size())}));
@@ -327,7 +327,7 @@ static void UniqueDim(const Context& context,
 }
 
 template <typename Context, typename InT>
-struct UniqueFlattendTensorFunctor {
+struct UniqueFlattenedTensorFunctor {
   const Context& ctx_; /*  */
   const DenseTensor& in_;
   DenseTensor* out_;
@@ -338,15 +338,15 @@ struct UniqueFlattendTensorFunctor {
   const bool return_inverse_;
   const bool return_counts_;
 
-  UniqueFlattendTensorFunctor(const Context& context,
-                              const DenseTensor& in,
-                              DenseTensor* out,
-                              DenseTensor* indices,
-                              DenseTensor* index,
-                              DenseTensor* count,
-                              bool return_index,
-                              bool return_inverse,
-                              bool return_counts)
+  UniqueFlattenedTensorFunctor(const Context& context,
+                               const DenseTensor& in,
+                               DenseTensor* out,
+                               DenseTensor* indices,
+                               DenseTensor* index,
+                               DenseTensor* count,
+                               bool return_index,
+                               bool return_inverse,
+                               bool return_counts)
       : ctx_(context),
         in_(in),
         out_(out),
@@ -359,15 +359,15 @@ struct UniqueFlattendTensorFunctor {
 
   template <typename IndexT>
   void apply() const {
-    UniqueFlattendTensor<Context, InT, IndexT>(ctx_,
-                                               in_,
-                                               out_,
-                                               indices_,
-                                               index_,
-                                               count_,
-                                               return_index_,
-                                               return_inverse_,
-                                               return_counts_);
+    UniqueFlattenedTensor<Context, InT, IndexT>(ctx_,
+                                                in_,
+                                                out_,
+                                                indices_,
+                                                index_,
+                                                count_,
+                                                return_index_,
+                                                return_inverse_,
+                                                return_counts_);
   }
 };
 

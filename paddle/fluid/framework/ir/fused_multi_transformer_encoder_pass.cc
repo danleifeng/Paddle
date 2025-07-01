@@ -919,7 +919,7 @@ PDNode* MultiDevicesFusedMultiTransformerEncoderPattern::operator()() {
                                     ->AsIntermediate()
                                     ->assert_is_op_input("c_allreduce_sum");
 
-  // communication c_allreduce_sum
+  // communication all_reduce_sum
   auto* c_allreduce_sum =
       pattern->NewNode(c_allreduce_sum_repr())->assert_is_op("c_allreduce_sum");
   auto* c_allreduce_sum_out_var = pattern->NewNode(c_allreduce_sum_out_repr())
@@ -1042,7 +1042,7 @@ PDNode* MultiDevicesFusedMultiTransformerEncoderPattern::operator()() {
                                   ->AsIntermediate()
                                   ->assert_is_op_input("c_allreduce_sum");
 
-  // communication c_allreduce_sum
+  // communication all_reduce_sum
   auto* ffn_c_allreduce_sum = pattern->NewNode(ffn_c_allreduce_sum_repr())
                                   ->assert_is_op("c_allreduce_sum");
   auto* ffn_c_allreduce_sum_out_var =
@@ -1291,7 +1291,7 @@ PDNode* MultiDevicesFusedMultiTransformerEncoderFuseQKVPattern::operator()() {
                                     ->AsIntermediate()
                                     ->assert_is_op_input("c_allreduce_sum");
 
-  // communication c_allreduce_sum
+  // communication all_reduce_sum
   auto* c_allreduce_sum =
       pattern->NewNode(c_allreduce_sum_repr())->assert_is_op("c_allreduce_sum");
   auto* c_allreduce_sum_out_var = pattern->NewNode(c_allreduce_sum_out_repr())
@@ -1411,7 +1411,7 @@ PDNode* MultiDevicesFusedMultiTransformerEncoderFuseQKVPattern::operator()() {
                                   ->AsIntermediate()
                                   ->assert_is_op_input("c_allreduce_sum");
 
-  // communication c_allreduce_sum
+  // communication all_reduce_sum
   auto* ffn_c_allreduce_sum = pattern->NewNode(ffn_c_allreduce_sum_repr())
                                   ->assert_is_op("c_allreduce_sum");
   auto* ffn_c_allreduce_sum_out_var =
@@ -1556,7 +1556,7 @@ inline void QKVWeightsBiasProcess(phi::DenseTensor* wq_tensor,
           wq_tensor, wk_tensor, wv_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(phi::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported weight dtype. "
           "we now only support fp32/fp16/int8."));
       break;
@@ -1571,7 +1571,7 @@ inline void QKVWeightsBiasProcess(phi::DenseTensor* wq_tensor,
           bq_tensor, bk_tensor, bv_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(phi::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported bias dtype. "
           "we now only support fp32/fp16."));
       break;
@@ -1669,7 +1669,7 @@ inline void QKVWeightsBiasProcessFuseQKV(phi::DenseTensor* qkv_w_tensor,
           qkv_w_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(phi::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported weight dtype. "
           "we now only support fp32/fp16/int8."));
       break;
@@ -1683,7 +1683,7 @@ inline void QKVWeightsBiasProcessFuseQKV(phi::DenseTensor* qkv_w_tensor,
       QKVBiasProcessFuseQKV<float>(qkv_b_tensor, num_head, dim_head, dim_embed);
       break;
     default:
-      PADDLE_THROW(phi::errors::Unavailable(
+      PADDLE_THROW(common::errors::Unavailable(
           "fused_multi_transformer not supported bias dtype. "
           "we now only support fp32/fp16."));
       break;
@@ -1740,7 +1740,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
   fused_multi_transformer_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -2281,7 +2281,7 @@ int FusedMultiTransformerEncoderPass::BuildFusion(Graph* graph,
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, fused_multi_transformer_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -2393,7 +2393,7 @@ void FusedMultiTransformerEncoderPass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      phi::errors::Fatal(
+      common::errors::Fatal(
           "During the multi_transformer pass, The scope should not be null."));
 
   VLOG(3) << "Running fused_multi_transformer_encoder_pass.";
@@ -2576,7 +2576,7 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
   fused_multi_transformer_fuse_qkv_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -3116,7 +3116,7 @@ int FusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         while0, while0, fused_multi_transformer_fuse_qkv_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -3213,8 +3213,8 @@ void FusedMultiTransformerEncoderFuseQKVPass::ApplyImpl(Graph* graph) const {
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      phi::errors::Fatal("During the fused_multi_transformer_encoder pass, "
-                         "The scope should not be null."));
+      common::errors::Fatal("During the fused_multi_transformer_encoder pass, "
+                            "The scope should not be null."));
 
   VLOG(3) << "Running fused_multi_transformer_encoder_fuse_qkv_pass.";
   if (graph->IsMainGraph()) {
@@ -3419,7 +3419,7 @@ int MultiDevicesFusedMultiTransformerEncoderPass::BuildFusion(
   multi_devices_fused_multi_transformer_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* c_identity,
                           Node* layer_norm,
                           Node* layer_norm_scale,
@@ -3904,7 +3904,7 @@ int MultiDevicesFusedMultiTransformerEncoderPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         eltadd_out, eltadd_out, multi_devices_fused_multi_transformer_pattern)
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  c_identity0,
                  layer_norm,
                  layer_norm_scale,
@@ -4026,7 +4026,7 @@ void MultiDevicesFusedMultiTransformerEncoderPass::ApplyImpl(
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      phi::errors::Fatal(
+      common::errors::Fatal(
           "During the multi_transformer pass, The scope should not be null."));
 
   VLOG(3) << "Running multi_devices_fused_multi_transformer_encoder_pass.";
@@ -4211,7 +4211,7 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
   fused_multi_transformer_fuse_qkv_pattern();
 
   // Create New OpDesc
-  auto fuse_creater = [&](Node* input0,
+  auto fuse_creator = [&](Node* input0,
                           Node* layer_norm,
                           Node* layer_norm_scale,
                           Node* layer_norm_bias,
@@ -4787,7 +4787,7 @@ int MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::BuildFusion(
     GET_IR_NODE_FROM_SUBGRAPH(
         while0, while0, fused_multi_transformer_fuse_qkv_pattern);
 
-    fuse_creater(input0,
+    fuse_creator(input0,
                  layer_norm,
                  layer_norm_scale,
                  layer_norm_bias,
@@ -4895,8 +4895,8 @@ void MultiDevicesFusedMultiTransformerEncoderFuseQKVPass::ApplyImpl(
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
       scope,
-      phi::errors::Fatal("During the fused_multi_transformer_encoder pass, "
-                         "The scope should not be null."));
+      common::errors::Fatal("During the fused_multi_transformer_encoder pass, "
+                            "The scope should not be null."));
 
   VLOG(3)
       << "Running multi_devices_fused_multi_transformer_encoder_fuse_qkv_pass.";

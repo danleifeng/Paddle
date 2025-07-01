@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import functools
 import warnings
-from typing import Optional, Tuple
 
 import numpy as np
 
@@ -160,9 +161,9 @@ class BertEmbeddings(nn.Layer):
     def forward(
         self,
         input_ids: Tensor,
-        token_type_ids: Optional[Tensor] = None,
-        position_ids: Optional[Tensor] = None,
-        past_key_values_length: Optional[int] = None,
+        token_type_ids: Tensor | None = None,
+        position_ids: Tensor | None = None,
+        past_key_values_length: int | None = None,
     ):
         if position_ids is None:
             ones = paddle.ones_like(input_ids, dtype="int64")
@@ -247,11 +248,9 @@ class BertModel(nn.Layer):
                 encoder_layer, config.num_hidden_layers
             )
             if to_static:
-                build_strategy = paddle.static.BuildStrategy()
-                if enable_cinn:
-                    build_strategy.build_cinn_pass = True
+                backend = "CINN" if enable_cinn else None
                 self.encoder = paddle.jit.to_static(
-                    self.encoder, None, build_strategy, full_graph=True
+                    self.encoder, None, backend=backend, full_graph=True
                 )
         self.pooler = BertPooler(config)
         # self.apply(self.init_weights)
@@ -265,14 +264,14 @@ class BertModel(nn.Layer):
     def forward(
         self,
         input_ids: Tensor,
-        token_type_ids: Optional[Tensor] = None,
-        position_ids: Optional[Tensor] = None,
-        attention_mask: Optional[Tensor] = None,
-        past_key_values: Optional[Tuple[Tuple[Tensor]]] = None,
-        use_cache: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        token_type_ids: Tensor | None = None,
+        position_ids: Tensor | None = None,
+        attention_mask: Tensor | None = None,
+        past_key_values: tuple[tuple[Tensor]] | None = None,
+        use_cache: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_attentions: bool | None = None,
+        return_dict: bool | None = None,
     ):
         return_dict = (
             return_dict
@@ -365,7 +364,7 @@ class BertModel(nn.Layer):
             else:
                 sequence_output = encoder_outputs[0]
                 pooled_output = self.pooler(sequence_output)
-                return (sequence_output, pooled_output) + encoder_outputs[1:]
+                return (sequence_output, pooled_output, *encoder_outputs[1:])
 
 
 class Bert(nn.Layer):
@@ -383,15 +382,15 @@ class Bert(nn.Layer):
     def forward(
         self,
         input_ids: Tensor,
-        token_type_ids: Optional[Tensor] = None,
-        position_ids: Optional[Tensor] = None,
-        attention_mask: Optional[Tensor] = None,
-        masked_positions: Optional[Tensor] = None,
-        labels: Optional[Tensor] = None,
-        next_sentence_label: Optional[Tensor] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        token_type_ids: Tensor | None = None,
+        position_ids: Tensor | None = None,
+        attention_mask: Tensor | None = None,
+        masked_positions: Tensor | None = None,
+        labels: Tensor | None = None,
+        next_sentence_label: Tensor | None = None,
+        output_hidden_states: bool | None = None,
+        output_attentions: bool | None = None,
+        return_dict: bool | None = None,
     ):
         with paddle.static.amp.fp16_guard():
             outputs = self.bert(
@@ -424,10 +423,8 @@ class Bert(nn.Layer):
                 )
                 total_loss = masked_lm_loss + next_sentence_loss
 
-            output = (prediction_scores, seq_relationship_score) + outputs[2:]
-            return (
-                ((total_loss,) + output) if total_loss is not None else output
-            )
+            output = (prediction_scores, seq_relationship_score, *outputs[2:])
+            return ((total_loss, *output)) if total_loss is not None else output
 
 
 class BertPretrainingCriterion(paddle.nn.Layer):
@@ -513,7 +510,7 @@ def _transformer_encoder_layer_fwd(
         src = self.norm2(src)
 
     return (
-        src if outputs is None else ((src,) + outputs[::-1])
+        src if outputs is None else ((src, *outputs[::-1]))
     )  # hidden_states, cache, attentions
 
 
@@ -623,13 +620,13 @@ def _transformer_encoder_fwd(
     # MultiHeadAttention not so efficiently, and maybe optimize it later.
     if cache is None and getattr(self, "_use_cache", False):
         cache = [tuple(self.layers[0].gen_cache(src))] * len(self.layers)
-    # To be compatible with `TransformerEncoder.forward`, `_use_cache` defualts
+    # To be compatible with `TransformerEncoder.forward`, `_use_cache` defaults
     # to True when cache is not None.
     new_caches = (
         [] if cache is not None and getattr(self, "_use_cache", True) else None
     )
     all_attentions = [] if output_attentions else None
-    # NOTE: Also includes embeding output which is same as HF.
+    # NOTE: Also includes embedding output which is same as HF.
     all_hidden_states = [output] if output_hidden_states else None
     for i, mod in enumerate(self.layers):
         if self.enable_recompute:
@@ -638,22 +635,30 @@ def _transformer_encoder_fwd(
                 mod,
                 output,
                 src_mask,
-                None
-                if cache is None
-                else cache[i]
-                if isinstance(cache[i], MultiHeadAttention.Cache)
-                else MultiHeadAttention.Cache(*cache[i]),
+                (
+                    None
+                    if cache is None
+                    else (
+                        cache[i]
+                        if isinstance(cache[i], MultiHeadAttention.Cache)
+                        else MultiHeadAttention.Cache(*cache[i])
+                    )
+                ),
                 output_attentions,
             )
         else:
             layer_outputs = mod(
                 output,
                 src_mask=src_mask,
-                cache=None
-                if cache is None
-                else cache[i]
-                if isinstance(cache[i], MultiHeadAttention.Cache)
-                else MultiHeadAttention.Cache(*cache[i]),
+                cache=(
+                    None
+                    if cache is None
+                    else (
+                        cache[i]
+                        if isinstance(cache[i], MultiHeadAttention.Cache)
+                        else MultiHeadAttention.Cache(*cache[i])
+                    )
+                ),
                 output_attentions=output_attentions,
             )
 
@@ -817,9 +822,11 @@ class PretrainingDataset(Dataset):
             masked_lm_ids,
             next_sentence_labels,
         ] = [
-            input[index].astype(np.int64)
-            if indice < 5
-            else np.asarray(input[index].astype(np.int64))
+            (
+                input[index].astype(np.int64)
+                if indice < 5
+                else np.asarray(input[index].astype(np.int64))
+            )
             for indice, input in enumerate(self.inputs)
         ]
         # TODO: whether to use reversed mask by changing 1s and 0s to be

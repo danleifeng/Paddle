@@ -25,7 +25,6 @@
 #include "paddle/cinn/lang/compute.h"
 #include "paddle/common/enforce.h"
 #include "paddle/common/errors.h"
-PD_DECLARE_bool(cinn_bucket_compile);
 
 namespace cinn {
 namespace hlir {
@@ -35,225 +34,16 @@ using cinn::common::make_zero;
 using ir::Tensor;
 using lang::Compute;
 
-void GetBroadcastShape(const Tensor& a,
-                       const Tensor& b,
-                       std::vector<Expr>* common_shape,
-                       std::vector<bool>* broadcast_flag1,
-                       std::vector<bool>* broadcast_flag2,
-                       int* axis_offset,
-                       const Expr& axis) {
-  CHECK(common_shape);
-  CHECK(broadcast_flag1);
-  CHECK(broadcast_flag2);
-
-  const auto& shape1 = a->shape;
-  const auto& shape2 = b->shape;
-
-  std::vector<Expr> shape1_new = a->shape;
-  std::vector<Expr> shape2_new = b->shape;
-  const auto& a_sym_shape = a->sym_shape;
-  const auto& b_sym_shape = b->sym_shape;
-
-  if (axis.defined()) {
-    int axis_val = axis.as_int32();
-    PADDLE_ENFORCE_GE(axis_val,
-                      -1,
-                      phi::errors::InvalidArgument(
-                          "axis should be equal or greater than -1."));
-    if (shape1.size() >= shape2.size()) {
-      PADDLE_ENFORCE_LE(axis_val,
-                        static_cast<int>(shape1.size() - shape2.size()),
-                        phi::errors::InvalidArgument(
-                            "The axis_val should be less than or equal to "
-                            "shape1.size() - shape2.size()."));
-      if (axis_val >= 0) {
-        *axis_offset = shape1.size() - shape2.size() - axis_val;
-        for (int i = 1; i <= *axis_offset; ++i) {
-          // specified axis to align, we insert Expr one in tensor B so as to
-          // align right with tensor A.
-          shape2_new.emplace_back(Expr(1));
-          common_shape->insert(common_shape->begin(),
-                               shape1[static_cast<int>(shape1.size() - i)]);
-          // flag is used to indicate whether to include the indice or not.
-          broadcast_flag1->emplace_back(true);
-          broadcast_flag2->emplace_back(false);
-        }
-      }
-    } else {
-      PADDLE_ENFORCE_LE(axis_val,
-                        static_cast<int>(shape2.size() - shape1.size()),
-                        phi::errors::InvalidArgument(
-                            "The axis_val should be less than or equal to "
-                            "shape2.size() - shape1.size()."));
-      if (axis_val >= 0) {
-        *axis_offset = shape2.size() - shape1.size() - axis_val;
-        for (int i = 1; i <= *axis_offset; ++i) {
-          // specified axis to align, we insert Expr one in tensor B so as to
-          // align right with tensor A.
-          shape1_new.emplace_back(Expr(1));
-          common_shape->insert(common_shape->begin(),
-                               shape2[static_cast<int>(shape2.size() - i)]);
-          // flag is used to indicate whether to include the indice or not.
-          broadcast_flag2->emplace_back(true);
-          broadcast_flag1->emplace_back(false);
-        }
-      }
-    }
-  }
-
-  int size1 = shape1_new.size();
-  int size2 = shape2_new.size();
-
-  Expr one(1);
-  int i;
-  i = *axis_offset <= 0 ? 1 : *axis_offset + 1;
-  for (; i <= std::min(size1, size2); ++i) {
-    // traverse from right to left to get the output shape and broadcast flag
-    auto* var1 = shape1_new[size1 - i].As<ir::_Var_>();
-    auto* var2 = shape2_new[size2 - i].As<ir::_Var_>();
-    if (MathEqual(shape1_new[size1 - i], shape2_new[size2 - i]) ||
-        (a_sym_shape[size1 - i]->sym_dim == b_sym_shape[size1 - i]->sym_dim)) {
-      common_shape->insert(common_shape->begin(), shape1_new[size1 - i]);
-      // broadcast flags are recorded in a reverse order
-      broadcast_flag1->emplace_back(true);
-      broadcast_flag2->emplace_back(true);
-    } else if (MathEqual(one, shape1_new[size1 - i])) {
-      CHECK(!MathEqual(one, shape2_new[size2 - i]));
-      common_shape->insert(common_shape->begin(), shape2_new[size2 - i]);
-      broadcast_flag1->emplace_back(false);
-      broadcast_flag2->emplace_back(true);
-    } else if (MathEqual(one, shape2_new[size2 - i])) {
-      CHECK(!MathEqual(one, shape1_new[size1 - i]));
-      common_shape->insert(common_shape->begin(), shape1_new[size1 - i]);
-      broadcast_flag1->emplace_back(true);
-      broadcast_flag2->emplace_back(false);
-    } else if (var1 && var2) {
-      Expr max_var =
-          ir::Max::Make(shape1_new[size1 - i], shape2_new[size2 - i]);
-      common_shape->insert(common_shape->begin(), max_var);
-      broadcast_flag1->emplace_back(true);
-      broadcast_flag2->emplace_back(true);
-    } else if (var1) {
-      common_shape->insert(common_shape->begin(), shape2_new[size2 - i]);
-      broadcast_flag1->emplace_back(true);
-      broadcast_flag2->emplace_back(true);
-    } else if (var2) {
-      common_shape->insert(common_shape->begin(), shape1_new[size1 - i]);
-      broadcast_flag1->emplace_back(true);
-      broadcast_flag2->emplace_back(true);
-    } else {
-      int dim1 = shape1_new[size1 - i].as_int32();
-      int dim2 = shape2_new[size2 - i].as_int32();
-      if (dim1 == dim2) {
-        common_shape->insert(common_shape->begin(), shape1_new[size1 - i]);
-        // broadcast flags are recorded in a reverse order
-        broadcast_flag1->emplace_back(true);
-        broadcast_flag2->emplace_back(true);
-      } else if (dim1 == 1) {
-        common_shape->insert(common_shape->begin(), shape2_new[size2 - i]);
-        // broadcast flags are recorded in a reverse order
-        broadcast_flag1->emplace_back(false);
-        broadcast_flag2->emplace_back(true);
-      } else if (dim2 == 1) {
-        common_shape->insert(common_shape->begin(), shape1_new[size1 - i]);
-        // broadcast flags are recorded in a reverse order
-        broadcast_flag1->emplace_back(true);
-        broadcast_flag2->emplace_back(false);
-      } else {
-        std::stringstream ss;
-        ss << "Incompatible broadcast dims " << shape1_new[size1 - i] << " and "
-           << shape2_new[size2 - i] << " in: " << shape1_new << " and "
-           << shape2_new << std::endl;
-        PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
-      }
-    }
-  }
-  if (size1 != size2) {
-    int max_size = std::max(size1, size2);
-    auto& shape = (size1 > size2) ? shape1_new : shape2_new;
-    auto var_l = (size1 > size2) ? broadcast_flag1 : broadcast_flag2;
-    auto var_s = (size1 > size2) ? broadcast_flag2 : broadcast_flag1;
-    for (; i <= max_size; ++i) {
-      common_shape->insert(common_shape->begin(), shape[max_size - i]);
-      var_l->emplace_back(true);
-      var_s->emplace_back(false);
-    }
-  }
-}
-
-void GetBroadcastIndice(const std::vector<Expr>& indice,
-                        const Tensor& tensor_a,
-                        const Tensor& tensor_b,
-                        int axis_offset,
-                        std::vector<Expr>* broadcast_indice1,
-                        std::vector<Expr>* broadcast_indice2,
-                        const std::vector<bool>& broadcast_flags1,
-                        const std::vector<bool>& broadcast_flags2) {
-  CHECK(broadcast_indice1);
-  CHECK(broadcast_indice2);
-  if (broadcast_indice1->empty() && broadcast_indice2->empty()) {
-    int flag_size = broadcast_flags1.size();
-    int i;
-    PADDLE_ENFORCE_GE(
-        indice.size(),
-        flag_size,
-        phi::errors::InvalidArgument(
-            "indice size should be greater than or equal to flag size."));
-    for (i = 0; i < flag_size; i++) {
-      if (broadcast_flags1[flag_size - 1 - i]) {
-        // broadcast indices are added from left to right
-        broadcast_indice1->push_back(indice[i]);
-      } else if (flag_size - i <= tensor_a->shape.size() + axis_offset &&
-                 broadcast_indice1->size() < tensor_a->shape.size()) {
-        broadcast_indice1->push_back(Expr(0));
-      }
-      if (broadcast_flags2[flag_size - 1 - i]) {
-        broadcast_indice2->push_back(indice[i]);
-      } else if (flag_size - i <= tensor_b->shape.size() + axis_offset &&
-                 broadcast_indice2->size() < tensor_b->shape.size()) {
-        // insert indice 0 when have not yet reached the dimension of tensor.
-        // Meanwhile we have to consider the case of axis alignment.
-        broadcast_indice2->push_back(Expr(0));
-      }
-    }
-  }
-}
-
 template <typename FuncOp>
 Tensor Broadcast(const FuncOp& op,
                  const Tensor& a,
                  const Tensor& b,
                  const std::string& output_name = "",
                  const Expr& axis = Expr(-1)) {
-  std::vector<Expr> common_shape;
-  std::vector<bool> broadcast_flags1;
-  std::vector<bool> broadcast_flags2;
-
-  // the counts of left-shift of tensor b so as to right alignment
-  int axis_offset = 0;
-
-  GetBroadcastShape(a,
-                    b,
-                    &common_shape,
-                    &broadcast_flags1,
-                    &broadcast_flags2,
-                    &axis_offset,
-                    axis);
-
   auto fn = [=](const std::vector<Expr>& indice) {
-    std::vector<Expr> broadcast_indice1;
-    std::vector<Expr> broadcast_indice2;
-    GetBroadcastIndice(indice,
-                       a,
-                       b,
-                       axis_offset,
-                       &broadcast_indice1,
-                       &broadcast_indice2,
-                       broadcast_flags1,
-                       broadcast_flags2);
-    return op(a(broadcast_indice1), b(broadcast_indice2));
+    return op(a(indice), b(indice));
   };
-  Tensor output = Compute(common_shape, fn, output_name);
+  Tensor output = Compute(a->shape, fn, output_name);
   return output;
 }
 
@@ -331,13 +121,13 @@ Tensor BroadcastTo(const Tensor& A,
   PADDLE_ENFORCE_EQ(
       A_shape.size(),
       broadcast_axes.size(),
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "broadcast_axes's size should be same with the input shape's size"));
-  PADDLE_ENFORCE_GE(
-      out_shape.size(),
-      broadcast_axes.size(),
-      phi::errors::InvalidArgument("broadcast_axes's size should be less than "
-                                   "or equal to out_shape's size"));
+  PADDLE_ENFORCE_GE(out_shape.size(),
+                    broadcast_axes.size(),
+                    ::common::errors::InvalidArgument(
+                        "broadcast_axes's size should be less than "
+                        "or equal to out_shape's size"));
   auto axes = broadcast_axes;
   for (auto& axis : axes) {
     // if axis < 0, plus out_shape.size
@@ -346,7 +136,7 @@ Tensor BroadcastTo(const Tensor& A,
     }
     PADDLE_ENFORCE_LT(axis,
                       out_shape.size(),
-                      phi::errors::InvalidArgument(
+                      ::common::errors::InvalidArgument(
                           "axis should be less than out_shape's size"));
   }
   std::sort(axes.begin(), axes.end());
@@ -365,7 +155,7 @@ Tensor BroadcastTo(const Tensor& A,
             std::stringstream ss;
             ss << "fail to broad cast input shape " << a_shape_i
                << " to output shape " << out_shape[axes[idx]];
-            PADDLE_THROW(phi::errors::InvalidArgument(ss.str()));
+            PADDLE_THROW(::common::errors::InvalidArgument(ss.str()));
           }
         }
         return A(broadcast_indice);

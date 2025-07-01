@@ -24,27 +24,26 @@ void CSplitKernel(const Context& dev_ctx,
                   const DenseTensor& x,
                   int rank,
                   int nranks,
-                  int ring_id,
-                  bool use_calc_stream,
                   bool use_model_parallel,
                   DenseTensor* out) {
+#if defined(PADDLE_WITH_XPU_BKCL)
   using XPUType = typename XPUTypeTrait<T>::Type;
 
   PADDLE_ENFORCE_GE(rank,
                     0,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "The value of rank (%d) for c_split must be "
                         "greater than or equal to 0.",
                         rank));
   PADDLE_ENFORCE_GE(nranks,
                     2,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "The value of nranks (%d) for c_split must be "
                         "greater than or equal to 2.",
                         nranks));
   PADDLE_ENFORCE_LT(rank,
                     nranks,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "The value of rank (%d) for c_split must be "
                         "less than that of nranks (%d).",
                         rank,
@@ -61,7 +60,7 @@ void CSplitKernel(const Context& dev_ctx,
 
   dims[dims_size - 1] /= nranks;
   out->Resize(dims);
-  dev_ctx.template Alloc(out, x.dtype());
+  dev_ctx.Alloc(out, x.dtype());
 
   std::vector<XPUType*> output_list(nranks, nullptr);
   output_list.at(rank) = reinterpret_cast<XPUType*>(out->data<T>());
@@ -75,6 +74,11 @@ void CSplitKernel(const Context& dev_ctx,
                         split_list,
                         axis);
   PADDLE_ENFORCE_XDNN_SUCCESS(ret, "split");
+#else
+  PADDLE_THROW(common::errors::PreconditionNotMet(
+      "PaddlePaddle is not compiled with DWITH_XPU_BKCL, please recompile with "
+      "DWITH_XPU_BKCL for using c_split_kernel."));
+#endif
 }
 }  // namespace phi
 

@@ -53,7 +53,7 @@ void FusedAttentionGradKernel(
     const DenseTensor &fmha_out,
     const DenseTensor &out_linear_out,
     const DenseTensor &dropout_mask_out,
-    int num_heads,
+    int num_heads_,  // unused
     bool transpose_qkv_wb,
     bool pre_layer_norm,
     float epsilon,
@@ -209,11 +209,11 @@ void FusedAttentionGradKernel(
   const auto input_x_dims = x.dims();
   const auto qkv_w_dims = qkv_weight.dims();
 
-  int batch_size = input_x_dims[0];
-  int seq_len = input_x_dims[1];
-  int embed_dims = input_x_dims[2];
-  num_heads = qkv_w_dims[1];
-  int head_dims = qkv_w_dims[2];
+  int64_t batch_size = input_x_dims[0];
+  int64_t seq_len = input_x_dims[1];
+  int64_t embed_dims = input_x_dims[2];
+  int64_t num_heads = qkv_w_dims[1];
+  int64_t head_dims = qkv_w_dims[2];
 
   xpu::Context *xpu_ctx = dev_ctx.x_context();
   xpu::ctx_guard RAII_GUARD(xpu_ctx);
@@ -321,20 +321,20 @@ void FusedAttentionGradKernel(
 
   std::tie(info_dfmha, info_dlinear_w, a_1, b_1, a_2, b_2) = fc_info;
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_2, b_2, c_2, info_dlinear_w, 1.0f, true);
+      xpu_ctx, a_2, b_2, c_2, info_dlinear_w, 1.0f, 0.f, true);
 
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_1, b_1, c_1, info_dfmha, 1.0f, true);
+      xpu_ctx, a_1, b_1, c_1, info_dfmha, 1.0f, 0.f, true);
 
   // dlinear_bias
   r = xpu::reduce_sum(xpu_ctx,
                       d_dropout_grad_ptr,
                       d_out_linear_bias_ptr,
-                      {batch_size * seq_len, embed_dims},
-                      {0});
+                      {(int64_t)batch_size * seq_len, (int64_t)embed_dims},
+                      {0LL});
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "reduce_sum");
   {
-    int qkv_size = batch_size * seq_len * num_heads * head_dims;
+    int64_t qkv_size = batch_size * seq_len * num_heads * head_dims;
     const XPUTypeT *q_out_ptr = qkv_transpose_out_ptr;
     const XPUTypeT *k_out_ptr = q_out_ptr + qkv_size;
     const XPUTypeT *v_out_ptr = k_out_ptr + qkv_size;
@@ -344,8 +344,11 @@ void FusedAttentionGradKernel(
     r = xpu::transpose<XPUTypeT>(xpu_ctx,
                                  d_fmha_out_ptr,
                                  d_fmha_out_transpose_tmp_ptr,
-                                 {batch_size, seq_len, num_heads, head_dims},
-                                 {0, 2, 1, 3});
+                                 {(int64_t)batch_size,
+                                  (int64_t)seq_len,
+                                  (int64_t)num_heads,
+                                  (int64_t)head_dims},
+                                 {0LL, 2LL, 1LL, 3LL});
     PADDLE_ENFORCE_XDNN_SUCCESS(r, "transpose");
 
     phi::XpuFcInfo qktv_fc_info;
@@ -385,9 +388,9 @@ void FusedAttentionGradKernel(
 
     std::tie(info_d_qk, info_d_v, a_1, b_1, a_2, b_2) = fc_info;
     phi::MatMulXPUFunction<XPUTypeT>(
-        xpu_ctx, a_1, b_1, c_1, info_d_qk, 1.0f, true);
+        xpu_ctx, a_1, b_1, c_1, info_d_qk, 1.0f, 0.f, true);
     phi::MatMulXPUFunction<XPUTypeT>(
-        xpu_ctx, a_2, b_2, c_2, info_d_v, 1.0f, true);
+        xpu_ctx, a_2, b_2, c_2, info_d_v, 1.0f, 0.f, true);
 
     DropoutGrad<XPUTypeT>(xpu_ctx,
                           d_qk_ptr,
@@ -443,10 +446,10 @@ void FusedAttentionGradKernel(
     std::tie(info_d_q, info_d_k, a_1, b_1, a_2, b_2) = fc_info;
 
     phi::MatMulXPUFunction<XPUTypeT>(
-        xpu_ctx, a_1, b_1, c_1, info_d_q, 1.0f / sqrt(head_dims), true);
+        xpu_ctx, a_1, b_1, c_1, info_d_q, 1.0f / sqrt(head_dims), 0.f, true);
 
     phi::MatMulXPUFunction<XPUTypeT>(
-        xpu_ctx, a_2, b_2, c_2, info_d_k, 1.0f, true);
+        xpu_ctx, a_2, b_2, c_2, info_d_k, 1.0f, 0.f, true);
   }
 
   //
@@ -491,16 +494,16 @@ void FusedAttentionGradKernel(
 
   std::tie(info_d_x, info_d_qkv_w, a_1, b_1, a_2, b_2) = fc_info;
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_1, b_1, c_1, info_d_x, 1.0f, true);
+      xpu_ctx, a_1, b_1, c_1, info_d_x, 1.0f, 0.f, true);
   phi::MatMulXPUFunction<XPUTypeT>(
-      xpu_ctx, a_2, b_2, c_2, info_d_qkv_w, 1.0f, true);
+      xpu_ctx, a_2, b_2, c_2, info_d_qkv_w, 1.0f, 0.f, true);
 
   // d_qkv_bias
   r = xpu::reduce_sum(xpu_ctx,
                       d_transpose_qkv_ptr,
                       d_qkv_bias_ptr,
-                      {batch_size * seq_len, 3 * embed_dims},
-                      {0});
+                      {(int64_t)batch_size * seq_len, 3LL * embed_dims},
+                      {0LL});
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "reduce_sum");
 
   if (pre_layer_norm) {

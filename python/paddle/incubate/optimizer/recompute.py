@@ -88,7 +88,7 @@ class RecomputeOptimizer(Optimizer):
             ...             program=paddle.static.default_main_program(),
             ...             fetch_list=[cost.name])
             ...     print("step=%d cost=%f" % (i, cost_val[0]))
-            var x : LOD_TENSOR.shape(-1, 32).dtype(float32).stop_gradient(True)
+            var x : DENSE_TENSOR.shape(-1, 32).dtype(float32).stop_gradient(True)
             Finished optimize
             step=0 cost=0.737203
             step=1 cost=1.308077
@@ -593,12 +593,12 @@ class RecomputeOptimizer(Optimizer):
                 pinned_var_name, fetch_var_name = self._create_vars(
                     checkpoint_varname
                 )
-                self.checkpoint_name2pinned_name[
-                    checkpoint_varname
-                ] = pinned_var_name
-                self.checkpoint_name2fetch_name[
-                    checkpoint_varname
-                ] = fetch_var_name
+                self.checkpoint_name2pinned_name[checkpoint_varname] = (
+                    pinned_var_name
+                )
+                self.checkpoint_name2fetch_name[checkpoint_varname] = (
+                    fetch_var_name
+                )
             self._append_fill_constant_ops(startup_program)
             # TODO (JZ-LIANG) to provide two offload strategy in future
             # step 2. parse & update FW: rename, offload, sync

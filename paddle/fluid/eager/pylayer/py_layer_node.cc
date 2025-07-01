@@ -15,16 +15,19 @@
 #include "paddle/fluid/eager/pylayer/py_layer_node.h"
 
 #include "glog/logging.h"
+#include "paddle/common/errors.h"
 #include "paddle/fluid/eager/eager_tensor.h"
-#include "paddle/fluid/platform/device_context.h"
+#include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/errors.h"
 #include "paddle/fluid/pybind/eager.h"
 #include "paddle/fluid/pybind/eager_utils.h"
 #include "paddle/phi/api/all.h"
 #include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/platform/device_context.h"
 #pragma GCC diagnostic ignored "-Wattributes"
 #include "pybind11/pytypes.h"
+
+COMMON_DECLARE_bool(check_cuda_error);
 
 namespace egr {
 GradNodePyLayer::~GradNodePyLayer() {  // NOLINT
@@ -38,6 +41,9 @@ GradNodePyLayer::operator()(
                          kSlotSmallVectorSize>& grads,  // NOLINT
     bool create_graph,
     bool is_new_grad) {
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("GradNodePyLayer begin");
+  }
   pybind11::gil_scoped_acquire gil;
   VLOG(3) << "Running Eager Backward Node: " << name();
 
@@ -49,7 +55,7 @@ GradNodePyLayer::operator()(
 
   PADDLE_ENFORCE_EQ(ctx->forward_output_tensor_is_duplicable.size(),
                     grads.size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "%s's grad input size(%s) must be equal with it's "
                         "forward's output size(%s).",
                         name(),
@@ -61,7 +67,7 @@ GradNodePyLayer::operator()(
     if (ctx->forward_output_tensor_is_duplicable[i]) {
       PyObject* pylist = PyList_New((Py_ssize_t)grads[i].size());
       for (size_t j = 0; j < grads[i].size(); j++) {
-        if (ctx->materialize_grads && !grads[i][j].initialized()) {
+        if (ctx->materialize_grads && !grads[i][j].has_allocation()) {
           if (forward_outputs_is_dist_meta_[i][j]) {
             paddle::Tensor dist_tensor;
             dist_tensor.set_impl(std::make_shared<phi::distributed::DistTensor>(
@@ -103,7 +109,7 @@ GradNodePyLayer::operator()(
       }
       PyTuple_SET_ITEM(backward_args, i, pylist);
     } else {
-      if (ctx->materialize_grads && !grads[i][0].initialized()) {
+      if (ctx->materialize_grads && !grads[i][0].has_allocation()) {
         if (forward_outputs_is_dist_meta_[i][0]) {
           paddle::Tensor dist_tensor;
           dist_tensor.set_impl(std::make_shared<phi::distributed::DistTensor>(
@@ -149,7 +155,8 @@ GradNodePyLayer::operator()(
   auto backward_fn =
       PyObject_GetAttrString(reinterpret_cast<PyObject*>(ctx), "backward");
   if (!backward_fn) {
-    PADDLE_THROW(phi::errors::InvalidArgument("Get backward function failed."));
+    PADDLE_THROW(
+        common::errors::InvalidArgument("Get backward function failed."));
   }
   bool need_grad_tmp = egr::Controller::Instance().HasGrad();
   egr::Controller::Instance().SetHasGrad(create_graph && need_grad_tmp);
@@ -157,7 +164,7 @@ GradNodePyLayer::operator()(
   egr::Controller::Instance().SetHasGrad(need_grad_tmp);
   if (!outputs) {
     PADDLE_THROW(
-        phi::errors::External(pybind11::detail::error_string().c_str()));
+        common::errors::External(pybind11::detail::error_string().c_str()));
   }
 
   VLOG(6) << "PyLayer backward function finish...";
@@ -174,7 +181,7 @@ GradNodePyLayer::operator()(
   size_t outputs_size = PyTuple_GET_SIZE(outputs_tuple);
 
   if (outputs_size > ctx->forward_input_tensor_is_duplicable.size()) {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The number of outputs of `PyLayer.backward` should be %d, but "
         "received %d.",
         ctx->forward_input_tensor_is_duplicable.size(),
@@ -191,7 +198,7 @@ GradNodePyLayer::operator()(
         PADDLE_ENFORCE_EQ(
             obj,
             Py_None,
-            phi::errors::InvalidArgument(
+            common::errors::InvalidArgument(
                 "%s's backward function should return None at %d position, "
                 "because it's forward Tensor's stopgradient is true.",
                 name(),
@@ -209,7 +216,7 @@ GradNodePyLayer::operator()(
             VLOG(4) << "Got None for Tensor with pos: " << i;
             grad_out.push_back({paddle::Tensor()});
           } else {
-            PADDLE_THROW(phi::errors::InvalidArgument(
+            PADDLE_THROW(common::errors::InvalidArgument(
                 "We can only support Tensor or None for backward output, "
                 ", but got %s, please check your PyLayer code and make it fits",
                 reinterpret_cast<PyTypeObject*>(obj->ob_type)->tp_name));
@@ -220,7 +227,7 @@ GradNodePyLayer::operator()(
       PADDLE_ENFORCE_EQ(
           this->OutputMeta()[i][0].IsStopGradient(),
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "%s's backward function should not return empty at %d position.",
               name(),
               i));
@@ -236,6 +243,10 @@ GradNodePyLayer::operator()(
   Py_XDECREF(outputs);
   Py_XDECREF(ctx_);
   ctx_ = nullptr;
+
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("GradNodePyLayer finish");
+  }
 
   return grad_out;
 }

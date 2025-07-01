@@ -98,6 +98,8 @@ TensorDistAttr UnShardTensorDim(const TensorDistAttr& dist_attr, int dim);
 bool PlacementEqual(const std::shared_ptr<PlacementStatus>& a,
                     const std::shared_ptr<PlacementStatus>& b);
 
+bool IsPartialLegal(const TensorDistAttr& dist_attr);
+
 void AlignDimsSharding(std::vector<TensorDistAttr>* input_attrs,
                        const std::vector<std::vector<int64_t>>& tensor_shapes,
                        const std::vector<std::string>& axis_names,
@@ -195,7 +197,7 @@ struct ReplicateInferSpmdDynamicHelper
 // the annotated axes after inferring forward or backward. The parameter axis
 // stores the axes of the tensor. "1" is a special axis, for the axis "1", set
 // its dims mapping to -1.
-// if unsharded_miss_axis, "-1" is assigend to axes that has no key in
+// if unsharded_miss_axis, "-1" is assigned to axes that has no key in
 // axis_to_dim_map.
 std::vector<int64_t> GetDimsMappingForAxes(
     const std::string& axes,
@@ -213,6 +215,20 @@ TensorDistAttr ReduceGradBroadCastDims(const TensorDistAttr& input,
 
 TensorDistAttr ReduceGradBroadCastDims(int64_t input_dims,
                                        const TensorDistAttr& grad);
+
+#define LogInputDistAttr(name, shape, src_dist_attr, dst_dist_attr)          \
+  VLOG(4) << name << " shape: [" << str_join(shape) << "] "                  \
+          << "src_dims_mapping: [" << str_join(src_dist_attr.dims_mapping()) \
+          << "] "                                                            \
+          << "dst_dims_mapping: [" << str_join(dst_dist_attr.dims_mapping()) \
+          << "] "                                                            \
+          << "src_partial: " << src_dist_attr.partial_status_string()        \
+          << " dst_partial: " << dst_dist_attr.partial_status_string();
+
+#define LogOutputDistAttr(name, dst_dist_attr)              \
+  VLOG(4) << name << " dims mapping: ["                     \
+          << str_join(dst_dist_attr.dims_mapping()) << "] " \
+          << "partial: " << dst_dist_attr.partial_status_string();
 
 }  // namespace distributed
 }  // namespace phi

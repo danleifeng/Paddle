@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import os
 import random
 import unittest
 from functools import partial
@@ -33,17 +34,14 @@ class TestL2Decay(unittest.TestCase):
         mul_x = block.create_parameter(
             dtype="float32",
             shape=[5, 10],
-            lod_level=0,
             name="mul.x",
             regularizer=regularizer.L2Decay(0.5),
         )
         self.assertIsNotNone(mul_x.regularizer)
         self.assertTrue(isinstance(mul_x.regularizer, regularizer.L2Decay))
-        mul_y = block.create_var(
-            dtype="float32", shape=[10, 8], lod_level=0, name="mul.y"
-        )
+        mul_y = block.create_var(dtype="float32", shape=[10, 8], name="mul.y")
         mul_out = block.create_var(
-            dtype="float32", shape=[5, 8], lod_level=0, name="mul.out"
+            dtype="float32", shape=[5, 8], name="mul.out"
         )
         block.append_op(
             type="mul",
@@ -51,9 +49,7 @@ class TestL2Decay(unittest.TestCase):
             outputs={"Out": mul_out},
             attrs={"x_num_col_dims": 1},
         )
-        mean_out = block.create_var(
-            dtype="float32", shape=[1], lod_level=0, name="mean.out"
-        )
+        mean_out = block.create_var(dtype="float32", shape=[1], name="mean.out")
         block.append_op(
             type="mean", inputs={"X": mul_out}, outputs={"Out": mean_out}
         )
@@ -76,17 +72,14 @@ class TestL1Decay(unittest.TestCase):
         mul_x = block.create_parameter(
             dtype="float32",
             shape=[5, 10],
-            lod_level=0,
             name="mul.x",
             regularizer=regularizer.L1Decay(0.5),
         )
         self.assertIsNotNone(mul_x.regularizer)
         self.assertTrue(isinstance(mul_x.regularizer, regularizer.L1Decay))
-        mul_y = block.create_var(
-            dtype="float32", shape=[10, 8], lod_level=0, name="mul.y"
-        )
+        mul_y = block.create_var(dtype="float32", shape=[10, 8], name="mul.y")
         mul_out = block.create_var(
-            dtype="float32", shape=[5, 8], lod_level=0, name="mul.out"
+            dtype="float32", shape=[5, 8], name="mul.out"
         )
         block.append_op(
             type="mul",
@@ -94,9 +87,7 @@ class TestL1Decay(unittest.TestCase):
             outputs={"Out": mul_out},
             attrs={"x_num_col_dims": 1},
         )
-        mean_out = block.create_var(
-            dtype="float32", shape=[1], lod_level=0, name="mean.out"
-        )
+        mean_out = block.create_var(dtype="float32", shape=[1], name="mean.out")
         block.append_op(
             type="mean", inputs={"X": mul_out}, outputs={"Out": mean_out}
         )
@@ -154,7 +145,13 @@ class TestRegularizer(unittest.TestCase):
         ]
 
     def get_places(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
         return places
@@ -162,10 +159,12 @@ class TestRegularizer(unittest.TestCase):
     @contextlib.contextmanager
     def scope_prog_guard(self, main_prog, startup_prog):
         scope = base.core.Scope()
-        with base.unique_name.guard():
-            with base.scope_guard(scope):
-                with base.program_guard(main_prog, startup_prog):
-                    yield
+        with (
+            base.unique_name.guard(),
+            base.scope_guard(scope),
+            base.program_guard(main_prog, startup_prog),
+        ):
+            yield
 
     def run_program(self, place, feed_list):
         exe = base.Executor(place)

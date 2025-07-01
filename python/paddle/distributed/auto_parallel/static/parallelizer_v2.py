@@ -29,7 +29,6 @@ from .reshard import Resharder
 from .utils import (
     get_pp_stage,
     is_sequential_run,
-    use_new_executor,
 )
 
 PIR_PASS = [
@@ -245,9 +244,11 @@ class Parallelizer:
         self._dist_context._serial_optimizer = optimizer
         self._dist_context._serial_optimizer._learning_rate = learning_rate
 
-        with program_guard(main_program, startup_program):
-            with main_program.switch_name_generator_guard("opt_"):
-                optimizer_ops = new_optimizer.apply_gradients(params_grads)
+        with (
+            program_guard(main_program, startup_program),
+            main_program.switch_name_generator_guard("opt_"),
+        ):
+            optimizer_ops = new_optimizer.apply_gradients(params_grads)
         self._completer.complete_update_annotation(main_program)
         return optimizer_ops
 
@@ -414,9 +415,9 @@ class Parallelizer:
             config["dist_context"] = self._dist_context
             config["params_grads"] = params_grads
             config["global_rank"] = rank
-            config[
-                "gradient_sync_after_accumulate"
-            ] = gradient_sync_after_accumulate
+            config["gradient_sync_after_accumulate"] = (
+                gradient_sync_after_accumulate
+            )
             if self._strategy.amp.enable:
                 amp_config = copy.deepcopy(self._strategy.amp.to_dict())
                 config["amp_dtype"] = amp_config['dtype']
@@ -486,9 +487,9 @@ class Parallelizer:
             config["pipeline_mode"] = self._strategy.pipeline.schedule_mode
             if gradient_sync_after_accumulate:
                 config["params_grads"] = global_params_grads
-                config[
-                    "gradient_sync_after_accumulate"
-                ] = gradient_sync_after_accumulate
+                config["gradient_sync_after_accumulate"] = (
+                    gradient_sync_after_accumulate
+                )
             else:
                 config["params_grads"] = params_grads
             auto_parallel_gradient_merge_pass = new_pass(
@@ -498,22 +499,11 @@ class Parallelizer:
                 [main_program], [startup_program], self._pass_context
             )
 
-        if self._strategy.pipeline.enable and not use_new_executor():
-            config = copy.deepcopy(self._strategy.pipeline.to_dict())
-            config["dist_context"] = self._dist_context
-            auto_parallel_pipeline_pass = new_pass(
-                "auto_parallel_pipeline", config
-            )
-            auto_parallel_pipeline_pass.apply(
-                [main_program], [startup_program], self._pass_context
-            )
-
-        if use_new_executor():
-            self._check_dist_attr(
-                main_program,
-                self._strategy.pipeline.vpp_degree,
-                self._dist_context,
-            )
+        self._check_dist_attr(
+            main_program,
+            self._strategy.pipeline.vpp_degree,
+            self._dist_context,
+        )
 
         enable_ir = get_flags("FLAGS_enable_pir_in_executor")[
             'FLAGS_enable_pir_in_executor'
@@ -533,11 +523,7 @@ class Parallelizer:
         main_program._pass_opt = {}
         main_program._pass_opt['pass_list'] = ir_pass_list
 
-        if (
-            self.is_train
-            and self._strategy.pipeline.enable
-            and use_new_executor()
-        ):
+        if self.is_train and self._strategy.pipeline.enable:
             enable_send_recv_overlap = (
                 self._strategy.pipeline.enable_send_recv_overlap
             )
@@ -550,6 +536,7 @@ class Parallelizer:
                     "variable CUDA_DEVICE_MAX_CONNECTIONS=1, which may leads to performance "
                     "loss. Try to export CUDA_DEVICE_MAX_CONNECTIONS=1 for better performance."
                 )
+
             main_program._pipeline_opt = {}
             main_program._pipeline_opt["standalone_opt"] = {
                 "enable_send_recv_overlap": enable_send_recv_overlap,
@@ -559,6 +546,8 @@ class Parallelizer:
                 "pp_stage": get_pp_stage(self._dist_context, rank),
                 "vpp_degree": self._strategy.pipeline.vpp_degree,
                 "dist_context": self._dist_context,
+                "program_runtimes": self._strategy.pipeline.program_runtimes,
+                "memory_limit_times": self._strategy.pipeline.memory_limit_times,
                 "split_backward": self._strategy.pipeline.split_backward,
                 "grad_to_global_grad": grad_to_global_grad,
             }

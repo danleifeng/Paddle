@@ -18,6 +18,7 @@
 
 #include "paddle/phi/backends/onednn/matmul_utils.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/scale_kernel.h"
 
 using dnnl::engine;
 using dnnl::inner_product_forward;
@@ -30,7 +31,7 @@ KernelKey MatmulGetkernelTypeForVar(const GetKernelTypeForVarContext *ctx) {
   const DenseTensor &tensor = ctx->GetTensor();
   const KernelKey &expected_kernel_type = ctx->GetKernelKey();
   if (phi::IsComplexType(expected_kernel_type.dtype())) {
-    // only promote inputs’s types when contains complex input
+    // only promote inputs's types when contains complex input
     return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
   } else {
 #ifdef PADDLE_WITH_DNNL
@@ -505,11 +506,6 @@ void MatmulWithFlattenKernelINT8(const Context &dev_ctx,
                                  int x_num_col_dims,
                                  int y_num_col_dims,
                                  DenseTensor *out) {
-  PADDLE_ENFORCE_EQ(dev_ctx.GetPlace().GetType() == AllocationType::CPU,
-                    true,
-                    errors::PreconditionNotMet(
-                        "oneDNN MatmulWithFlatten kernel must use CPUPlace"));
-
   OneDNNContext::tls().log_lib_version();
   auto &onednn_engine = dev_ctx.GetEngine();
 
@@ -562,6 +558,20 @@ void MatmulWithFlattenKernel(const Context &dev_ctx,
       dev_ctx, x_matrix, y_matrix, x_dims, y_dims, false, false, out);
 }
 
+template <typename T, typename Context>
+void LegacyMatmulKernel(const Context &dev_ctx,
+                        const DenseTensor &x,
+                        const DenseTensor &y,
+                        bool transpose_x,
+                        bool transpose_y,
+                        float alpha,
+                        DenseTensor *out) {
+  MatmulKernel<T, Context>(dev_ctx, x, y, transpose_x, transpose_y, out);
+  if (std::fabs(alpha - 1.f) > 1e-6f) {
+    ScaleKernel<T, Context>(
+        dev_ctx, *out, Scalar(alpha), Scalar(0), false, out);
+  }
+}
 }  // namespace phi
 
 PD_REGISTER_KERNEL(matmul,
@@ -583,3 +593,12 @@ PD_REGISTER_KERNEL(matmul_with_flatten,
                    phi::dtype::bfloat16,
                    uint8_t,
                    int8_t) {}
+
+PD_REGISTER_KERNEL(legacy_matmul,
+                   OneDNN,
+                   ONEDNN,
+                   phi::LegacyMatmulKernel,
+                   float,
+                   phi::dtype::bfloat16) {
+  kernel->get_kerneltype_forvar_fn_ = phi::MatmulGetkernelTypeForVar;
+}

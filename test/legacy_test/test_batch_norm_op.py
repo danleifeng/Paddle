@@ -28,7 +28,6 @@ import paddle
 from paddle import base
 from paddle.base import core
 from paddle.base.framework import grad_var_name
-from paddle.pir_utils import test_with_pir_api
 
 _set_use_system_allocator(True)
 
@@ -192,7 +191,6 @@ def create_or_get_tensor(scope, var_name, var, place):
     tensor = scope.var(var_name).get_tensor()
     if var is not None:
         assert isinstance(var, np.ndarray)
-        tensor.set_recursive_sequence_lengths([])
         tensor.set(var, place)
     return tensor
 
@@ -455,7 +453,13 @@ class TestBatchNormOpInference(unittest.TestCase):
         )
 
     def test_check_output(self):
-        places = [core.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(core.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(core.CUDAPlace(0))
 
@@ -546,7 +550,7 @@ class TestBF16BatchNormOpInference(TestBatchNormOpInference):
 
 
 class TestDygraphBatchNormAPIError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -568,7 +572,13 @@ class TestDygraphBatchNormAPIError(unittest.TestCase):
 
 class TestDygraphBatchNormTrainableStats(unittest.TestCase):
     def test_dygraph(self):
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for p in places:
@@ -589,9 +599,14 @@ class TestDygraphBatchNormTrainableStats(unittest.TestCase):
             y2 = compute(x, True, True)
             np.testing.assert_allclose(y1, y2, rtol=1e-05)
 
-    @test_with_pir_api
     def test_static(self):
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
         for p in places:
@@ -622,7 +637,7 @@ class TestDygraphBatchNormTrainableStats(unittest.TestCase):
 
 
 class TestDygraphBatchNormOpenReserveSpace(unittest.TestCase):
-    @test_with_pir_api
+
     def test_reservespace(self):
         main_program = paddle.static.Program()
         startup_program = paddle.static.Program()

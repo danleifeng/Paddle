@@ -33,6 +33,11 @@ paddle.enable_static()
     (parameterize.TEST_CASE_NAME, 'total_count', 'probs'),
     [
         (
+            'zero-dim',
+            np.array(1000),
+            np.array(0.6),
+        ),
+        (
             'one-dim',
             np.array([1000]),
             parameterize.xrand((1,), dtype='float32', min=0, max=1),
@@ -127,6 +132,12 @@ class TestBinomial(unittest.TestCase):
 @parameterize.parameterize_cls(
     (parameterize.TEST_CASE_NAME, 'total_count', 'probs', 'value'),
     [
+        (
+            'zero-dim',
+            np.array(10),
+            np.array(0.6).astype('float64'),
+            np.array([2.0, 3.0, 5.0]).astype('float64'),
+        ),
         (
             'value-same-shape',
             np.array([10]).astype('int64'),

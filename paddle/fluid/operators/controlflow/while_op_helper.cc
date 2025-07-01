@@ -18,14 +18,11 @@
 
 #include "paddle/utils/string/string_helper.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class BlockDesc;
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework
 
-namespace paddle {
-namespace operators {
+namespace paddle::operators {
 
 // Set skip variables of while_op and while_grad_op
 // These variables should be skipped when eager deletion enables.
@@ -86,7 +83,7 @@ static void ModifyWhileOpAndWhileGradOpAttr(const OpVariant &fwd_op,
   PADDLE_ENFORCE_EQ(
       fwd_input.size(),
       in_grads.size(),
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "Backward output gradient number does not match forward input number."
           "The number of forward input number is %d and the number of backward "
           "output gradient number is %d.",
@@ -116,7 +113,7 @@ static void FindAllWhileAndWhileGradOp(const framework::ProgramDesc &program,
   PADDLE_ENFORCE_GE(
       while_ops->size(),
       while_grad_ops->size(),
-      phi::errors::PreconditionNotMet(
+      common::errors::PreconditionNotMet(
           "There are more while_grad_ops than forward while_ops in the graph "
           "or program, the number of while_ops is %d and the number of "
           "while_grad_ops is %d.",
@@ -137,7 +134,7 @@ static void FindAllWhileAndWhileGradOp(const framework::ProgramDesc &program,
   PADDLE_ENFORCE_GE(
       while_ops->size(),
       while_grad_ops->size(),
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "There are more while_grad_ops than forward while_ops in the graph "
           "or program, the number of while_ops is %d and the number of "
           "while_grad_ops is %d.",
@@ -167,14 +164,14 @@ static void PrepareSafeEagerDeletionOnWhileOpAndWhileGradOpImpl(
       if (IsMatchedWhileOpAndWhileGradOp(fwd_op, bwd_op)) {
         PADDLE_ENFORCE_EQ(matched_fwd_op,
                           nullptr,
-                          phi::errors::PreconditionNotMet(
+                          common::errors::PreconditionNotMet(
                               "Found multiple while forward ops match while "
                               "grad ops."));
         matched_fwd_op = &fwd_op;
       }
     }
     PADDLE_ENFORCE_NOT_NULL(matched_fwd_op,
-                            phi::errors::PreconditionNotMet(
+                            common::errors::PreconditionNotMet(
                                 "Cannot find matched forward while op."));
     ModifyWhileOpAndWhileGradOpAttr(*matched_fwd_op, bwd_op);
     while_op_set.erase(*matched_fwd_op);
@@ -231,7 +228,7 @@ bool GetCondData(const phi::DenseTensor &cond) {
     defined(PADDLE_WITH_XPU) || defined(PADDLE_WITH_CUSTOM_DEVICE)
   framework::TensorCopySync(cond, phi::CPUPlace(), cpu_cond.get());
 #else
-  PADDLE_THROW(phi::errors::PreconditionNotMet(
+  PADDLE_THROW(common::errors::PreconditionNotMet(
       "This version of PaddlePaddle does NOT support GPU/XPU but got "
       "GPU/XPU tensor Cond in WhileOp. Please compile WITH_GPU or "
       "WITH_XPU option."));
@@ -260,10 +257,9 @@ void TransferVariablePlace(const framework::Scope *scope,
             << "lost in_var: " << var_name;
     return;
   }
-  if (var->Type() != framework::proto::VarType::LOD_TENSOR) {
+  if (var->Type() != framework::proto::VarType::DENSE_TENSOR) {
     VLOG(10) << "[TransferVariablePlace]" << var_name << " type changed:"
-             << framework::TransToPhiDataType(
-                    framework::ToVarType(var->Type()));
+             << phi::TransToPhiDataType(framework::ToVarType(var->Type()));
     return;
   }
   phi::DenseTensor *t = var->GetMutable<phi::DenseTensor>();
@@ -284,5 +280,4 @@ void TransferVariablePlace(const framework::Scope *scope,
           << " place: " << new_t->place();
 }
 
-}  // namespace operators
-}  // namespace paddle
+}  // namespace paddle::operators

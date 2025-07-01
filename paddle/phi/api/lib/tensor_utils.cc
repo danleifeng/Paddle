@@ -44,8 +44,8 @@ phi::Place GetPlaceFromPtr(void* data) {
   }
 #else
   PADDLE_THROW(
-      phi::errors::Unimplemented("The GetPlaceFromPtr() method is only "
-                                 "supported when CUDA version >= 10.0."));
+      common::errors::Unimplemented("The GetPlaceFromPtr() method is only "
+                                    "supported when CUDA version >= 10.0."));
 #endif
 #else
   hipPointerAttribute_t attr = {};
@@ -58,21 +58,43 @@ phi::Place GetPlaceFromPtr(void* data) {
   return phi::CPUPlace();
 }
 
+struct DeleterManeger {
+  static DeleterManeger* Instance() {
+    static DeleterManeger instance;
+    return &instance;
+  }
+  DeleterManeger() = default;
+
+  void DeletePtr(void* ptr) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = ptr2deleter_.find(ptr);
+    if (it != ptr2deleter_.end()) {
+      it->second(ptr);
+      ptr2deleter_.erase(it);
+    } else {
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "The deleter of the pointer is not found."));
+    }
+  }
+
+  void RegisterPtr(void* ptr, const Deleter& deleter) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ptr2deleter_[ptr] = deleter;
+  }
+
+ private:
+  std::unordered_map<void*, Deleter> ptr2deleter_;
+  std::mutex mutex_;
+};
+
 using AllocationDeleter = void (*)(phi::Allocation*);
 
-PADDLE_API Tensor from_blob(void* data,
-                            const phi::IntArray& shape,
-                            phi::DataType dtype,
-                            phi::DataLayout layout,
-                            const phi::Place& place,
-                            const Deleter& deleter) {
+Tensor FromBlobImpl(void* data,
+                    const phi::DenseTensorMeta& meta,
+                    const phi::Place& place,
+                    const Deleter& deleter) {
   PADDLE_ENFORCE_NOT_NULL(
-      data, phi::errors::InvalidArgument("data can not be nullptr."));
-
-  PADDLE_ENFORCE_EQ(shape.FromTensor(),
-                    false,
-                    phi::errors::InvalidArgument(
-                        "shape cannot be constructed from a Tensor."));
+      data, common::errors::InvalidArgument("data can not be nullptr."));
 
   phi::Place data_place;
   if (place.GetType() == phi::AllocationType::UNDEFINED ||
@@ -82,7 +104,7 @@ PADDLE_API Tensor from_blob(void* data,
     if (place.GetType() != phi::AllocationType::UNDEFINED) {
       PADDLE_ENFORCE_EQ(data_place,
                         place,
-                        phi::errors::InvalidArgument(
+                        common::errors::InvalidArgument(
                             "Specified place does not match place of data. ",
                             "Specified: %s, Expected: %s.",
                             data_place.DebugString(),
@@ -92,21 +114,52 @@ PADDLE_API Tensor from_blob(void* data,
     data_place = place;
   }
 
-  auto meta =
-      phi::DenseTensorMeta(dtype, common::make_ddim(shape.GetData()), layout);
-
-  size_t size = SizeOf(dtype) * (meta.is_scalar ? 1 : product(meta.dims));
+  // Calculate the number of elements of underlying storage
+  size_t size = 1;
+  for (auto i = 0; i < meta.dims.size(); ++i) {
+    if (meta.dims[i] == 0) {
+      size = 0;
+      break;
+    }
+    size += meta.strides[i] * (meta.dims[i] - 1);
+  }
 
   AllocationDeleter alloc_deleter = nullptr;
   if (deleter) {
-    static thread_local Deleter g_deleter = deleter;
-    alloc_deleter = [](phi::Allocation* p) { g_deleter(p->ptr()); };
+    DeleterManeger::Instance()->RegisterPtr(data, deleter);
+    alloc_deleter = [](phi::Allocation* p) {
+      DeleterManeger::Instance()->DeletePtr(p->ptr());
+    };
   }
 
-  auto alloc =
-      std::make_shared<phi::Allocation>(data, size, alloc_deleter, data_place);
+  auto alloc = std::make_shared<phi::Allocation>(
+      data, size * SizeOf(meta.dtype), alloc_deleter, data_place);
 
   return Tensor(std::make_shared<phi::DenseTensor>(alloc, meta));
+}
+
+PADDLE_API Tensor from_blob(void* data,
+                            const phi::IntArray& shape,
+                            phi::DataType dtype,
+                            phi::DataLayout layout,
+                            const phi::Place& place,
+                            const Deleter& deleter) {
+  auto meta =
+      phi::DenseTensorMeta(dtype, common::make_ddim(shape.GetData()), layout);
+  return FromBlobImpl(data, meta, place, deleter);
+}
+
+PADDLE_API Tensor from_blob(void* data,
+                            const phi::IntArray& shape,
+                            const phi::IntArray& strides,
+                            phi::DataType dtype,
+                            phi::DataLayout layout,
+                            const phi::Place& place,
+                            const Deleter& deleter) {
+  auto meta = phi::DenseTensorMeta(dtype,
+                                   common::make_ddim(shape.GetData()),
+                                   common::make_ddim(strides.GetData()));
+  return FromBlobImpl(data, meta, place, deleter);
 }
 
 #ifdef PADDLE_WITH_DISTRIBUTE
@@ -117,7 +170,7 @@ PADDLE_API std::shared_ptr<phi::distributed::DistTensor> reshard(
     const phi::distributed::TensorDistAttr& dist_attr) {
   PADDLE_ENFORCE_EQ(input.is_dist_tensor(),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The input tensor of ReshardFunction should be "
                         "``phi::distributed::DistTensor``. "
                         "However it's %s",
@@ -135,7 +188,7 @@ PADDLE_API std::shared_ptr<phi::distributed::DistTensor> reshard(
       PADDLE_ENFORCE_EQ(
           dist_tensor->initialized(),
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Only "
               "uninitialized ``phi::distributed::DistTensor`` is allowed. "));
       VLOG(4) << "reshard tensor which is not in current mesh, just set its "

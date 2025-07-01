@@ -11,19 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from __future__ import annotations
 
 import copy
-from typing import List, Tuple, Union
+import os
+import re
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 import paddle
-import paddle.distributed as dist
-from paddle.framework import core
+from paddle.distributed.auto_parallel.placement_type import (
+    placemetns_to_dist_status,
+)
+
+if TYPE_CHECKING:
+    from paddle.framework import core
 
 
-def get_coordinator(mesh: Union[np.array, List[List[int]]], rank: int):
+def get_coordinator(mesh: np.array | list[list[int]], rank: int):
     mesh = paddle.to_tensor(mesh)
     rand_coordinator = (mesh == rank).nonzero()
     assert rand_coordinator.shape[0] in (
@@ -35,11 +41,21 @@ def get_coordinator(mesh: Union[np.array, List[List[int]]], rank: int):
     )
 
 
+# NOTE(zhangbo): Refer to the BalancedSplit function in the reshard_utils.cc file.
+def balanced_split(total_nums, num_of_pieces):
+    has_remainder = total_nums % num_of_pieces != 0
+    result = [(total_nums + num_of_pieces - 1) // num_of_pieces] * num_of_pieces
+    if has_remainder:
+        last_value = result[-1]
+        result[-1] = last_value - (last_value * num_of_pieces - total_nums)
+    return result
+
+
 def compute_local_shape_and_global_offset(
-    global_shape: List[int],
+    global_shape: list[int],
     process_mesh: core.ProcessMesh,
-    placements: List[core.Placement],
-) -> Tuple[Tuple[int], Tuple[int]]:
+    placements: list[core.Placement],
+) -> tuple[tuple[int], tuple[int]]:
     mesh = np.array(process_mesh.process_ids).reshape(process_mesh.shape)
     # deal with cross mesh case
     if paddle.distributed.get_rank() not in mesh:
@@ -47,17 +63,24 @@ def compute_local_shape_and_global_offset(
     rank_coordinator = get_coordinator(mesh, paddle.distributed.get_rank())
     local_shape = copy.copy(global_shape)
     global_offset = [0 for _ in global_shape]
-    for dim, placement in enumerate(placements):
-        if isinstance(placement, dist.Replicate):
+
+    dims_mapping, _ = placemetns_to_dist_status(placements, len(global_shape))
+    for tensor_dim, mesh_dims in enumerate(dims_mapping):
+        if len(mesh_dims) == 0:
             continue
-        else:
-            i = placement.get_dim()
-            assert (
-                global_shape[i] % process_mesh.shape[dim] == 0
-            ), f"i:{i}, global_shape[i]:{global_shape[i]}, process_mesh.shape[dim]:{process_mesh.shape[dim]}"
-            local_shape[i] = global_shape[i] // process_mesh.shape[dim]
-            chunk_idx = rank_coordinator[dim]
-            global_offset[i] = chunk_idx * local_shape[i]
+        local_offset = [0] * len(global_shape)
+        for mesh_dim in mesh_dims:
+            chunk_idx = rank_coordinator[mesh_dim]
+            chunks = balanced_split(
+                local_shape[tensor_dim], process_mesh.shape[mesh_dim]
+            )
+            local_shape[tensor_dim] = chunks[chunk_idx]
+            local_offset[tensor_dim] = sum(chunks[:chunk_idx])
+
+            if global_offset[tensor_dim] <= local_offset[tensor_dim]:
+                global_offset[tensor_dim] = local_offset[tensor_dim]
+            else:
+                global_offset[tensor_dim] += local_offset[tensor_dim]
 
     return tuple(local_shape), tuple(global_offset)
 
@@ -74,7 +97,7 @@ def flatten_state_dict(state_dict):
         if isinstance(value, dict):
             for k, v in value.items():
                 assert isinstance(k, str), f"The key should be str, but is {k}"
-                _flatten(key + (k,), v)
+                _flatten((*key, k), v)
         elif isinstance(value, paddle.Tensor):
             flatten_key_str = ".".join(key)
             flatten_state_dict[flatten_key_str] = value
@@ -107,3 +130,23 @@ def unflatten_state_dict(flat_state_dict, mapping):
         tmp[key_tuple[-1]] = value
 
     return state_dict
+
+
+def get_max_id(path):
+    numbers = []
+    pattern = re.compile(r"^(\d+)_(\d+)\.distcp$")
+    files = os.listdir(path)
+    for file in files:
+        match = pattern.match(file)
+        if match:
+            numbers.append(int(match.group(2)))
+    return max(numbers) if numbers else None
+
+
+def check_unique_id(unique_id, process_group):
+    all_unique_id = []
+    paddle.distributed.all_gather_object(
+        all_unique_id, unique_id, process_group
+    )
+    for id in all_unique_id[1:]:
+        assert id == all_unique_id[0], f"id:{id} !=  all_unique_id[0]"

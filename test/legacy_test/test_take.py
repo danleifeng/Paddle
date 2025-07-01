@@ -19,7 +19,6 @@ import numpy as np
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestTakeAPI(unittest.TestCase):
@@ -50,7 +49,6 @@ class TestTakeAPI(unittest.TestCase):
             else base.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_static_graph(self):
         paddle.enable_static()
         startup_program = paddle.static.Program()
@@ -113,7 +111,6 @@ class TestTakeFloat32(TestTakeAPI):
 class TestTakeTypeError(TestTakeAPI):
     """Test take Type Error"""
 
-    @test_with_pir_api
     def test_static_type_error(self):
         """Argument 'index' must be Tensor"""
         paddle.enable_static()
@@ -130,7 +127,6 @@ class TestTakeTypeError(TestTakeAPI):
         x = paddle.to_tensor(self.input_np)
         self.assertRaises(TypeError, paddle.take, x, self.index_np, self.mode)
 
-    @test_with_pir_api
     def test_static_dtype_error(self):
         """Data type of argument 'index' must be in [paddle.int32, paddle.int64]"""
         paddle.enable_static()
@@ -182,7 +178,6 @@ class TestTakeModeRaisePos(unittest.TestCase):
             else base.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_static_index_error(self):
         """When the index is out of range,
         an error is reported directly through `paddle.index_select`"""
@@ -272,6 +267,49 @@ class TestTakeModeClip(TestTakeAPI):
             .reshape(self.index_shape)
             .astype(self.index_dtype)
         )  # Both ends of the index are out of bounds
+
+
+class TestTakeAPI_ZeroSize(unittest.TestCase):
+    def set_mode(self):
+        self.mode = 'raise'
+
+    def set_dtype(self):
+        self.input_dtype = 'float64'
+        self.index_dtype = 'int64'
+
+    def set_input(self):
+        self.input_shape = [0, 4]
+        self.index_shape = [0, 3]
+        self.input_np = np.random.random(self.input_shape).astype(
+            self.input_dtype
+        )
+        self.index_np = np.random.random(self.index_shape).astype(
+            self.index_dtype
+        )
+
+    def setUp(self):
+        self.set_mode()
+        self.set_dtype()
+        self.set_input()
+        self.place = (
+            base.CUDAPlace(0)
+            if core.is_compiled_with_cuda()
+            else base.CPUPlace()
+        )
+
+    def test_dygraph(self):
+        paddle.disable_static(self.place)
+        x = paddle.to_tensor(self.input_np)
+        x.stop_gradient = False
+        index = paddle.to_tensor(self.index_np)
+        dy_result = paddle.take(x, index, mode=self.mode)
+        np.testing.assert_allclose(
+            np.take(self.input_np, self.index_np, mode=self.mode),
+            dy_result.numpy(),
+        )
+        loss = paddle.sum(dy_result)
+        loss.backward()
+        np.testing.assert_allclose(x.grad.shape, x.shape)
 
 
 if __name__ == "__main__":

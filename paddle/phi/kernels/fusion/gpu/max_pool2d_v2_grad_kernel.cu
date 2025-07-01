@@ -28,7 +28,7 @@ COMMON_DECLARE_bool(cudnn_exhaustive_search);
 namespace phi {
 
 template <typename Context, typename T1, typename T2 = int>
-void MaxPoolV2GradCUDNNKernel(const Context& ctx,
+void MaxPoolV2GradCUDNNKernel(const Context& dev_ctx,
                               const DenseTensor& x,
                               const DenseTensor& out,
                               const DenseTensor& saved_idx,
@@ -40,22 +40,22 @@ void MaxPoolV2GradCUDNNKernel(const Context& ctx,
                               bool global_pooling,
                               bool adaptive,
                               DenseTensor* dx) {
-  PADDLE_ENFORCE_GE(ctx.GetComputeCapability(),
+  PADDLE_ENFORCE_GE(dev_ctx.GetComputeCapability(),
                     80,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "This op only supports Ampere and later devices, "
                         "but got compute capability: %d.",
-                        ctx.GetComputeCapability()));
+                        dev_ctx.GetComputeCapability()));
   // Additional options
   bool exhaustive_search = FLAGS_cudnn_exhaustive_search;
   bool deterministic = FLAGS_cudnn_deterministic;
   PADDLE_ENFORCE_EQ(exhaustive_search && deterministic,
                     false,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Can't set exhaustive_search True and "
                         "FLAGS_cudnn_deterministic True at same time."));
   // Allocate output tensors
-  ctx.template Alloc<T1>(dx);
+  dev_ctx.template Alloc<T1>(dx);
   // Update paddings
   std::vector<int> paddings_ = paddings;
   std::vector<int> kernel_size_ = kernel_size;
@@ -63,7 +63,7 @@ void MaxPoolV2GradCUDNNKernel(const Context& ctx,
   PADDLE_ENFORCE_EQ(
       channel_last,
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "NCHW layout is currently not supported for max pooling bwd."));
   const std::string padding_algorithm = "EXPLICIT";
 
@@ -111,15 +111,15 @@ void MaxPoolV2GradCUDNNKernel(const Context& ctx,
         {"saved_idx", 0}, {"dout", 1}, {"dx", 2}};
     PADDLE_ENFORCE_GT(_uid.count(name),
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The tensor name %s is unknown. "
                           "Should be in one of [saved_idx, dout, dx].",
                           name));
     return _uid.at(name);
   };
 
-  cudnnHandle_t handle = const_cast<cudnnHandle_t>(ctx.cudnn_handle());
-  auto workspace_handle = ctx.cudnn_workspace_handle();
+  cudnnHandle_t handle = const_cast<cudnnHandle_t>(dev_ctx.cudnn_handle());
+  auto workspace_handle = dev_ctx.cudnn_workspace_handle();
 
   auto layout = GetLayoutFromStr(data_format);
   auto layout_format = phi::backends::gpu::GetCudnnTensorFormat(layout);
@@ -213,7 +213,7 @@ void MaxPoolV2GradCUDNNKernel(const Context& ctx,
 }
 
 template <typename T, typename Context>
-void MaxPool2dV2GradCUDNNKernel(const Context& ctx,
+void MaxPool2dV2GradCUDNNKernel(const Context& dev_ctx,
                                 const DenseTensor& x,
                                 const DenseTensor& out,
                                 const DenseTensor& saved_idx,
@@ -225,7 +225,7 @@ void MaxPool2dV2GradCUDNNKernel(const Context& ctx,
                                 bool global_pooling,
                                 bool adaptive,
                                 DenseTensor* dx) {
-  MaxPoolV2GradCUDNNKernel<Context, T>(ctx,
+  MaxPoolV2GradCUDNNKernel<Context, T>(dev_ctx,
                                        x,
                                        out,
                                        saved_idx,

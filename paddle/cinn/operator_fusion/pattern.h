@@ -14,113 +14,277 @@
 
 #pragma once
 
+#include <functional>
 #include <unordered_set>
 #include <variant>
 #include <vector>
 #include "glog/logging.h"
+#include "paddle/cinn/operator_fusion/fusion_tracker/tracker.h"
+#include "paddle/cinn/operator_fusion/pir_graph_analyzing/loop_axis_mapping.h"
+#include "paddle/cinn/operator_fusion/pir_graph_analyzing/loop_transform_analysis.h"
 #include "paddle/cinn/operator_fusion/utils.h"
 #include "paddle/pir/include/core/operation.h"
 
 namespace cinn::fusion {
 
-template <typename T>
-struct PatternContent {};
+enum class PatternType {
+  Trivial = 0,
+  Reduce,
+  ReduceTree,
+  ReduceTreePlusTrivial,
+  Anchor,
+  Horizontal,
+  Unsupported = -1,
+};
 
-template <typename T>
-class TrivialPattern {};
+struct PatternContent {
+  explicit PatternContent(pir::Operation* op) : op(op) {}
+  pir::Operation* op;
+  bool operator==(const PatternContent& other) const { return op == other.op; }
+};
 
-template <typename T>
-class ReducePattern {};
+struct PatternBase {
+  explicit PatternBase(const std::string& id, const FusionTrackerPtr& tracker)
+      : id_(id), tracker_(tracker) {}
+  explicit PatternBase(const std::string& id,
+                       const FusionTrackerPtr& tracker,
+                       const std::vector<pir::Operation*>& ops)
+      : id_(id), tracker_(tracker), ops_(ops) {}
+  std::string id_;
+  std::string id() const { return id_; }
+  std::vector<pir::Operation*> ops_;
+  std::vector<pir::Operation*> ops() const { return ops_; }
+  FusionTrackerPtr tracker_;
+  void update_tracker() const {}
+  LoopAxisMapping loop_axis_mapping_;
+  LoopAxisMapping loop_axis_mapping() const { return loop_axis_mapping_; }
+  void set_loop_axis_mapping(const LoopAxisMapping& loop_axis_mapping) {
+    loop_axis_mapping_ = loop_axis_mapping;
+  }
+};
 
-template <typename T>
-struct ReduceTreePattern {
-  explicit ReduceTreePattern(const std::vector<ReduceTreePattern<T>>& childs,
-                             const ReducePattern<T>& root)
-      : childs_(childs), root_(root) {}
-  const ReducePattern<T>& GetRootPattern() const { return root_; }
+#define DEFINE_PATTERN_STATIC_ATTR(pattern)                         \
+  static PatternType type() { return PatternType::pattern; }        \
+  static std::string UniqueId() {                                   \
+    static std::atomic<int64_t> counter = 0;                        \
+    return std::string(#pattern) + "_" + std::to_string(++counter); \
+  }
+
+struct TrivialPattern : public PatternBase {
+  explicit TrivialPattern(const std::vector<pir::Operation*>& ops,
+                          pir::Operation* sink_op,
+                          const FusionTrackerPtr& tracker)
+      : PatternBase(UniqueId(), tracker, ops), sink_op_(sink_op) {}
+  DEFINE_PATTERN_STATIC_ATTR(Trivial);
+  pir::Operation* sink_op_;
+  pir::Operation* sink_op() const { return sink_op_; }
+};
+
+struct ReducePattern : public PatternBase {
+  explicit ReducePattern(const std::vector<pir::Operation*>& ops,
+                         const FusionTrackerPtr& tracker)
+      : PatternBase(UniqueId(), tracker, ops) {}
+  DEFINE_PATTERN_STATIC_ATTR(Reduce);
+  pir::Operation* GetReduceOp() const { return ops_.back(); }
+};
+
+struct ReduceTreePattern : public PatternBase {
+  explicit ReduceTreePattern(const std::vector<ReduceTreePattern>& children,
+                             const ReducePattern& root,
+                             const FusionTrackerPtr& tracker)
+      : PatternBase(UniqueId(), tracker), children_(children), root_(root) {
+    cur_id_ = id_;
+  }
+  DEFINE_PATTERN_STATIC_ATTR(ReduceTree);
+
   std::vector<pir::Operation*> ops() const {
     std::vector<pir::Operation*> result{root_.ops()};
-    for (const auto& child : childs_) {
+    for (const auto& child : children_) {
       result = UniqueConcatVector(result, child.ops());
     }
     return result;
   }
-  static std::string name() { return "ReduceTree"; }
-  const std::vector<ReduceTreePattern<T>>& childs() const { return childs_; }
-  std::vector<ReduceTreePattern<T>>& childs() { return childs_; }
-  void InsertChild(const ReduceTreePattern<T>& child) {
-    childs_.push_back(child);
+  const ReducePattern& GetRootPattern() const { return root_; }
+  const std::vector<ReduceTreePattern>& children() const { return children_; }
+  std::vector<ReduceTreePattern>& children() { return children_; }
+  void InsertChild(const ReduceTreePattern& child) {
+    children_.push_back(child);
   }
-  std::vector<ReducePattern<T>> FlattenReducePattern() const {
-    std::vector<ReducePattern<T>> result;
-    for (const auto& child : childs_) {
+  std::vector<ReducePattern> FlattenReducePattern() const {
+    std::vector<ReducePattern> result{root_};
+    for (const auto& child : children_) {
       result = ConcatVector(result, child.FlattenReducePattern());
     }
     return result;
   }
 
+  mutable std::string cur_id_;
+  std::string cur_id() const { return cur_id_; }
+  void reset_cur_id(std::string id) const { cur_id_ = id; }
+
+  void update_tracker() const {
+    const std::string& root_name = GetRootPattern().id();
+    std::vector<std::string> names;
+    UpdateTrackerImpl(
+        root_name, *this, std::vector<size_t>(), this->tracker_, &names);
+    tracker_->append(std::make_shared<CombineInstr>(names, cur_id()));
+  }
+
+  void UpdateTrackerImpl(const std::string root_name,
+                         const ReduceTreePattern& root,
+                         const std::vector<size_t>& fake_reduce_iter_idx,
+                         FusionTrackerPtr tracker,
+                         std::vector<std::string>* names) const {
+    // Apply a brunch of tracker to get a output_name of ReduceTreePattern.
+    // names and trackers collect all the needed fusion nodes.
+    for (const auto& child : root.children()) {
+      auto origin_child_id = child.cur_id();
+      auto new_child_id = GetNewTmpId(origin_child_id);
+      child.reset_cur_id(new_child_id);
+      tracker->append(
+          std::make_shared<TmpTransformInstr>(origin_child_id,
+                                              root_name,
+                                              new_child_id,
+                                              root.cur_id(),
+                                              fake_reduce_iter_idx));
+      UpdateTrackerImpl(
+          new_child_id, child, fake_reduce_iter_idx, tracker, names);
+    }
+    names->push_back(root.cur_id());
+  }
+
  private:
-  std::vector<ReduceTreePattern<T>> childs_;
-  ReducePattern<T> root_;
+  std::vector<ReduceTreePattern> children_;
+  ReducePattern root_;
 };
 
-template <typename T>
-struct ReduceTreePlusTrivialPattern {
-  explicit ReduceTreePlusTrivialPattern(const ReduceTreePattern<T>& tree,
-                                        const TrivialPattern<T>& sink_trivial)
-      : tree(tree), sink_trivial(sink_trivial) {}
-  ReduceTreePattern<T> tree;
-  TrivialPattern<T> sink_trivial;
+struct ReduceTreePlusTrivialPattern : public PatternBase {
+  explicit ReduceTreePlusTrivialPattern(const ReduceTreePattern& tree,
+                                        const TrivialPattern& sink_trivial,
+                                        const FusionTrackerPtr& tracker)
+      : PatternBase(UniqueId(), tracker),
+        tree(tree),
+        sink_trivial(sink_trivial) {}
+  DEFINE_PATTERN_STATIC_ATTR(ReduceTreePlusTrivial);
+
+  ReduceTreePattern tree;
+  TrivialPattern sink_trivial;
+  std::vector<size_t> fake_reduce_iter_idx;
+
   std::vector<pir::Operation*> ops() const {
     return UniqueConcatVector(tree.ops(), sink_trivial.ops());
   }
-  static std::string name() { return "ReduceTree+Trivial"; }
-  std::vector<size_t> fake_reduce_iter_idx;
+
+  void update_tracker() const {
+    const std::string& root_name = id();
+    const std::string& origin_tree_id = tree.cur_id();
+    const std::string& new_tree_id = GetNewTmpId(origin_tree_id);
+    tree.reset_cur_id(new_tree_id);
+    std::vector<std::string> names;
+    tracker_->append(std::make_shared<TmpTransformInstr>(origin_tree_id,
+                                                         sink_trivial.id(),
+                                                         new_tree_id,
+                                                         root_name,
+                                                         fake_reduce_iter_idx));
+    tree.UpdateTrackerImpl(
+        new_tree_id, tree, fake_reduce_iter_idx, this->tracker_, &names);
+    names.push_back(root_name);
+    // optimize the loop range of R + T for speed up.
+    tracker_->append(std::make_shared<TrivialLoopAlignInstr>(
+        new_tree_id, root_name, root_name, fake_reduce_iter_idx));
+    // collect all the Expr and represent the root_name.
+    tracker_->append(std::make_shared<CombineInstr>(names, root_name));
+  }
 };
 
-template <typename T>
-struct StmtPattern;
+struct AnchorPattern : public PatternBase {
+  explicit AnchorPattern(const std::vector<pir::Operation*>& ops,
+                         const FusionTrackerPtr& tracker,
+                         const LoopAxisMapping& loop_axis_mapping)
+      : PatternBase(UniqueId(), tracker, ops) {
+    set_loop_axis_mapping(loop_axis_mapping);
+  }
+  DEFINE_PATTERN_STATIC_ATTR(Anchor);
+};
 
-template <typename T>
-struct UnsupportPattern {};
+struct UnsupportedPattern : public PatternBase {
+  explicit UnsupportedPattern(const std::vector<pir::Operation*>& ops,
+                              const FusionTrackerPtr& tracker)
+      : PatternBase(UniqueId(), tracker, ops) {}
+  DEFINE_PATTERN_STATIC_ATTR(Unsupported);
+};
 
-template <typename T>
-struct HorizontalFusionPattern {
-  struct PaddingStmtPattern {
-    StmtPattern<T> pattern;
-    std::vector<int> padding_pos;
-    PaddingStmtPattern(const StmtPattern<T>& pattern,
-                       const std::vector<int>& padding_pos)
-        : pattern(pattern), padding_pos(padding_pos) {}
-  };
-  explicit HorizontalFusionPattern(
-      const std::vector<PaddingStmtPattern>& patterns)
-      : padding_patterns_(patterns) {}
-  std::vector<PaddingStmtPattern> padding_patterns_;
-  std::vector<pir::Operation*> ops() const {
-    std::vector<pir::Operation*> result;
-    for (const auto& pattern : padding_patterns_) {
-      auto ops = GetOpsInPattern(pattern.pattern);
-      ExtendVector(&result, ops);
+using StmtPattern = std::variant<TrivialPattern,
+                                 ReducePattern,
+                                 ReduceTreePattern,
+                                 ReduceTreePlusTrivialPattern,
+                                 AnchorPattern,
+                                 UnsupportedPattern>;
+
+static PatternType GetPatternType(const StmtPattern& s) {
+  return std::visit([](const auto& impl) { return impl.type(); }, s);
+}
+
+static std::string GetPatternId(const StmtPattern& s) {
+  return std::visit([](const auto& impl) { return impl.id(); }, s);
+}
+
+static FusionTrackerPtr GetFusionTracker(const StmtPattern& s) {
+  return std::visit([](const auto& impl) { return impl.tracker_; }, s);
+}
+
+static std::vector<pir::Operation*> GetOpsInPattern(
+    const StmtPattern& pattern) {
+  return std::visit([](const auto& impl) { return impl.ops(); }, pattern);
+}
+
+static LoopAxisMapping GetPatternLoopAxisMapping(const StmtPattern& s) {
+  return std::visit([](const auto& impl) { return impl.loop_axis_mapping(); },
+                    s);
+}
+
+static std::unordered_set<pir::Value> GetPatternInputValuesIncludeInner(
+    const StmtPattern& A) {
+  std::unordered_set<pir::Value> result;
+  for (const auto& op : GetOpsInPattern(A)) {
+    for (const auto& value : op->operands()) {
+      result.insert(value.source());
     }
-    return result;
   }
-  static std::string name() { return "HorizontalFusionPattern"; }
-};
+  return result;
+}
 
-template <typename T>
-using StmtPatternBase = std::variant<TrivialPattern<T>,
-                                     ReducePattern<T>,
-                                     ReduceTreePattern<T>,
-                                     ReduceTreePlusTrivialPattern<T>,
-                                     HorizontalFusionPattern<T>,
-                                     UnsupportPattern<T>>;
-
-template <typename T>
-struct StmtPattern final : public StmtPatternBase<T> {
-  using StmtPatternBase<T>::StmtPatternBase;
-  const StmtPatternBase<T>& variant() const {
-    return static_cast<const StmtPatternBase<T>&>(*this);
+static std::unordered_set<pir::Value> GetPatternOutputValuesIncludedInner(
+    const StmtPattern& A) {
+  std::unordered_set<pir::Value> result;
+  for (const auto& op : GetOpsInPattern(A)) {
+    for (const auto& value : op->results()) {
+      result.insert(value);
+    }
   }
-};
+  return result;
+}
+
+static std::unordered_set<pir::Value> GetPatternInputValues(
+    const StmtPattern& A) {
+  auto all_input_values = GetPatternInputValuesIncludeInner(A);
+  for (const auto& value : GetPatternOutputValuesIncludedInner(A)) {
+    all_input_values.erase(value);
+  }
+  VLOG(4) << "GetPatternInputValues: " << all_input_values.size();
+  return all_input_values;
+}
+
+static void PatternUpdateTracker(const StmtPattern& pattern) {
+  return std::visit([](const auto& impl) { impl.update_tracker(); }, pattern);
+}
+
+static std::string StmtPatternDebugStr(const StmtPattern& stmt) {
+  std::stringstream ss;
+  auto all_ops = GetOpsInPattern(stmt);
+  ss << "StmtPattern, size " << all_ops.size() << " :\n";
+  ss << OpsDebugStr(all_ops);
+  return ss.str();
+}
+
 }  // namespace cinn::fusion

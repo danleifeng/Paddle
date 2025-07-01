@@ -22,23 +22,22 @@
 #include <hip/hip_runtime.h>
 #endif
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
 #endif
 #include "paddle/common/flags.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/profiler/cuda_tracer.h"
 #include "paddle/fluid/platform/profiler/custom_device/custom_tracer.h"
-#include "paddle/fluid/platform/profiler/extra_info.h"
 #include "paddle/fluid/platform/profiler/host_tracer.h"
 #include "paddle/fluid/platform/profiler/trace_event_collector.h"
-#include "paddle/fluid/platform/profiler/utils.h"
 #include "paddle/fluid/platform/profiler/xpu_tracer.h"
+#include "paddle/phi/core/platform/profiler/extra_info.h"
+#include "paddle/phi/core/platform/profiler/utils.h"
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
 #include "paddle/phi/backends/device_manager.h"
 #endif
 
-namespace paddle {
-namespace platform {
+namespace paddle::platform {
 
 void SynchronizeDevice() {
 #ifdef PADDLE_WITH_CUDA
@@ -181,5 +180,4 @@ std::unique_ptr<ProfilerResult> Profiler::Stop() {
   return std::unique_ptr<ProfilerResult>(profiler_result_ptr);
 }
 
-}  // namespace platform
-}  // namespace paddle
+}  // namespace paddle::platform

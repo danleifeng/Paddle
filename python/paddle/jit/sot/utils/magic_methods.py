@@ -78,15 +78,13 @@ UNARY_OPS_TO_MAGIC_NAMES: dict[UnaryOp, str] = {
     operator.abs: "__abs__",
     operator.index: "__index__",
     operator.inv: "__inv__",
-    operator.invert: "__invert__",
-    operator.not_: "__not__",
-    operator.pos: "__pos__",
     operator.truth: "__bool__",
     bool: "__bool__",
     abs: "__abs__",
     float: "__float__",
     len: "__len__",
     int: "__int__",
+    complex: "__complex__",
 }
 # TODO(SigureMo): support any, all, sum
 
@@ -95,6 +93,18 @@ INPLACE_BINARY_OPS = set(INPLACE_BINARY_OPS_TO_MAGIC_NAMES.keys())
 NON_INPLACE_BINARY_OPS = set(NON_INPLACE_BINARY_OPS_TO_MAGIC_NAMES.keys())
 BINARY_OPS = INPLACE_BINARY_OPS | NON_INPLACE_BINARY_OPS
 UNARY_OPS = set(UNARY_OPS_TO_MAGIC_NAMES.keys())
+
+
+# NOTE: Both operator.pow and operator.ipow should be considered for inclusion in this list,
+# as they raise ZeroDivisionError when evaluating 0^n where n < 0 (division by zero).
+NEED_GUARD_ZERO_DIVISION_ERROR_OPS: list[BinaryOp] = [
+    operator.floordiv,
+    operator.truediv,
+    operator.mod,
+    operator.ifloordiv,
+    operator.itruediv,
+    operator.imod,
+]
 
 
 @dataclass
@@ -112,8 +122,9 @@ def magic_method_builtin_dispatch(fn: BinaryOp | UnaryOp) -> list[MagicMethod]:
             fn
         ]
         return [
-            MagicMethod(inplace_magic_name, is_inplace=True)
-        ] + magic_method_builtin_dispatch(non_inplace_op)
+            MagicMethod(inplace_magic_name, is_inplace=True),
+            *magic_method_builtin_dispatch(non_inplace_op),
+        ]
     elif fn in NON_INPLACE_BINARY_OPS:
         magic_name, reverse_magic_name = NON_INPLACE_BINARY_OPS_TO_MAGIC_NAMES[
             fn
@@ -128,3 +139,15 @@ def magic_method_builtin_dispatch(fn: BinaryOp | UnaryOp) -> list[MagicMethod]:
         magic_name = UNARY_OPS_TO_MAGIC_NAMES[fn]
         return [MagicMethod(magic_name)]
     return []
+
+
+def non_inplace_op_to_inplace_op(
+    fn: BinaryOp,
+) -> BinaryOp | None:
+    for inplace_op, (
+        _,
+        non_inplace_op,
+    ) in INPLACE_BINARY_OPS_TO_MAGIC_NAMES.items():
+        if fn is non_inplace_op:
+            return inplace_op
+    return None

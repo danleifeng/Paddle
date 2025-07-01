@@ -60,12 +60,12 @@ class IR_API DenseTensorType : public Type::TypeBase<DenseTensorType,
  public:
   using Base::Base;
   using Dim = DenseTensorTypeStorage::Dim;
-  using LoD = DenseTensorTypeStorage::LoD;
+  using LegacyLoD = DenseTensorTypeStorage::LegacyLoD;
 
   Type dtype() const;
   const Dim &dims() const;
   DataLayout data_layout() const;
-  const LoD &lod() const;
+  const LegacyLoD &lod() const;
   size_t offset() const;
   static std::string name() { return "t_dtensor"; }
   ///
@@ -80,7 +80,7 @@ class IR_API DenseTensorType : public Type::TypeBase<DenseTensorType,
                              Type dtype,
                              const Dim &dims,
                              DataLayout layout = DataLayout::kNCHW,
-                             const LoD &lod = {},
+                             const LegacyLoD &lod = {},
                              size_t offset = 0u) {
     return Base::get(ctx, dtype, dims, layout, lod, offset);
   }
@@ -95,6 +95,7 @@ class IR_API DenseTensorType : public Type::TypeBase<DenseTensorType,
   };
 
 #define FOREACH_BUILTIN_TYPE(__macro)      \
+  __macro(UndefinedType, "t_undefined");   \
   __macro(BFloat16Type, "t_bf16");         \
   __macro(Float16Type, "t_f16");           \
   __macro(Float32Type, "t_f32");           \
@@ -117,6 +118,7 @@ FOREACH_BUILTIN_TYPE(DECLARE_BUILTIN_TYPE)
 
 }  // namespace pir
 
+IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(pir::UndefinedType)
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(pir::UInt8Type)
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(pir::Int8Type)
 IR_EXPORT_DECLARE_EXPLICIT_TYPE_ID(pir::VectorType)

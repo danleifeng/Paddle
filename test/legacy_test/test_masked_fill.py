@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import unittest
 
 import numpy as np
@@ -132,7 +133,13 @@ class TestMaskedFillAPI3(TestMaskedFillAPI):
 class TestMaskedFillGrad(unittest.TestCase):
     def setUp(self):
         self.typelist = ['float32', 'float64', 'int32', 'int64']
-        self.places = [base.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(base.CPUPlace())
         if base.core.is_compiled_with_cuda():
             self.places.append(base.CUDAPlace(0))
         self.dtype = "float32"
@@ -160,6 +167,7 @@ class TestMaskedFillGrad(unittest.TestCase):
                 y = x * 2
                 y.retain_grads()
                 ny = y.masked_fill(mask=mask, value=v)
+                ny.retain_grads()  # if ny grad is none, v_grad should be 0
                 loss = ny.sum()
                 loss.backward()
 
@@ -245,6 +253,33 @@ class TestMaskedFillAPIBroadcast5(TestMaskedFillAPI):
     def init(self):
         self.x_shape = (300, 40)
         self.mask_shape = (40,)
+        self.dtype = "float32"
+        self.scalar_value = True
+
+
+class TestMaskedFillAPIBroadcast6(TestMaskedFillAPI):
+    def init(self):
+        self.x_shape = (1, 1)
+        self.mask_shape = (40, 40)
+        self.dtype = "float32"
+        self.scalar_value = True
+
+
+class TestMaskedFillAPIBroadcast7(TestMaskedFillAPI):
+    def init(self):
+        self.x_shape = (15,)
+        self.mask_shape = (40, 1)
+        self.dtype = "float32"
+        self.scalar_value = True
+
+
+class TestMaskedFillAPIBroadcast8(TestMaskedFillAPI):
+    def init(self):
+        self.x_shape = (3, 1, 1)
+        self.mask_shape = (
+            120,
+            40,
+        )
         self.dtype = "float32"
         self.scalar_value = True
 

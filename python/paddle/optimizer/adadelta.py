@@ -14,8 +14,9 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
+import paddle
 from paddle import _C_ops
 from paddle.base.framework import in_dynamic_or_pir_mode
 
@@ -24,6 +25,8 @@ from ..base.dygraph import no_grad
 from .optimizer import Optimizer
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from typing_extensions import NotRequired
 
     from paddle import Tensor
@@ -66,18 +69,18 @@ class Adadelta(Optimizer):
         parameters (list|tuple|None, optional): List/Tuple of ``Tensor`` to update to minimize ``loss``. \
             This parameter is required in dygraph mode. And you can specify different options for \
             different parameter groups such as the learning rate, weight decay, etc, \
-            then the parameters are list of dict. Note that the learning_rate in paramter groups \
+            then the parameters are list of dict. Note that the learning_rate in parameter groups \
             represents the scale of base learning_rate. \
             The default value is None in static graph mode, at this time all parameters will be updated.
-        weight_decay (float|WeightDecayRegularizer|None, optional): The strategy of regularization. \
-            It canbe a float value as coeff of L2 regularization or \
+        weight_decay (int|float|WeightDecayRegularizer|None, optional): The strategy of regularization. \
+            It can be a int or float value as coeff of L2 regularization or \
             :ref:`api_paddle_regularizer_L1Decay`, :ref:`api_paddle_regularizer_L2Decay`.
             If a parameter has set regularizer using :ref:`api_paddle_ParamAttr` already, \
             the regularization setting here in optimizer will be ignored for this parameter. \
             Otherwise, the regularization setting here in optimizer will take effect. \
             Default None, meaning there is no regularization.
-        grad_clip (GradientClipBase|None, optional): Gradient cliping strategy, it's an instance of
-            some derived class of ``GradientClipBase`` . There are three cliping strategies
+        grad_clip (GradientClipBase|None, optional): Gradient clipping strategy, it's an instance of
+            some derived class of ``GradientClipBase`` . There are three clipping strategies
             ( :ref:`api_paddle_nn_ClipGradByGlobalNorm` , :ref:`api_paddle_nn_ClipGradByNorm` ,
             :ref:`api_paddle_nn_ClipGradByValue` ). Default None, meaning there is no gradient clipping.
         name (str|None, optional): The default value is None. Normally there is no need for user
@@ -163,7 +166,7 @@ class Adadelta(Optimizer):
         }
 
     def _create_accumulators(self, block, parameters):
-        if not isinstance(block, framework.Block):
+        if not isinstance(block, (framework.Block, paddle.pir.Block)):
             raise TypeError("block is not instance of framework.Block.")
         if isinstance(parameters, dict):
             parameters = parameters.get('params')
@@ -225,7 +228,7 @@ class Adadelta(Optimizer):
                 )
             return None
         else:
-            if not isinstance(block, framework.Block):
+            if not isinstance(block, (framework.Block, paddle.pir.Block)):
                 raise TypeError("block is not instance of framework.Block.")
 
             # Create the adadelta optimizer op

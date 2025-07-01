@@ -19,9 +19,10 @@
 #include "paddle/fluid/eager/eager_layout_auto_tune.h"
 #include "paddle/fluid/eager/nan_inf_utils.h"
 #include "paddle/fluid/imperative/amp_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 COMMON_DECLARE_bool(check_nan_inf);
+COMMON_DECLARE_bool(check_cuda_error);
 
 paddle::Tensor conv2d_ad_func(const paddle::Tensor& input,
                               const paddle::Tensor& filter,
@@ -31,9 +32,14 @@ paddle::Tensor conv2d_ad_func(const paddle::Tensor& input,
                               std::vector<int> dilations,
                               int groups,
                               std::string data_format) {
+  VLOG(3) << "Running AD API: "
+          << "conv2d";
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("conv2d_ad_func begin");
+  }
   // Dygraph Record Event
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
-      "conv2d dygraph", paddle::platform::TracerEventType::Operator, 1);
+  phi::RecordEvent dygraph_entrance_record_event(
+      "conv2d dygraph", phi::TracerEventType::Operator, 1);
 
   // AMP Logic
   if (egr::Controller::Instance().GetAMPLevel() !=
@@ -129,10 +135,8 @@ paddle::Tensor conv2d_ad_func(const paddle::Tensor& input,
 
   // Node Creation
   if (require_any_grad) {
-    paddle::platform::RecordEvent node_creation_record_event(
-        "conv2d node_creation",
-        paddle::platform::TracerEventType::OperatorInner,
-        1);
+    phi::RecordEvent node_creation_record_event(
+        "conv2d node_creation", phi::TracerEventType::OperatorInner, 1);
 
     egr::EagerUtils::PassStopGradient(false, out_autograd_meta);
 
@@ -169,6 +173,9 @@ paddle::Tensor conv2d_ad_func(const paddle::Tensor& input,
     // Set TensorWrappers for Forward Outputs if needed
   }
 
+  if (FLAGS_check_cuda_error) [[unlikely]] {
+    egr::CUDAErrorCheck("conv2d_ad_func finish");
+  }
   // Returns
   return out;
 }

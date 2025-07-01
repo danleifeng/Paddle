@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 import paddle.nn.functional as F
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def channel_shuffle_np(x, groups, data_format="NCHW"):
@@ -46,8 +45,9 @@ class TestChannelShuffleOp(OpTest):
     def setUp(self):
         self.op_type = "channel_shuffle"
         self.init_dtype()
+        self.init_shape()
         self.init_data_format()
-        n, c, h, w = 2, 9, 4, 4
+        n, c, h, w = self.shape
         self.python_api = paddle.nn.functional.channel_shuffle
 
         if self.format == "NCHW":
@@ -63,6 +63,9 @@ class TestChannelShuffleOp(OpTest):
         self.inputs = {'X': x}
         self.outputs = {'Out': npresult}
         self.attrs = {'groups': groups, "data_format": self.format}
+
+    def init_shape(self):
+        self.shape = [2, 9, 4, 4]
 
     def init_dtype(self):
         self.dtype = 'float64'
@@ -82,6 +85,11 @@ class TestChannelLast(TestChannelShuffleOp):
         self.format = "NHWC"
 
 
+class TestChannelLast_ZeroSize(TestChannelShuffleOp):
+    def init_shape(self):
+        self.shape = [2, 9, 0, 4]
+
+
 class TestChannelShuffleAPI(unittest.TestCase):
     def setUp(self):
         self.x_2_np = np.random.random([2, 4, 4, 9]).astype("float64")
@@ -89,7 +97,6 @@ class TestChannelShuffleAPI(unittest.TestCase):
         self.x_1_np = np.random.random([2, 9, 4, 4]).astype("float64")
         self.out_1_np = channel_shuffle_np(self.x_1_np, 3)
 
-    @test_with_pir_api
     def test_static_graph_functional(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -116,7 +123,7 @@ class TestChannelShuffleAPI(unittest.TestCase):
                 np.testing.assert_allclose(res_1[0], self.out_1_np)
 
     # same test between layer and functional in this op.
-    @test_with_pir_api
+
     def test_static_graph_layer(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -145,7 +152,6 @@ class TestChannelShuffleAPI(unittest.TestCase):
 
                 np.testing.assert_allclose(res_1[0], out_1_np)
 
-    @test_with_pir_api
     def test_static_graph_functional_new(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -171,7 +177,6 @@ class TestChannelShuffleAPI(unittest.TestCase):
 
                 np.testing.assert_allclose(res_2[0], self.out_2_np)
 
-    @test_with_pir_api
     def test_static_graph_layer_new(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -247,7 +252,7 @@ class TestChannelShuffleAPI(unittest.TestCase):
 
 
 class TestChannelShuffleError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_error_functional(self):
         def error_input():
             with paddle.base.dygraph.guard():
@@ -279,7 +284,6 @@ class TestChannelShuffleError(unittest.TestCase):
 
         self.assertRaises(ValueError, error_data_format)
 
-    @test_with_pir_api
     def test_error_layer(self):
         def error_input_layer():
             with paddle.base.dygraph.guard():

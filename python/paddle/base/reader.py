@@ -24,6 +24,7 @@ import numpy as np
 import paddle
 from paddle.base.framework import _set_expected_place
 from paddle.pir.core import datatype_to_vartype
+from paddle.utils import deprecated
 
 from . import core
 from .data_feeder import BatchedTensorProvider, DataFeeder
@@ -136,10 +137,10 @@ class DataLoaderBase:
         return self
 
     def __iter__(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def __next__(self):
-        raise NotImplementedError()
+        raise NotImplementedError
 
     @classmethod
     def _check_input_array(cls, item):
@@ -155,6 +156,7 @@ class DataLoaderBase:
         return arr
 
 
+@deprecated(update_to="paddle.io.DataLoader")
 class DataLoader:
     @staticmethod
     def from_generator(
@@ -205,9 +207,9 @@ class DataLoader:
             return_list (bool, optional): whether the return value on each device is
                 presented as a list. It is only valid when iterable=True.
                 If return_list=False, the return value on each device would
-                be a dict of str -> LoDTensor, where the key of the dict is
+                be a dict of str -> DenseTensor, where the key of the dict is
                 the name of each fed Tensors. If return_list=True, the
-                return value on each device would be a list(LoDTensor). It is
+                return value on each device would be a list(DenseTensor). It is
                 recommended to use return_list=False in static graph mode and
                 use return_list=True in dygraph mode.
             use_multiprocess (bool, optional): whether to use multi-process to
@@ -538,7 +540,7 @@ class DygraphGeneratorLoader(DataLoaderBase):
             # NOTE: this process is used to load data asynchronously from self._batch_reader
             self._process = None
 
-        # NOTE: the C++ LoDTensorBlockingQueue instance
+        # NOTE: the C++ DenseTensorBlockingQueue instance
         self._blocking_queue = None
         # NOTE: 1. In multiprocess mode, this thread is used to get next batch data from
         # self._data_queue, then push it into self._blocking_queue; 2. In single process
@@ -588,7 +590,7 @@ class DygraphGeneratorLoader(DataLoaderBase):
         self._shapes = []
         self._dtypes = []
         self._need_check_feed = []
-        self._blocking_queue = core.init_lod_tensor_blocking_queue(
+        self._blocking_queue = core.init_dense_tensor_blocking_queue(
             core.Variable(), self._capacity, False
         )
         self._reader = None
@@ -711,7 +713,7 @@ class DygraphGeneratorLoader(DataLoaderBase):
             if not self._thread_done_event.is_set():
                 if tensor_list is not None:
                     try:
-                        array = core.LoDTensorArray()
+                        array = core.DenseTensorArray()
                         for tensor in tensor_list:
                             array.append(tensor)
                         if not self._blocking_queue.push(array):
@@ -729,11 +731,11 @@ class DygraphGeneratorLoader(DataLoaderBase):
             _set_expected_place(legacy_expected_place)
 
             for sample in self._batch_reader():
-                array = core.LoDTensorArray()
+                array = core.DenseTensorArray()
                 for item in sample:
-                    if not isinstance(item, core.LoDTensor):
+                    if not isinstance(item, core.DenseTensor):
                         item = self._check_input_array(item)
-                        tmp = core.LoDTensor()
+                        tmp = core.DenseTensor()
                         tmp.set(item, core.CPUPlace())
                         item = tmp
 
@@ -852,7 +854,7 @@ class GeneratorLoader(DataLoaderBase):
             self._need_check_feed = [
                 v.desc.need_check_feed() for v in self._feed_list
             ]
-        self._queue = core.init_lod_tensor_blocking_queue(
+        self._queue = core.init_dense_tensor_blocking_queue(
             core.Variable(), self._capacity, self._keep_order
         )
         self._reader = None
@@ -881,11 +883,13 @@ class GeneratorLoader(DataLoaderBase):
             shape_concat.extend(feed_data.shape)
             ranks.append(len(feed_data.shape))
             shapes.append(feed_data.shape)
-            lod_levels.append(feed_data.lod_level)
+
             if in_pir_mode():
                 need_check_feed.append(0)
+                lod_levels.append(0)
             else:
                 need_check_feed.append(int(feed_data.desc.need_check_feed()))
+                lod_levels.append(feed_data.lod_level)
 
         queue_name = data_loader_unique_name_generator(
             'lod_tensor_blocking_queue'
@@ -894,7 +898,7 @@ class GeneratorLoader(DataLoaderBase):
         double_buffer_name = data_loader_unique_name_generator('double_buffer')
 
         var = global_scope().var(queue_name)
-        self._queue = core.init_lod_tensor_blocking_queue(
+        self._queue = core.init_dense_tensor_blocking_queue(
             var, self._capacity, self._keep_order
         )
 
@@ -1014,11 +1018,11 @@ class GeneratorLoader(DataLoaderBase):
                         return
 
                 for tensors in self._tensor_reader():
-                    array = core.LoDTensorArray()
+                    array = core.DenseTensorArray()
                     for item in tensors:
-                        if not isinstance(item, core.LoDTensor):
+                        if not isinstance(item, core.DenseTensor):
                             item = self._check_input_array(item)
-                            tmp = core.LoDTensor()
+                            tmp = core.DenseTensor()
                             tmp.set(item, core.CPUPlace())
                             item = tmp
 
@@ -1060,10 +1064,11 @@ class GeneratorLoader(DataLoaderBase):
         else:
             places = _get_paddle_place(places)
         has_lod = False
-        for f in self._feed_list:
-            if f.lod_level != 0:
-                has_lod = True
-                break
+        if not in_pir_mode():
+            for f in self._feed_list:
+                if f.lod_level != 0:
+                    has_lod = True
+                    break
 
         if has_lod:
             self.set_sample_list_generator(
@@ -1125,6 +1130,7 @@ class GeneratorLoader(DataLoaderBase):
         return self
 
 
+@deprecated()
 class PyReader(DataLoaderBase):
     r"""
     Create a reader object for data feeding in Python.
@@ -1147,9 +1153,9 @@ class PyReader(DataLoaderBase):
         return_list (bool): whether the return value on each device is
             presented as a list. It is only valid when iterable=True.
             If return_list=False, the return value on each device would
-            be a dict of str -> LoDTensor, where the key of the dict is
+            be a dict of str -> DenseTensor, where the key of the dict is
             the name of each fed variables. If return_list=True, the
-            return value on each device would be a list(LoDTensor). It is
+            return value on each device would be a list(DenseTensor). It is
             recommended to use return_list=False in static graph mode and
             use return_list=True in dygraph mode.
 
@@ -1551,12 +1557,12 @@ class PyReader(DataLoaderBase):
         Set the data source of the PyReader object.
 
         The provided :code:`reader` should be a Python generator,
-        which yields numpy.ndarray-typed or LoDTensor-typed batched data.
+        which yields numpy.ndarray-typed or DenseTensor-typed batched data.
 
         :code:`places` must be set when the PyReader object is iterable.
 
         Args:
-            reader (generator): Python generator that yields LoDTensor-typed
+            reader (generator): Python generator that yields DenseTensor-typed
                 batched data.
             places (None|list(CUDAPlace)|list(CPUPlace)): place list. Must
                 be provided when PyReader is iterable.
@@ -1632,7 +1638,7 @@ class DatasetLoader(DataLoaderBase):
         ), f"Filelist number of dataset {len(dataset.filelist)} must be not less than place number {thread_num}"
 
         if dataset.thread_num != 0 and dataset.thread_num != thread_num:
-            logging.warn(
+            logging.warning(
                 f'thread_num {dataset.thread_num} which is set in Dataset is ignored'
             )
 
@@ -1644,7 +1650,7 @@ class DatasetLoader(DataLoaderBase):
             )
             and dataset.queue_num > thread_num
         ):
-            logging.warn(
+            logging.warning(
                 f"queue_num {dataset.queue_num} which is set in Dataset is ignored"
             )
             dataset._set_queue_num(thread_num)

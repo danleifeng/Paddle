@@ -22,9 +22,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/data_type_transform.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/fluid/framework/tensor_util.h"
-#include "paddle/fluid/platform/device_context.h"
+#include "paddle/phi/core/platform/device_context.h"
+#include "paddle/phi/core/vocab/string_array.h"
 
 namespace paddle {
 namespace operators {
@@ -40,7 +40,7 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
 
     PADDLE_ENFORCE_GT(out_var_names.size(),
                       0UL,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The number of variables to be loaded is %d, expect "
                           "it to be greater than 0.",
                           out_var_names.size()));
@@ -49,7 +49,7 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
       PADDLE_ENFORCE_EQ(
           static_cast<bool>(fin),
           true,
-          phi::errors::Unavailable(
+          common::errors::Unavailable(
               "LoadCombine operator fails to open file %s, please check "
               "whether the model file is complete or damaged.",
               filename));
@@ -58,7 +58,7 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
       PADDLE_ENFORCE_NE(
           filename.empty(),
           true,
-          phi::errors::Unavailable(
+          common::errors::Unavailable(
               "LoadCombine operator fails to open file %s, please check "
               "whether the model file is complete or damaged.",
               filename));
@@ -81,14 +81,14 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
       VLOG(4) << "loading tensor: " << out_var_names[i];
       PADDLE_ENFORCE_NOT_NULL(
           out_vars[i],
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The variable %s to be loaded cannot be found.",
               out_var_names[i]));
       // Error checking
       PADDLE_ENFORCE_EQ(
           static_cast<bool>(*buffer),
           true,
-          phi::errors::Unavailable(
+          common::errors::Unavailable(
               "An error occurred while loading model parameters. "
               "Please check whether the model file is complete or damaged."));
       if (out_vars[i]->IsType<framework::Vocab>()) {
@@ -114,7 +114,7 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
         auto *tensor = out_vars[i]->GetMutable<phi::DenseTensor>();
 
         // Get data from fin to tensor
-        paddle::framework::DeserializeFromStream(*buffer, tensor, dev_ctx);
+        phi::DeserializeFromStream(*buffer, tensor, dev_ctx);
 
         auto in_dtype = tensor->dtype();
         auto out_dtype = load_as_fp16 ? phi::DataType::FLOAT16 : in_dtype;
@@ -142,7 +142,7 @@ class LoadCombineOpKernel : public framework::OpKernel<T> {
     buffer->peek();
     PADDLE_ENFORCE_EQ(buffer->eof(),
                       true,
-                      phi::errors::Unavailable(
+                      common::errors::Unavailable(
                           "Not allowed to load partial data via "
                           "load_combine_op, please use load_op instead."));
   }

@@ -19,9 +19,7 @@
 #include "paddle/fluid/framework/ir/graph_pattern_detector.h"
 #include "paddle/fluid/framework/ir/graph_viz_pass.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 AttentionLSTMFusePass::AttentionLSTMFusePass() {
   AddOpCompat(OpCompat("while"))
@@ -163,8 +161,9 @@ void AttentionLSTMFusePass::FindWhileOp(Graph* graph) const {
   GraphSafeRemoveNodes(graph, marked_nodes);
 }
 
-#define CHECK_P1(x) \
-  PADDLE_ENFORCE_NOT_NULL(x, phi::errors::NotFound("%s is a null pointer.", #x))
+#define CHECK_P1(x)        \
+  PADDLE_ENFORCE_NOT_NULL( \
+      x, common::errors::NotFound("%s is a null pointer.", #x))
 #define CHECK_P2(x0, x1) \
   CHECK_P1(x0);          \
   CHECK_P1(x1);
@@ -198,7 +197,7 @@ void PrepareParameters(Graph* graph, const Param& param, ir::Node* lstm_op) {
   // Check parameters
   PADDLE_ENFORCE_EQ(graph->Has(kParamScopeAttr),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Graph have no attribute: kParamScopeAttr."));
   auto& scope = graph->Get<Scope>(kParamScopeAttr);
 
@@ -260,7 +259,7 @@ void PrepareParameters(Graph* graph, const Param& param, ir::Node* lstm_op) {
   PADDLE_ENFORCE_EQ(
       attention_bias_t->dims().size(),
       1,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "phi::DenseTensor attention bias dimension size(%d) must be 1.",
           attention_bias_t->dims().size()));
   attention_bias_t->Resize(common::make_ddim({1, attention_bias_t->dims()[0]}));
@@ -338,7 +337,7 @@ void PrepareLSTMBias(const phi::DenseTensor& B_forget,
   PADDLE_ENFORCE_EQ(
       B_forget.dims().size(),
       1,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "phi::DenseTensor B forget dimension size(%d) must be 1.",
           B_forget.dims().size()));
   int D = static_cast<int>(B_forget.dims()[0]);
@@ -376,9 +375,7 @@ void AttentionLSTMFusePass::ApplyImpl(ir::Graph* graph) const {
   FindWhileOp(graph);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 REGISTER_PASS(attention_lstm_fuse_pass,
               paddle::framework::ir::AttentionLSTMFusePass);

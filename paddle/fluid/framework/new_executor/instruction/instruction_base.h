@@ -19,8 +19,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "paddle/fluid/framework/new_executor/new_executor_defs.h"
-#include "paddle/fluid/platform/event.h"
+#include "paddle/fluid/framework/new_executor/instruction/instruction_defs.h"
+#include "paddle/phi/api/profiler/event.h"
 
 namespace pir {
 class Value;
@@ -29,8 +29,8 @@ class Value;
 namespace paddle {
 namespace framework {
 class ValueExecutionInfo;
-
-using SchedulingPriority = int64_t;
+class Variable;
+class Scope;
 
 class InstructionBase {
  public:
@@ -42,6 +42,9 @@ class InstructionBase {
 
   bool IsArtificial() const { return is_artificial_; }
   void SetArtificial(bool is_artificial) { is_artificial_ = is_artificial; }
+
+  bool IsSyncAfterLaunch() const { return sync_after_launch_; }
+  void SetSyncAfterLaunch(bool sync) { sync_after_launch_ = sync; }
 
   OpFuncType KernelType() const;
   void SetKernelType(OpFuncType type) { type_ = type; }
@@ -172,12 +175,20 @@ class InstructionBase {
   // if scope is not null, also show dimensions of arguments
   virtual std::string DebugStringEx(const paddle::framework::Scope* scope,
                                     ValueExecutionInfo* value_exe_info) const;
+  bool SkipRecordStreamForGC() const { return skip_record_stream_for_gc_; }
+  void SetSkipRecordStreamForGC(bool skip) {
+    skip_record_stream_for_gc_ = skip;
+  }
 
  protected:
   size_t id_;
 
-  bool is_artificial_;  // Instruction is artificial means that it is only used
-                        // to assist scheduling and no need to be executed.
+  bool is_artificial_{
+      false};  // Instruction is artificial means that it is only used
+               // to assist scheduling and no need to be executed.
+
+  bool sync_after_launch_{false};
+
   OpFuncType type_;
 
   // dist attrs：lower value, higher priority
@@ -217,6 +228,8 @@ class InstructionBase {
   std::unordered_map<::pir::Value, std::vector<int>> output_index_;
 
   std::unordered_set<::pir::Value> no_need_buffer_values_;
+
+  bool skip_record_stream_for_gc_{false};
 };
 
 }  // namespace framework

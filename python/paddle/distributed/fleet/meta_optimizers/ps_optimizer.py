@@ -80,9 +80,9 @@ class ParameterServerOptimizer(MetaOptimizerBase):
         attrs['ps_mode'] = attrs['trainer'].mode
         logger.info("ps_mode: {}".format(attrs['ps_mode']))
         attrs['role_maker'] = self.role_maker
-        attrs[
-            'is_heter_ps_mode'
-        ] = self.role_maker._is_heter_parameter_server_mode
+        attrs['is_heter_ps_mode'] = (
+            self.role_maker._is_heter_parameter_server_mode
+        )
         attrs['is_worker'] = self.role_maker._is_worker()
         attrs['is_server'] = self.role_maker._is_server()
         attrs['is_heter_worker'] = self.role_maker._is_heter_worker()
@@ -106,9 +106,9 @@ class ParameterServerOptimizer(MetaOptimizerBase):
             "user_defined_strategy"
         ].trainer_desc_configs["remote_sparse"]
         attrs['is_fl_ps_mode'] = self.user_defined_strategy.is_fl_ps_mode
-        attrs[
-            'with_coordinator'
-        ] = self.user_defined_strategy.is_with_coordinator
+        attrs['with_coordinator'] = (
+            self.user_defined_strategy.is_with_coordinator
+        )
 
         attrs['k_steps'] = self.user_defined_strategy.a_sync_configs["k_steps"]
         attrs['launch_barrier'] = self.user_defined_strategy.a_sync_configs[
@@ -230,7 +230,7 @@ class ParameterServerOptimizer(MetaOptimizerBase):
             var = program.global_block().vars[varname]
             if (
                 not var.persistable
-                or var.desc.type() != core.VarDesc.VarType.LOD_TENSOR
+                or var.desc.type() != core.VarDesc.VarType.DENSE_TENSOR
             ):
                 continue
             param_memory_size += get_var_mem_size(var)
@@ -247,7 +247,7 @@ class ParameterServerOptimizer(MetaOptimizerBase):
                 processed_var_names.add(var_name)
                 var = program.global_block().vars[var_name]
 
-                if var.desc.type() != core.VarDesc.VarType.LOD_TENSOR:
+                if var.desc.type() != core.VarDesc.VarType.DENSE_TENSOR:
                     continue
 
                 data_count = 1

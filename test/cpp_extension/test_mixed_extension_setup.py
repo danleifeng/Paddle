@@ -30,21 +30,23 @@ def custom_relu_static(
     paddle.enable_static()
     paddle.set_device(device)
 
-    with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name='X', shape=[None, 8], dtype=dtype)
-            x.stop_gradient = False
-            out = func(x) if use_func else paddle.nn.functional.relu(x)
-            static.append_backward(out)
+    with (
+        static.scope_guard(static.Scope()),
+        static.program_guard(static.Program()),
+    ):
+        x = static.data(name='X', shape=[None, 8], dtype=dtype)
+        x.stop_gradient = False
+        out = func(x) if use_func else paddle.nn.functional.relu(x)
+        static.append_backward(out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
-            # in static graph mode, x data has been covered by out
-            out_v = exe.run(
-                static.default_main_program(),
-                feed={'X': np_x},
-                fetch_list=[out],
-            )
+        exe = static.Executor()
+        exe.run(static.default_startup_program())
+        # in static graph mode, x data has been covered by out
+        out_v = exe.run(
+            static.default_main_program(),
+            feed={'X': np_x},
+            fetch_list=[out],
+        )
 
     paddle.disable_static()
     return out_v
@@ -103,16 +105,18 @@ class TestCppExtensionSetupInstall(unittest.TestCase):
         cur_dir = os.path.dirname(os.path.abspath(__file__))
         # install mixed custom_op and extension
         # compile, install the custom op egg into site-packages under background
+        site_dir = site.getsitepackages()[0]
         cmd = f'cd {cur_dir} && {sys.executable} mix_relu_and_extension_setup.py install'
+        if os.name != 'nt':
+            cmd += f' --install-lib={site_dir}'
         run_cmd(cmd)
 
-        site_dir = site.getsitepackages()[0]
         custom_egg_path = [
             x for x in os.listdir(site_dir) if 'mix_relu_extension' in x
         ]
-        assert len(custom_egg_path) == 1, "Matched egg number is %d." % len(
-            custom_egg_path
-        )
+        assert (
+            len(custom_egg_path) == 1
+        ), f"Matched egg number is {len(custom_egg_path)}."
         sys.path.append(os.path.join(site_dir, custom_egg_path[0]))
         #################################
 

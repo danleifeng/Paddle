@@ -16,16 +16,24 @@ from __future__ import annotations
 
 import atexit
 import builtins
+import dataclasses
 import functools
 import importlib.util
 import inspect
 import os
+import platform
 import shutil
 import sys
 import tempfile
 import textwrap
+import time
 import types
+import warnings
+from contextlib import contextmanager
+from dataclasses import fields, is_dataclass
+from enum import Enum, Flag, IntEnum, auto
 from importlib.machinery import SourceFileLoader
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -36,9 +44,15 @@ from paddle.base.layer_helper import LayerHelper
 from paddle.base.wrapped_decorator import signature_safe_contextmanager
 from paddle.framework import CUDAPinnedPlace
 from paddle.jit.utils import OrderedSet
-from paddle.utils import flatten
+from paddle.utils import flatten, gast
+from paddle.utils.environments import (
+    BooleanEnvironmentVariable,
+)
 
 from .ast_utils import ast_to_source_code
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = []
 
@@ -68,8 +82,110 @@ NO_SHAPE_VAR_TYPE = [
     core.VarDesc.VarType.FETCH_LIST,
 ]
 
+ENV_ENABLE_SOT = BooleanEnvironmentVariable("ENABLE_FALL_BACK", True)
+ENV_ENABLE_CINN_IN_DY2ST = BooleanEnvironmentVariable(
+    "ENABLE_CINN_IN_DY2ST", True
+)
 
-def data_layer_not_check(name, shape, dtype='float32', lod_level=0):
+DYNAMIC_DIMS_ATTR_NAME = "__sot_dynamic_dims"
+
+
+class Backend(Enum):
+    CINN = auto()
+    PHI = auto()
+    PCC = auto()
+
+    @staticmethod
+    def from_arg(arg: str | Backend | None):
+        if isinstance(arg, Backend):
+            return arg
+        if arg is None:
+            return Backend.PHI
+        if arg.upper() == "CINN":
+            return Backend.CINN
+        if arg.upper() == "PCC":
+            return Backend.PCC
+        raise ValueError(
+            f"Unknown backend {arg}. Only support 'CINN' or None for PHI."
+        )
+
+    def is_cinn(self):
+        return self == Backend.CINN
+
+    def is_pcc(self):
+        return self == Backend.PCC
+
+    def is_phi(self):
+        return self == Backend.PHI
+
+
+class CUDAGraphState(IntEnum):
+    DISABLE = 0
+    WARMUP = 1
+    CAPTURE = 2
+    REPLAY = 3
+
+
+class TransformOptions:
+
+    class ToStaticMode(Flag):
+        SOT = auto()
+        AST = auto()
+
+        @classmethod
+        def Nil(cls):
+            return cls(0)
+
+    TRANSFORM_OPTIONS_ATTR_NAME = "___jit_transform_options___"
+
+    def __init__(self, skip_transform_mode: ToStaticMode = ToStaticMode.Nil()):
+        self.skip_transform_mode = skip_transform_mode
+
+    def attach(self, fn):
+        if inspect.ismethod(fn):
+            fn = fn.__func__
+
+        if inspect.isfunction(fn) or issubclass(fn, paddle.nn.Layer):
+            setattr(fn, TransformOptions.TRANSFORM_OPTIONS_ATTR_NAME, self)
+        else:
+            warnings.warn(
+                f"Only support @jit.marker.unified to type(function) or type(method), but received {type(fn)}"
+            )
+
+    def need_transform(self, mode: ToStaticMode):
+        return not (self.skip_transform_mode & mode)
+
+    @staticmethod
+    def check_fn_need_transform(fn, mode: ToStaticMode):
+        if not hasattr(fn, TransformOptions.TRANSFORM_OPTIONS_ATTR_NAME):
+            return True
+        return getattr(
+            fn, TransformOptions.TRANSFORM_OPTIONS_ATTR_NAME
+        ).need_transform(mode)
+
+
+class TimeCounter:
+    def __init__(self):
+        self._time_history: list[float] = []
+
+    def get_last_time(self):
+        if len(self._time_history) == 0:
+            return 0
+        return self._time_history[-1]
+
+    def get_total_time(self):
+        return sum(self._time_history)
+
+    @contextmanager
+    def record(self):
+        start_time = time.perf_counter()
+        yield
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        self._time_history.append(elapsed_time)
+
+
+def data_layer_not_check(name, shape, dtype='float32'):
     """
     This function creates a Tensor on the global block. The created Tensor
     doesn't check the dtype and the shape of feed data because dygraph input
@@ -91,8 +207,6 @@ def data_layer_not_check(name, shape, dtype='float32', lod_level=0):
        dtype (np.dtype|VarType|str, optional): The type of the data. Supported
            dtype: bool, float16, float32, float64, int8, int16, int32, int64,
            uint8. Default: float32
-       lod_level (int, optional): The LoD level of the LoDTensor. Usually users
-           don't have to set this value. Default: 0
 
     Returns:
         Tensor: The global Tensor that gives access to the data.
@@ -107,9 +221,8 @@ def data_layer_not_check(name, shape, dtype='float32', lod_level=0):
         name=name,
         shape=shape,
         dtype=dtype,
-        type=core.VarDesc.VarType.LOD_TENSOR,
+        type=core.VarDesc.VarType.DENSE_TENSOR,
         stop_gradient=True,
-        lod_level=lod_level,
         is_data=True,
         need_check_feed=False,
     )
@@ -184,6 +297,34 @@ def type_name(v):
     return type(v).__name__
 
 
+def is_dataclass_instance(obj):
+    """Check if the object is an instance of a dataclass.
+    Refer to https://docs.python.org/3/library/dataclasses.html#dataclasses.is_dataclass
+    """
+    return is_dataclass(obj) and not isinstance(obj, type)
+
+
+def is_dataclass_type(obj):
+    return is_dataclass(obj) and isinstance(obj, type)
+
+
+def is_plain_dataclass_type(cls: type):
+    return is_dataclass_type(cls) and len(cls.__mro__) == 2
+
+
+def dataclass_as_dict(obj):
+    return {f.name: getattr(obj, f.name) for f in dataclasses.fields(obj)}
+
+
+def dataclass_from_dict(dataclass_type: type[Any], data: dict[str, Any]):
+    # NOTE(SigureMo): Create dataclass without __post_init__,
+    # because __post_init__ has been run in simulation
+    instance = dataclass_type.__new__(dataclass_type, **data)
+    for fd in dataclasses.fields(dataclass_type):
+        setattr(instance, fd.name, data[fd.name])
+    return instance
+
+
 def make_hashable(x, error_msg=None):
     """
     Makes input `x` hashable.
@@ -192,6 +333,15 @@ def make_hashable(x, error_msg=None):
     """
     if isinstance(x, (tuple, list, set)):
         return tuple(map(make_hashable, x))
+
+    if is_dataclass_instance(x):
+        return (
+            type(x).__name__,
+            *map(
+                make_hashable,
+                [getattr(x, field.name) for field in fields(x)],
+            ),
+        )
 
     try:
         hash(x)
@@ -212,7 +362,7 @@ def make_hashable(x, error_msg=None):
 # NOTE(Aurelius84): Consider the following paddle inner API as common case to
 # apply @to_static code transformation as usual. Because they contains
 # user-defined layer, like paddle.distributed.auto_parallel.helper.ProxyLayer.
-AS_NOT_INNER_FUNC_LIST = {"paddle.nn.layer.container.Sequential"}
+AS_NOT_INNER_FUNC_LIST = {"paddle.nn.layer.container.Sequential.forward"}
 
 
 def as_not_paddle_func(path):
@@ -220,7 +370,7 @@ def as_not_paddle_func(path):
     Append API or class as ignored case for is_paddle_func, and they
     will be returned False while calling is_paddle_func(func).
     """
-    global INNER_FUNC_WHITE_LIST
+    global AS_NOT_INNER_FUNC_LIST
     AS_NOT_INNER_FUNC_LIST.add(path)
 
 
@@ -236,15 +386,19 @@ def is_paddle_func(func, ignore_white_list=True):
         return (module.__name__ + '.' + func_name) in AS_NOT_INNER_FUNC_LIST
 
     try:
+        if isinstance(func, paddle.nn.Layer):
+            func = func.forward
+        if isinstance(
+            func, paddle.jit.dy2static.program_translator.StaticFunction
+        ):
+            func = func.dygraph_function
         if isinstance(func, functools.partial):
             func = func.func
-
-        func_name = getattr(func, '__name__', None)
         if inspect.ismethod(func):
-            func_name = func.__self__.__class__.__name__
             func = func.__func__
-        elif hasattr(func, '__class__'):  # for nn.Sequential
-            func_name = func.__class__.__name__
+        func_name = getattr(func, '__name__', None)
+        if inspect.ismethod(func) or inspect.isfunction(func):
+            func_name = func.__qualname__
 
         m = inspect.getmodule(func)
         flag = m is not None and m.__name__.startswith(PADDLE_MODULE_PREFIX)
@@ -272,6 +426,107 @@ def get_temp_dir():
     return temp_dir
 
 
+def wrap_as_closure(tree: gast.AST, closure_vars: list[str]) -> gast.AST:
+    """
+    Wrap a function to a closure function.
+
+    Before:
+
+        >>> def fn(x):
+        ...     ...
+
+    After:
+
+        >>> def create_fn():
+        ...     closure_var_1 = None
+        ...     def fn(x):
+        ...         ...
+        ...     return fn
+        ... fn = create_fn()
+    """
+
+    def create_assign_node(name, value) -> gast.Assign:
+        return gast.Assign(
+            targets=[
+                gast.Name(
+                    id=name,
+                    ctx=gast.Store(),
+                    annotation=[],
+                    type_comment=[],
+                )
+            ],
+            value=value,
+            type_comment=None,
+        )
+
+    def create_wrppper_fn_def_node(name, body) -> gast.FunctionDef:
+        return gast.FunctionDef(
+            name=name,
+            args=gast.arguments(
+                args=[],
+                posonlyargs=[],
+                vararg=None,
+                kwonlyargs=[],
+                kw_defaults=[],
+                kwarg=None,
+                defaults=[],
+            ),
+            body=body,
+            decorator_list=[],
+            returns=None,
+            type_comment=None,
+            type_params=[],
+        )
+
+    if not isinstance(tree, gast.Module):
+        return tree
+    if len(tree.body) != 1:
+        return tree
+    if not isinstance(tree.body[0], gast.FunctionDef):
+        return tree
+    fn_node = tree.body[0]
+    fn_name = fn_node.name
+    wrapper_fn_name = f"create_{fn_name}"
+    wrapper_fn_def_node = create_wrppper_fn_def_node(
+        wrapper_fn_name,
+        [
+            *[
+                create_assign_node(var, gast.Constant(value=None, kind=None))
+                for var in closure_vars
+            ],
+            fn_node,
+            gast.Return(
+                value=gast.Name(
+                    id=fn_name, ctx=gast.Load(), annotation=[], type_comment=[]
+                )
+            ),
+        ],
+    )
+
+    assign_node = create_assign_node(
+        fn_name,
+        gast.Call(
+            func=gast.Name(
+                id=wrapper_fn_name,
+                ctx=gast.Load(),
+                annotation=[],
+                type_comment=[],
+            ),
+            args=[],
+            keywords=[],
+        ),
+    )
+    return gast.Module(body=[wrapper_fn_def_node, assign_node], type_ignores=[])
+
+
+def wrap_cell(var: Any) -> types.CellType:
+    def closure_fn():
+        return var
+
+    assert closure_fn.__closure__ is not None
+    return closure_fn.__closure__[0]
+
+
 def ast_to_func(ast_root, dyfunc, delete_on_exit=True):
     """
     Transform modified AST of decorated function into python callable object.
@@ -284,16 +539,48 @@ def ast_to_func(ast_root, dyfunc, delete_on_exit=True):
             shutil.rmtree(dir_path)
 
     def func_prefix(func):
-        pre_fix = func.__name__
+        prefix = func.__name__
         if hasattr(func, '__self__'):
             try:
-                pre_fix = func.__self__.__class__.__name__ + '_' + func.__name__
+                prefix = f"{func.__self__.__class__.__name__}_{func.__name__}"
             except:
                 pass
-        return pre_fix
+        return prefix
+
+    def get_new_closure(original_fn, generated_fn):
+        if generated_fn.__closure__ is None:
+            return None
+
+        original_closure_vars = inspect.getclosurevars(original_fn).nonlocals
+        generated_closure_vars = inspect.getclosurevars(generated_fn).nonlocals
+        # NOTE(SigureMo): [Why not `assert original_fn.__closure__ is not None`?]
+        # If the original function is a recursive function, the original function will
+        # not capture itself as a free var, it will access itself from global. But the
+        # transformed code always inside a create_xxx function, so the generated function
+        # will capture itself as a free var.
+        return tuple(
+            wrap_cell(original_closure_vars.get(freevar_name, freevar))
+            for freevar_name, freevar in generated_closure_vars.items()
+        )
+
+    def get_new_globals(original_fn, generated_fn):
+        globals_attr_name = "__globals__"
+        original_fn_globals = getattr(original_fn, globals_attr_name, {})
+        generated_fn_globals = getattr(generated_fn, globals_attr_name, {})
+
+        original_fn_globals_exclude_builtin = {
+            k: v
+            for k, v in original_fn_globals.items()
+            if not (k.startswith('__') and k.endswith('__'))
+        }
+        return {**generated_fn_globals, **original_fn_globals_exclude_builtin}
+
+    dyfunc_closures = inspect.getclosurevars(dyfunc).nonlocals
+    ast_root = wrap_as_closure(ast_root, list(dyfunc_closures.keys()))
 
     source = ast_to_source_code(ast_root)
     source = _inject_import_statements() + source
+
     temp_dir = get_temp_dir()
     f = tempfile.NamedTemporaryFile(
         mode='w',
@@ -330,11 +617,17 @@ def ast_to_func(ast_root, dyfunc, delete_on_exit=True):
             f'Function: {func_name} doesn\'t exist in the Module transformed from AST.'
         )
     # After transform dygraph function into callable_func saved in tmp file,
-    # it lost the global variables from imported statements or defined in source file.
-    # Recovers the necessary variables by `__globals__`.
-    recover_globals_attribute(dyfunc, callable_func)
+    # it lost the global and closure variables from imported statements or defined
+    # in source file. Recovers the necessary variables by `__globals__` and `__closure__`
+    new_fn = types.FunctionType(
+        code=callable_func.__code__,
+        globals=get_new_globals(dyfunc, callable_func),
+        name=func_name,
+        argdefs=callable_func.__defaults__,
+        closure=get_new_closure(dyfunc, callable_func),
+    )
 
-    return callable_func, f.name
+    return new_fn, f.name
 
 
 def _inject_import_statements():
@@ -349,26 +642,6 @@ def _inject_import_statements():
         "warnings.filterwarnings('ignore', category=DeprecationWarning)",
     ]
     return '\n'.join(import_statements) + '\n'
-
-
-def recover_globals_attribute(src_obj, dst_obj):
-    attr_name = '__globals__'
-
-    src_globals = getattr(src_obj, attr_name, {})
-    dst_globals = getattr(dst_obj, attr_name, {})
-
-    for k, v in src_globals.items():
-        # ignore builtin attribute.
-        if not (k.startswith('__') and k.endswith('__')):
-            dst_globals[k] = v
-
-    # Inject source function closure into destination function globals
-    # Because the destination function is a standalone function, the original
-    # closure of the source function is compiled as LOAD_GLOBAL in the
-    # destination function.
-    src_closure = inspect.getclosurevars(src_obj)
-    for k, v in src_closure.nonlocals.items():
-        dst_globals[k] = v
 
 
 def func_to_source_code(function, dedent=True):
@@ -533,15 +806,42 @@ def prim_or_cinn_is_enabled(build_strategy, backend):
 
 
 def cinn_is_enabled(build_strategy, backend):
-    if backend == 'CINN':
+    if backend.is_cinn():
         return True
-    if build_strategy is not None and build_strategy.build_cinn_pass:
+    if build_strategy.build_cinn_pass:
+        warnings.warn(
+            "Use `build_strategy.build_cinn_pass = True` to enable CINN is deprecated, please use `backend = 'CINN'` instead."
+        )
         return True
-
-    value = os.getenv('FLAGS_use_cinn')
-    if value is not None and value.lower() in ['true', '1']:
+    if paddle.base.framework.in_cinn_mode():
         return True
     return False
+
+
+def infer_use_cinn_backend(backend, build_strategy):
+    if not cinn_is_available():
+        return False
+    if not ENV_ENABLE_CINN_IN_DY2ST.get():
+        return False
+    if not cinn_is_enabled(build_strategy, backend):
+        return False
+    return True
+
+
+def cinn_is_available():
+    if not paddle.is_compiled_with_cinn():
+        return False
+    if not paddle.is_compiled_with_cuda():
+        return False
+    if not isinstance(
+        paddle.framework._current_expected_place_(), paddle.base.core.CUDAPlace
+    ):
+        return False
+    if platform.system() != "Linux":
+        return False
+    if not paddle.framework.use_pir_api():
+        return False
+    return True
 
 
 def cse_is_enabled():
@@ -550,14 +850,31 @@ def cse_is_enabled():
     ]
 
 
+def use_specialized_device():
+    return paddle.get_flags(["FLAGS_specialize_device_in_dy2st"])[
+        "FLAGS_specialize_device_in_dy2st"
+    ]
+
+
+def parameters_persistent_mode_is_enabled():
+    return paddle.get_flags(["FLAGS_parameters_persistent_mode_in_dy2st"])[
+        "FLAGS_parameters_persistent_mode_in_dy2st"
+    ]
+
+
 def prim_is_enabled():
-    core.check_and_set_prim_all_enabled()
     return core._is_bwd_prim_enabled() or core._is_fwd_prim_enabled()
 
 
 def is_api_in_module_helper(obj, module_prefix):
     m = inspect.getmodule(obj)
     return m is not None and m.__name__.startswith(module_prefix)
+
+
+def auto_layout_is_enabled():
+    return paddle.get_flags(["FLAGS_enable_auto_layout_pass"])[
+        "FLAGS_enable_auto_layout_pass"
+    ]
 
 
 def is_builtin(func, name=None):
@@ -576,19 +893,49 @@ def is_builtin(func, name=None):
         return False
 
 
-@signature_safe_contextmanager
-def backend_guard(backend):
-    core.check_and_set_prim_all_enabled()
+def compose_guards(*guard_creators):
+    @contextmanager
+    def composed_guard():
+        if not guard_creators:
+            yield
+            return
+        with (
+            guard_creators[0](),
+            compose_guards(*guard_creators[1:])(),
+        ):
+            yield
+
+    return composed_guard
+
+
+@contextmanager
+def prim_guard():
     origin_fwd = core._is_fwd_prim_enabled()
     origin_bwd = core._is_bwd_prim_enabled()
-
-    if backend == 'CINN':
-        core._set_prim_all_enabled(True)
+    core._set_prim_all_enabled(True)
     try:
         yield
     finally:
         core._set_prim_forward_enabled(origin_fwd)
         core._set_prim_backward_enabled(origin_bwd)
+
+
+@contextmanager
+def backend_guard(backend):
+    guard_creators = []
+    if backend.is_cinn():
+        guard_creators.append(lambda: prim_guard())
+        guard_creators.append(
+            lambda: paddle.base.framework.flag_guard(
+                "FLAGS_prim_enable_dynamic", True
+            )
+        )
+        guard_creators.append(
+            lambda: paddle.base.framework.flag_guard("FLAGS_use_cinn", True)
+        )
+
+    with compose_guards(*guard_creators)():
+        yield
 
 
 def construct_grad_names(grad_info_map, x_vars, param_vars, out_vars):
@@ -634,3 +981,76 @@ def cuda_pinned_tensors_move_to_excepted_place(inputs):
                 var = value._copy_to(expected_place, True)
                 var.stop_gradient = True
                 var._share_buffer_to(value)
+
+
+def patch_method(instance: object, name: str, new_method: Callable[..., Any]):
+    def get_original_method(instance: object, name: str):
+        """
+        There are two case we don't need to restore the method:
+        1. If the attribute is not existed
+        2. If the obj.attr.__func__ is obj.__class__.attr
+        If the method need restore, return the original method.
+        Otherwise, return None, indicating that the method can be simply deleted.
+        """
+        if not hasattr(instance, name):
+            return None
+
+        original_method = getattr(instance, name)
+        if not inspect.ismethod(original_method):
+            # obj.attr is a function or other object (not a bound method)
+            return original_method
+
+        if not hasattr(instance.__class__, name):
+            # obj.__class__ has not the same unbound method
+            return original_method
+
+        if original_method.__func__ is not getattr(instance.__class__, name):
+            # obj.attr is a bound method, but it's unbound method is
+            # different from obj.__class__.attr
+            return original_method
+        return None
+
+    original_method = get_original_method(instance, name)
+    object.__setattr__(instance, name, new_method)
+
+    def restorer(instance):
+        if original_method is None:
+            object.__delattr__(instance, name)
+        else:
+            object.__setattr__(instance, name, original_method)
+
+    return restorer
+
+
+@contextmanager
+def patch_method_guard(
+    instance: object, name: str, new_method: Callable[..., Any]
+):
+    restorer = patch_method(instance, name, new_method)
+    try:
+        yield
+    finally:
+        restorer(instance)
+
+
+def extract_tensor_dynamic_dims(
+    tensor: paddle.Tensor,
+) -> tuple[int]:
+    """
+    Extract dynamic dimensions from a paddle.Tensor.
+    Returns a list of dynamic dimensions or None if no dynamic dimensions exist.
+    """
+    if not isinstance(tensor, paddle.Tensor):
+        raise TypeError(
+            f"Expected a paddle.Tensor, but got {type(tensor).__name__}"
+        )
+
+    if not hasattr(tensor, DYNAMIC_DIMS_ATTR_NAME):
+        return []
+
+    dynamic_dims = getattr(tensor, DYNAMIC_DIMS_ATTR_NAME)
+    if not isinstance(dynamic_dims, tuple):
+        raise TypeError(
+            f"Expected {DYNAMIC_DIMS_ATTR_NAME} to be a tuple, but got {type(dynamic_dims).__name__}"
+        )
+    return dynamic_dims

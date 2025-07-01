@@ -17,7 +17,7 @@
 #include "paddle/fluid/eager/api/manual/fluid_manual/nodes/nodes.h"
 #include "paddle/fluid/eager/api/utils/global_utils.h"
 #include "paddle/fluid/imperative/amp_utils.h"
-#include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/phi/core/platform/profiler/event_tracing.h"
 
 std::tuple<paddle::Tensor,
            paddle::Tensor,
@@ -42,10 +42,8 @@ fused_gate_attention_dygraph_function(
     const paddle::Tensor& OutLinearWeight,
     const paddle::Tensor& OutLinearBias,
     const paddle::framework::AttributeMap& attr_map) {
-  paddle::platform::RecordEvent dygraph_entrance_record_event(
-      "fused_gate_attention dygraph",
-      paddle::platform::TracerEventType::Operator,
-      1);
+  phi::RecordEvent dygraph_entrance_record_event(
+      "fused_gate_attention dygraph", phi::TracerEventType::Operator, 1);
   VLOG(3) << "Running Eager Forward Op: fused_gate_attention";
   // Dygraph Forward Pass
 
@@ -56,21 +54,31 @@ fused_gate_attention_dygraph_function(
     paddle::small_vector<std::vector<paddle::Tensor>, egr::kSlotSmallVectorSize>
         amp_tensors_vector = {
             {Query}, {SrcMask}, {OutLinearWeight}, {OutLinearBias}};
-    if (Key.initialized()) amp_tensors_vector.push_back({Key});
-    if (QueryWeight.initialized()) amp_tensors_vector.push_back({QueryWeight});
-    if (KeyWeight.initialized()) amp_tensors_vector.push_back({KeyWeight});
-    if (ValueWeight.initialized()) amp_tensors_vector.push_back({ValueWeight});
-    if (QKVWeight.initialized()) amp_tensors_vector.push_back({QKVWeight});
-    if (NonbatchedBias.initialized())
+    if (Key.has_allocation()) amp_tensors_vector.push_back({Key});
+    if (QueryWeight.has_allocation())
+      amp_tensors_vector.push_back({QueryWeight});
+    if (KeyWeight.has_allocation()) amp_tensors_vector.push_back({KeyWeight});
+    if (ValueWeight.has_allocation())
+      amp_tensors_vector.push_back({ValueWeight});
+    if (QKVWeight.has_allocation()) amp_tensors_vector.push_back({QKVWeight});
+    if (NonbatchedBias.has_allocation())
       amp_tensors_vector.push_back({NonbatchedBias});
-    if (GateWeight.initialized()) amp_tensors_vector.push_back({GateWeight});
-    if (GateBias.initialized()) amp_tensors_vector.push_back({GateBias});
+    if (GateWeight.has_allocation()) amp_tensors_vector.push_back({GateWeight});
+    if (GateBias.has_allocation()) amp_tensors_vector.push_back({GateBias});
 
     auto amp_dst_dtype = paddle::imperative::GetAmpDestDtype(
         "fused_gate_attention", amp_tensors_vector);
 
     auto NEW_Query =
         egr::AmpAutoCast("Query", Query, amp_dst_dtype, "fused_gate_attention");
+    auto NEW_Key =
+        ((Key.has_allocation())
+             ? ((Query.data() == Key.data())
+                    ? NEW_Query
+                    : egr::AmpAutoCast(
+                          "Key", Key, amp_dst_dtype, "fused_gate_attention"))
+             : Key);
+
     auto NEW_SrcMask = egr::AmpAutoCast(
         "SrcMask", SrcMask, amp_dst_dtype, "fused_gate_attention");
     auto NEW_OutLinearWeight = egr::AmpAutoCast("OutLinearWeight",
@@ -79,48 +87,44 @@ fused_gate_attention_dygraph_function(
                                                 "fused_gate_attention");
     auto NEW_OutLinearBias = egr::AmpAutoCast(
         "OutLinearBias", OutLinearBias, amp_dst_dtype, "fused_gate_attention");
-    auto NEW_Key = ((Key.initialized())
-                        ? egr::AmpAutoCast(
-                              "Key", Key, amp_dst_dtype, "fused_gate_attention")
-                        : Key);
-    auto NEW_QueryWeight =
-        ((QueryWeight.initialized()) ? egr::AmpAutoCast("QueryWeight",
-                                                        QueryWeight,
-                                                        amp_dst_dtype,
-                                                        "fused_gate_attention")
-                                     : QueryWeight);
+    auto NEW_QueryWeight = ((QueryWeight.has_allocation())
+                                ? egr::AmpAutoCast("QueryWeight",
+                                                   QueryWeight,
+                                                   amp_dst_dtype,
+                                                   "fused_gate_attention")
+                                : QueryWeight);
     auto NEW_KeyWeight =
-        ((KeyWeight.initialized()) ? egr::AmpAutoCast("KeyWeight",
-                                                      KeyWeight,
-                                                      amp_dst_dtype,
-                                                      "fused_gate_attention")
-                                   : KeyWeight);
-    auto NEW_ValueWeight =
-        ((ValueWeight.initialized()) ? egr::AmpAutoCast("ValueWeight",
-                                                        ValueWeight,
-                                                        amp_dst_dtype,
-                                                        "fused_gate_attention")
-                                     : ValueWeight);
+        ((KeyWeight.has_allocation()) ? egr::AmpAutoCast("KeyWeight",
+                                                         KeyWeight,
+                                                         amp_dst_dtype,
+                                                         "fused_gate_attention")
+                                      : KeyWeight);
+    auto NEW_ValueWeight = ((ValueWeight.has_allocation())
+                                ? egr::AmpAutoCast("ValueWeight",
+                                                   ValueWeight,
+                                                   amp_dst_dtype,
+                                                   "fused_gate_attention")
+                                : ValueWeight);
     auto NEW_QKVWeight =
-        ((QKVWeight.initialized()) ? egr::AmpAutoCast("QKVWeight",
-                                                      QKVWeight,
-                                                      amp_dst_dtype,
-                                                      "fused_gate_attention")
-                                   : QKVWeight);
-    auto NEW_NonbatchedBias = ((NonbatchedBias.initialized())
+        ((QKVWeight.has_allocation()) ? egr::AmpAutoCast("QKVWeight",
+                                                         QKVWeight,
+                                                         amp_dst_dtype,
+                                                         "fused_gate_attention")
+                                      : QKVWeight);
+    auto NEW_NonbatchedBias = ((NonbatchedBias.has_allocation())
                                    ? egr::AmpAutoCast("NonbatchedBias",
                                                       NonbatchedBias,
                                                       amp_dst_dtype,
                                                       "fused_gate_attention")
                                    : NonbatchedBias);
-    auto NEW_GateWeight =
-        ((GateWeight.initialized()) ? egr::AmpAutoCast("GateWeight",
-                                                       GateWeight,
-                                                       amp_dst_dtype,
-                                                       "fused_gate_attention")
-                                    : GateWeight);
+    auto NEW_GateWeight = ((GateWeight.has_allocation())
+                               ? egr::AmpAutoCast("GateWeight",
+                                                  GateWeight,
+                                                  amp_dst_dtype,
+                                                  "fused_gate_attention")
+                               : GateWeight);
     auto NEW_GateBias =
-        ((GateBias.initialized())
+        ((GateBias.has_allocation())
              ? egr::AmpAutoCast(
                    "GateBias", GateBias, amp_dst_dtype, "fused_gate_attention")
              : GateBias);
@@ -150,20 +154,27 @@ fused_gate_attention_dygraph_function(
        {"SrcMask", egr::EagerUtils::TrySyncToVars(SrcMask)},
        {"OutLinearWeight", egr::EagerUtils::TrySyncToVars(OutLinearWeight)},
        {"OutLinearBias", egr::EagerUtils::TrySyncToVars(OutLinearBias)}};
-  if (Key.initialized()) ins["Key"] = egr::EagerUtils::TrySyncToVars(Key);
-  if (QueryWeight.initialized())
+  if (Key.has_allocation()) {
+    if (Query.data() == Key.data()) {
+      ins["Key"] = ins["Query"];
+    } else {
+      ins["Key"] = egr::EagerUtils::TrySyncToVars(Key);
+    }
+  }
+
+  if (QueryWeight.has_allocation())
     ins["QueryWeight"] = egr::EagerUtils::TrySyncToVars(QueryWeight);
-  if (KeyWeight.initialized())
+  if (KeyWeight.has_allocation())
     ins["KeyWeight"] = egr::EagerUtils::TrySyncToVars(KeyWeight);
-  if (ValueWeight.initialized())
+  if (ValueWeight.has_allocation())
     ins["ValueWeight"] = egr::EagerUtils::TrySyncToVars(ValueWeight);
-  if (QKVWeight.initialized())
+  if (QKVWeight.has_allocation())
     ins["QKVWeight"] = egr::EagerUtils::TrySyncToVars(QKVWeight);
-  if (NonbatchedBias.initialized())
+  if (NonbatchedBias.has_allocation())
     ins["NonbatchedBias"] = egr::EagerUtils::TrySyncToVars(NonbatchedBias);
-  if (GateWeight.initialized())
+  if (GateWeight.has_allocation())
     ins["GateWeight"] = egr::EagerUtils::TrySyncToVars(GateWeight);
-  if (GateBias.initialized())
+  if (GateBias.has_allocation())
     ins["GateBias"] = egr::EagerUtils::TrySyncToVars(GateBias);
 
   std::map<std::string, std::vector<std::shared_ptr<egr::EagerVariable>>> outs =
@@ -270,9 +281,9 @@ fused_gate_attention_dygraph_function(
   egr::EagerUtils::GetOutput(outs["Out"][0], &Out);
 
   {
-    paddle::platform::RecordEvent node_creation_record_event(
+    phi::RecordEvent node_creation_record_event(
         "fused_gate_attention node_creation",
-        paddle::platform::TracerEventType::Operator,
+        phi::TracerEventType::Operator,
         1);
     egr::AutogradMeta* p_autograd_QueryTransposeOut =
         egr::EagerUtils::autograd_meta(&QueryTransposeOut);
@@ -361,7 +372,7 @@ fused_gate_attention_dygraph_function(
         grad_node->SetTensorWrapper_GateOut(GateOut);
       }
 
-      if (NonbatchedBias.initialized()) {
+      if (NonbatchedBias.has_allocation()) {
         grad_node->SetTensorWrapper_NonbatchedBias(NonbatchedBias);
         grad_node->SetGradOutMeta(NonbatchedBias, 6);
       }

@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 np.random.seed(100)
 paddle.seed(100)
@@ -45,16 +44,16 @@ class TestCopySignOp(OpTest):
         self.outputs = {'out': self.target}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
-        self.check_grad(['x', 'y'], ['out'])
+        self.check_grad(['x', 'y'], ['out'], check_pir=True)
 
     def test_check_grad_ignore_x(self):
-        self.check_grad(['y'], ['out'])
+        self.check_grad(['y'], ['out'], check_pir=True)
 
     def test_check_grad_ignore_y(self):
-        self.check_grad(['x'], ['out'])
+        self.check_grad(['x'], ['out'], check_pir=True)
 
     def init_config(self):
         self.x = np.random.randn(20, 6).astype('float64')
@@ -87,19 +86,23 @@ class TestCopySignBF16(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
-        self.check_grad_with_place(self.place, ['x', 'y'], ['out'])
+        self.check_grad_with_place(
+            self.place, ['x', 'y'], ['out'], check_pir=True
+        )
 
     def test_check_grad_ignore_x(self):
         self.check_grad_with_place(
-            self.place, ['y'], ['out'], no_grad_set=set('x')
+            self.place, ['y'], ['out'], no_grad_set=set('x'), check_pir=True
         )
 
     def test_check_grad_ignore_y(self):
         self.check_grad_with_place(
-            self.place, ['x'], ['out'], no_grad_set=set('y')
+            self.place, ['x'], ['out'], no_grad_set=set('y'), check_pir=True
         )
 
 
@@ -119,7 +122,6 @@ class TestCopySignAPI(unittest.TestCase):
             else paddle.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_static_api(self):
         paddle.enable_static()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -130,7 +132,7 @@ class TestCopySignAPI(unittest.TestCase):
                 y = self.y
             else:
                 y = paddle.static.data(
-                    name='y', shape=self.y.shape, dtype=self.x.dtype
+                    name='y', shape=self.y.shape, dtype=self.y.dtype
                 )
             out = paddle.copysign(x, y)
             exe = paddle.static.Executor(self.place)
@@ -296,6 +298,114 @@ class TestCopySignBroadcastCase3(TestCopySignAPI):
         dtype = np.float16
         self.x = (np.random.randn(4, 5) * 10).astype(dtype)
         self.y = (np.random.randn(3, 4, 5) * 10).astype(dtype)
+
+
+class TestCopySignZeroSize1(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(0, 5)
+        self.y = np.random.randn(0, 5)
+
+    def place_init(self):
+        self.place = paddle.CPUPlace()
+
+
+class TestCopySignZeroSize2(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(0, 5)
+        self.y = np.random.randn(3, 0, 5)
+
+    def place_init(self):
+        self.place = paddle.CPUPlace()
+
+
+class TestCopySignZeroSize3(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(3, 0, 5)
+        self.y = np.random.randn(0, 5)
+
+
+class TestCopySignZeroSize4(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(5, 0)
+        self.y = np.random.randn(3, 5, 0)
+
+
+class TestCopySignZeroSize5(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(2, 5)
+        self.y = np.random.randn(0, 2, 5)
+
+
+class TestCopySignZeroSize6(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(0)
+        self.y = np.random.randn(0)
+
+
+class TestCopySignTypePromotion(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.random.randn(2, 5).astype(np.float64)
+        self.y = np.random.randn(2, 5).astype(np.float32)
+
+
+class TestCopySignNan1(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+        self.y = np.array(
+            [[np.nan, np.nan], [np.nan, np.nan]], dtype=np.float64
+        )
+        self.y.view('uint64')[0, 0] |= np.uint64(0x8000000000000000)
+
+
+class TestCopySignNan2(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+        self.y = np.array(
+            [[np.nan, np.nan], [np.nan, np.nan]], dtype=np.float64
+        )
+        self.y.view('uint64')[0, 0] &= ~np.uint64(0x8000000000000000)
+
+
+class TestCopySignNan3(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[np.nan, 2.0], [3.0, 4.0]])
+        self.y = np.array([[-1.0, np.nan], [np.nan, np.nan]])
+
+
+class TestCopySignNan4(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[np.nan, 2.0], [3.0, 4.0]])
+        self.y = np.array([[-0.0, np.nan], [np.nan, np.nan]])
+
+
+class TestCopySignNan5(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[np.nan, 2.0], [3.0, 4.0]])
+        self.y = np.array([[0.0, np.nan], [np.nan, np.nan]])
+
+
+class TestCopySignNan6(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[np.nan, 2.0], [3.0, 4.0]])
+        self.y = np.array([[1.0, np.nan], [np.nan, np.nan]])
+
+
+class TestCopySignNan7(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[np.nan, 2.0], [3.0, 4.0]], dtype=np.float64)
+        self.y = np.array(
+            [[np.nan, np.nan], [np.nan, np.nan]], dtype=np.float64
+        )
+        self.y.view('uint64')[0, 0] |= np.uint64(0x8000000000000000)
+
+
+class TestCopySignNan8(TestCopySignAPI):
+    def input_init(self):
+        self.x = np.array([[np.nan, 2.0], [3.0, 4.0]], dtype=np.float64)
+        self.y = np.array(
+            [[np.nan, np.nan], [np.nan, np.nan]], dtype=np.float64
+        )
+        self.y.view('uint64')[0, 0] &= ~np.uint64(0x8000000000000000)
 
 
 if __name__ == "__main__":

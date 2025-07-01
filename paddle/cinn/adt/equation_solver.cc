@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <typeinfo>
 #include <unordered_map>
 #include <variant>
 
@@ -33,7 +34,11 @@ std::unordered_map<Variable, Value> InferValuesImpl(
     IndexExprInferContext* ctx) {
   const auto& [out_iter, in_iter] = id.tuple();
   Variable in_variable{in_iter.value()};
-  CHECK(ctx->HasValue(in_variable));
+  PADDLE_ENFORCE_EQ(
+      ctx->HasValue(in_variable),
+      true,
+      ::common::errors::NotFound("The param id's out_iter must contain "
+                                 "its in_iter's value"));
   return {{out_iter.value(), ctx->GetValue(in_variable)}};
 }
 
@@ -41,7 +46,11 @@ std::unordered_map<Variable, Value> InferValuesImpl(
     const Identity<tOut<Index>, tIn<Index>>& id, IndexExprInferContext* ctx) {
   const auto& [out_index, in_index] = id.tuple();
   Variable in_variable{in_index.value()};
-  CHECK(ctx->HasValue(in_variable));
+  PADDLE_ENFORCE_EQ(
+      ctx->HasValue(in_variable),
+      true,
+      ::common::errors::NotFound("The param id's out_iter must contain "
+                                 "its in_iter's value"));
   return {{out_index.value(), ctx->GetValue(in_variable)}};
 }
 
@@ -186,7 +195,7 @@ std::unordered_map<Variable, Value> InferValuesImpl(
   PADDLE_ENFORCE_EQ(
       out_msg_in_indexes.value()->size() == in_msg_in_indexes.value()->size(),
       true,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "The size of out_msg_in_indexes should be equal to the size of "
           "in_msg_in_indexes, but got out_msg_in_indexes size = %d, "
           "in_msg_in_indexes size = %d.",
@@ -195,7 +204,7 @@ std::unordered_map<Variable, Value> InferValuesImpl(
   PADDLE_ENFORCE_EQ(
       out_msg_out_indexes.value()->size() == in_msg_out_indexes.value()->size(),
       true,
-      phi::errors::InvalidArgument(
+      ::common::errors::InvalidArgument(
           "The size of out_msg_out_indexes should be equal to the size of "
           "in_msg_out_indexes, but got out_msg_out_indexes size = %d, "
           "in_msg_out_indexes size = %d.",
@@ -203,13 +212,30 @@ std::unordered_map<Variable, Value> InferValuesImpl(
           in_msg_out_indexes.value()->size()));
   for (std::size_t i = 0; i < out_msg_in_indexes.value()->size(); ++i) {
     const auto& value = ctx->GetValue(in_msg_in_indexes.value()->at(i));
-    CHECK(ret.emplace(out_msg_in_indexes.value()->at(i), value).second);
+    PADDLE_ENFORCE_EQ(
+        ret.emplace(out_msg_in_indexes.value()->at(i), value).second,
+        true,
+        ::common::errors::AlreadyExists([&]() {
+          std::ostringstream oss;
+          oss << "Failed to insert the variable '"
+              << "out_msg_in_indexes.value()->at(" << i
+              << ")' into the map: key already exists.";
+          return oss.str();
+        }()));
   }
   for (std::size_t i = 0; i < out_msg_out_indexes.value()->size(); ++i) {
     const auto& value = ctx->GetValue(in_msg_out_indexes.value()->at(i));
     const auto& out_index = out_msg_out_indexes.value()->at(i);
     if (out_index.has_value()) {
-      CHECK(ret.emplace(out_index.value(), value).second);
+      PADDLE_ENFORCE_EQ(ret.emplace(out_index.value(), value).second,
+                        true,
+                        ::common::errors::AlreadyExists([&]() {
+                          std::ostringstream oss;
+                          oss << "Failed to insert the variable '"
+                              << "out_index.value()"
+                              << "' into the map: key already exists.";
+                          return oss.str();
+                        }()));
     }
   }
   return ret;
@@ -232,9 +258,9 @@ std::unordered_map<Variable, Value> InferValues(const Function* function,
 DEFINE_ADT_TAG(tValueInferSuccess);
 
 template <typename OnFailT>
-tValueInferSuccess<bool> MergeInferedValuesIntoCtx(const Function* function,
-                                                   IndexExprInferContext* ctx,
-                                                   const OnFailT& OnFail) {
+tValueInferSuccess<bool> MergeInferredValuesIntoCtx(const Function* function,
+                                                    IndexExprInferContext* ctx,
+                                                    const OnFailT& OnFail) {
   auto output_variable2value = InferValues(function, ctx);
   for (const auto& [variable, unsimplified_value] : output_variable2value) {
     Value simplified_value({SimplifyValue(unsimplified_value, *ctx)});
@@ -253,9 +279,9 @@ tValueInferSuccess<bool> MergeInferedValuesIntoCtx(const Function* function,
   return tValueInferSuccess<bool>{true};
 }
 
-tValueInferSuccess<bool> MergeInferedValuesIntoCtx(const Function* function,
-                                                   IndexExprInferContext* ctx) {
-  return MergeInferedValuesIntoCtx(
+tValueInferSuccess<bool> MergeInferredValuesIntoCtx(
+    const Function* function, IndexExprInferContext* ctx) {
+  return MergeInferredValuesIntoCtx(
       function, ctx, [&](const std::optional<Value>& lhs, const Value& rhs) {
         if (lhs.has_value()) {
           VLOG(1) << "opt_old_value = " << ToTxtString(lhs.value());
@@ -265,6 +291,12 @@ tValueInferSuccess<bool> MergeInferedValuesIntoCtx(const Function* function,
       });
 }
 
+std::string GetFunctionName(const Function* function) {
+  return std::visit(
+      [](auto&& arg) -> std::string { return typeid(arg).name(); },
+      function->variant());
+}
+
 void SolveEquations(
     const EquationGraphTopoWalker<Variable, const Function*>& walker,
     const std::vector<Variable>& starts,
@@ -272,8 +304,17 @@ void SolveEquations(
   walker.WalkFunction(
       starts.begin(), starts.end(), [&](const Function* function) {
         tValueInferSuccess<bool> has_unique_value =
-            MergeInferedValuesIntoCtx(function, ctx);
-        CHECK(has_unique_value.value());
+            MergeInferredValuesIntoCtx(function, ctx);
+        PADDLE_ENFORCE_EQ(
+            has_unique_value.value(),
+            true,
+            ::common::errors::InvalidArgument([&]() {
+              std::ostringstream oss;
+              oss << "Failed to merge inferred values into the context for "
+                     "function '"
+                  << GetFunctionName(function) << "'.";
+              return oss.str();
+            }()));
       });
 }
 
@@ -281,20 +322,20 @@ void CheckEquationsSolvable(
     const EquationGraphTopoWalker<Variable, const Function*>& walker,
     const Variable& start,
     IndexExprInferContext* ctx) {
-  const auto& CheckNoConflictInferedValue = [&](const Function* function) {
-    MergeInferedValuesIntoCtx(
+  const auto& CheckNoConflictInferredValue = [&](const Function* function) {
+    MergeInferredValuesIntoCtx(
         function,
         ctx,
         [&](const auto& opt_old_value, const auto& simplified_value) {
           LOG(ERROR) << "old_value: " << ToTxtString(opt_old_value);
           LOG(ERROR) << "simplified_value: " << ToTxtString(simplified_value);
-          PADDLE_THROW(
-              phi::errors::InvalidArgument("CheckEquationsSolvable Failed"));
+          PADDLE_THROW(::common::errors::InvalidArgument(
+              "CheckEquationsSolvable Failed"));
           return tValueInferSuccess<bool>{false};
         });
   };
 
-  walker.WalkFunction(start, CheckNoConflictInferedValue);
+  walker.WalkFunction(start, CheckNoConflictInferredValue);
 }
 
 tHasNoConflictValue<bool> TrySolveEquations(
@@ -303,14 +344,14 @@ tHasNoConflictValue<bool> TrySolveEquations(
     IndexExprInferContext* ctx) {
   bool has_no_conflict_value = true;
 
-  const auto& HasConflictInferedValue = [&](const Function* function) {
+  const auto& HasConflictInferredValue = [&](const Function* function) {
     tValueInferSuccess<bool> has_unique_value =
-        MergeInferedValuesIntoCtx(function, ctx);
+        MergeInferredValuesIntoCtx(function, ctx);
     return !has_unique_value.value();
   };
 
   walker.WalkFunction(start, [&](const Function* function) {
-    if (has_no_conflict_value && HasConflictInferedValue(function)) {
+    if (has_no_conflict_value && HasConflictInferredValue(function)) {
       has_no_conflict_value = false;
     }
   });

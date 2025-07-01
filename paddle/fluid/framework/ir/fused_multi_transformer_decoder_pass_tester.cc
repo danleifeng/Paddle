@@ -207,7 +207,7 @@ TEST(FusedMultiTransformerDecoderPass, basic) {
 
   PADDLE_ENFORCE_EQ(num_nodes_before,
                     num_nodes_after + 60,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_decoder_pass, The "
                         "node num in graph "
                         "should be %d, but the result is %d",
@@ -215,7 +215,7 @@ TEST(FusedMultiTransformerDecoderPass, basic) {
                         num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_decoder pass, "
                         "there should be one fused_multi_transformer op, "
                         "but the result is %d",
@@ -362,14 +362,14 @@ TEST(FusedMultiTransformerDecoderFuseQKVPass, basic) {
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 52,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the fused_multi_transformer_decoder_fuse_qkv_pass, "
           "The node num in graph should be %d, but the result is %d",
           num_nodes_before - 52,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_decoder_fuse_qkv "
                         "pass, there should be one fused_multi_transformer "
                         "op, but the result is %d",
@@ -404,7 +404,7 @@ TEST(MultiDevicesFusedMultiTransformerDecoderFuseQKVPass, basic) {
   // (matmul_qkv)                     transpose        -> transpose_qkv
   // (transpose_qkv)                  reshape          -> reshape_qkv
   // (reshape_qkv)                    matmul_v2        -> matmul_linear
-  // (matmul_linear)                  c_allreduce_sum  -> c_all_reduce_out
+  // (matmul_linear)                  all_reduce_sum   -> c_all_reduce_out
   // (matmul_linear)                  elementwise_add  -> eltadd_linear
   // (eltadd_out)                     elementwise_add  -> attention_out
   //
@@ -414,7 +414,7 @@ TEST(MultiDevicesFusedMultiTransformerDecoderFuseQKVPass, basic) {
   // (ffn_matmul0, ffn_bias0)         elementwise_add  -> ffn_eltadd0
   // (ffn_eltadd0)                    gelu             -> ffn_gelu
   // (ffn_gelu)                       matmul_v2        -> ffn_matmul1
-  // (ffn_matmul1)                    c_allreduce_sum  -> c_allreduce_out
+  // (ffn_matmul1)                    all_reduce_sum   -> c_allreduce_out
   // (ffn_matmul1, ffn_bias1)         elementwise_add  -> ffn_eltadd1
   // (attention_out, ffn_eltadd1)     elementwise_add  -> ffn_output
   //
@@ -526,14 +526,14 @@ TEST(MultiDevicesFusedMultiTransformerDecoderFuseQKVPass, basic) {
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 60,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the fused_multi_transformer_decoder_fuse_qkv_pass, "
           "The node num in graph should be %d, but the result is %d",
           num_nodes_before - 60,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the fused_multi_transformer_decoder_fuse_qkv "
                         "multi-devices pass, there should be one "
                         "fused_multi_transformer op, but the result is %d",

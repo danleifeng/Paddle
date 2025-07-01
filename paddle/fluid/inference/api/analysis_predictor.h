@@ -28,14 +28,10 @@
 #include "paddle/fluid/inference/api/helper.h"
 #include "paddle/fluid/inference/api/paddle_inference_api.h"
 #include "paddle/fluid/inference/api/resource_manager.h"
-#include "paddle/fluid/platform/device/gpu/gpu_types.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/float16.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_types.h"
 #include "paddle/utils/string/printf.h"
-
-#if defined(PADDLE_WITH_DISTRIBUTE) && defined(PADDLE_WITH_PSCORE)
-#include "paddle/fluid/distributed/fleet_executor/fleet_executor.h"
-#endif
 
 #ifdef PADDLE_WITH_TESTING
 #include <gtest/gtest.h>
@@ -165,6 +161,12 @@ class AnalysisPredictor : public PaddlePredictor {
   ///
   std::vector<std::string> GetOutputNames() override;
 
+  ///
+  /// \brief Get the value really need place, only for pir
+  ///
+  /// \return phi::place
+  ///
+  phi::Place GetTensorPlace(const pir::Value &value);
   ///
   /// \brief Get the Input Tensor object
   ///
@@ -336,13 +338,6 @@ class AnalysisPredictor : public PaddlePredictor {
   ///
   bool MkldnnQuantize();
 
-  ///
-  /// \brief save program to model and save parameters to params
-  ///
-  /// \param[in] dir path to save the model
-  ///
-  void SaveOptimModel(const std::string &dir);
-
  protected:
   ///
   /// \brief Prepare predictor's required programs, including loading model
@@ -445,7 +440,7 @@ class AnalysisPredictor : public PaddlePredictor {
   /// \param[out] output_data output tensor
   ///
   template <typename T>
-  void GetFetchOne(const phi::DenseTensor &fetchs, PaddleTensor *output_data);
+  void GetFetchOne(const phi::DenseTensor &fetches, PaddleTensor *output_data);
   ///
   /// \brief PreSet for Mkldnn multi-thread and dynamic shape input.
   ///
@@ -520,55 +515,6 @@ class AnalysisPredictor : public PaddlePredictor {
   std::string GetOptimizedModelPath();
   void ClearExtraParams();
 
-#if defined(PADDLE_WITH_DISTRIBUTE) && defined(PADDLE_WITH_PSCORE)
-  // fleet exe related
-
-  ///
-  /// \brief prepare for fleet executor to run
-  ///
-  /// Used in AnalysisPredictor::Init(),
-  ///
-  bool PrepareFleetExecutor();
-
-  ///
-  /// \brief init NCCL env for multi gpus inference
-  ///
-  /// Used in AnalysisPredictor::PrepareFleetExecutor()
-  ///
-  bool CommInit();
-
-  ///
-  /// \brief read the config to init NCCL env
-  ///
-  /// Used in AnalysisPredictor::CommInit()
-  ///
-  /// \param[in] ring_id_to_ranks: a ptr to ring_id_to_ranks
-  /// \param[in] rank_to_ring_ids: a ptr to rank_to_ring_ids
-  ///
-  bool LoadConverterConfig(
-      std::map<int64_t, std::vector<int64_t>> *ring_id_to_ranks,
-      std::map<int64_t, std::vector<int64_t>> *rank_to_ring_ids);
-
-  ///
-  /// \brief add ops and run them with NaiveExecutor to init NCCL env
-  ///
-  /// Used in AnalysisPredictor::CommInit()
-  ///
-  /// \param[in] tmp_var_name: var name to hold NCCL unique id
-  /// \param[in] nranks: number of ranks in one comm group
-  /// \param[in] rank: relative rank of current rank in the comm group
-  /// \param[in] peer_endpoints: group's peers' endpoints
-  /// \param[in] block: the block to insert comm ops
-  /// \param[in] ring_id: the ring id to be used to init NCCL env
-  ///
-  void InsertCommOp(std::string tmp_var_name,
-                    int nranks,
-                    int rank,
-                    const std::vector<std::string> &peer_endpoints,
-                    framework::BlockDesc *block,
-                    int ring_id);
-#endif
-
  private:
   AnalysisConfig config_;
   std::unique_ptr<Argument> argument_ = nullptr;
@@ -585,23 +531,15 @@ class AnalysisPredictor : public PaddlePredictor {
   std::map<std::string, size_t> feed_names_;
   // Sorted according to the idx.
   std::map<size_t, std::string> idx2feeds_;
+  std::map<std::string, std::vector<int64_t>> feed_name2shapes_;
   std::vector<framework::OpDesc *> fetches_;
   std::vector<pir::Operation *> pir_fetches_;
   std::map<size_t, std::string> idx2fetches_;
+  std::map<std::string, std::vector<int64_t>> fetch_name2shapes_;
 
   phi::DataType model_precision_{phi::DataType::FLOAT32};
 
-#if PADDLE_WITH_DNNL
-  // Helper class to perform quantization
-  class MkldnnQuantizer;
-  MkldnnQuantizer *mkldnn_quantizer_{nullptr};
-
-#if PADDLE_WITH_TESTING
-  friend class MkldnnQuantizerTest;
-#endif
-#endif
-
-  // Memory buffer for feed inputs. The temporary LoDTensor will cause serious
+  // Memory buffer for feed inputs. The temporary DenseTensor will cause serious
   // concurrency problems, wrong results and memory leak, so cache them.
   std::vector<phi::DenseTensor> feed_tensors_;
   details::TensorArrayBatchCleaner tensor_array_batch_cleaner_;
@@ -628,12 +566,6 @@ class AnalysisPredictor : public PaddlePredictor {
   std::map<phi::Place, std::shared_future<std::unique_ptr<phi::DeviceContext>>>
       device_contexts_;
 
-#if defined(PADDLE_WITH_DISTRIBUTE) && defined(PADDLE_WITH_PSCORE)
-  // fleet executor related
-  distributed::FleetExecutorDesc executor_desc_;
-  std::shared_ptr<distributed::FleetExecutor> fleet_exe_;
-  std::shared_ptr<distributed::TaskNode> task_node_;
-#endif
   friend class paddle_infer::experimental::InternalUtils;
 };
 

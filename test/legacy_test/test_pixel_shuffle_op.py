@@ -20,7 +20,6 @@ from op_test import OpTest, convert_float_to_uint16
 import paddle
 import paddle.nn.functional as F
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def pixel_shuffle_np(x, up_factor, data_format="NCHW"):
@@ -65,8 +64,9 @@ class TestPixelShuffleOp(OpTest):
         self.op_type = "pixel_shuffle"
         self.python_api = paddle.nn.functional.pixel_shuffle
         self.init_dtype()
+        self.init_shape()
         self.init_data_format()
-        n, c, h, w = 2, 9, 4, 4
+        n, c, h, w = self.shape
 
         if self.format == "NCHW":
             shape = [n, c, h, w]
@@ -81,6 +81,9 @@ class TestPixelShuffleOp(OpTest):
         self.inputs = {'X': x}
         self.outputs = {'Out': npresult}
         self.attrs = {'upscale_factor': up_factor, "data_format": self.format}
+
+    def init_shape(self):
+        self.shape = [2, 9, 4, 4]
 
     def init_dtype(self):
         self.dtype = np.float64
@@ -107,6 +110,11 @@ class TestChannelLast(TestPixelShuffleOp):
 class TestPixelShuffleFP16Op(TestPixelShuffleOp):
     def init_dtype(self):
         self.dtype = np.float16
+
+
+class TestPixelShuffleOp_ZeroSize(TestPixelShuffleOp):
+    def init_shape(self):
+        self.shape = [2, 0, 0, 4]
 
 
 @unittest.skipIf(
@@ -166,7 +174,6 @@ class TestPixelShuffleAPI(unittest.TestCase):
         self.out_1_np = pixel_shuffle_np(self.x_1_np, 3)
         self.out_2_np = pixel_shuffle_np(self.x_2_np, 3, "NHWC")
 
-    @test_with_pir_api
     def test_static_graph_functional(self):
         for use_cuda in (
             [False, True] if core.is_compiled_with_cuda() else [False]
@@ -201,7 +208,6 @@ class TestPixelShuffleAPI(unittest.TestCase):
             np.testing.assert_allclose(res_1, self.out_1_np)
             np.testing.assert_allclose(res_2, self.out_2_np)
 
-    @test_with_pir_api
     def test_api_fp16(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -241,7 +247,7 @@ class TestPixelShuffleAPI(unittest.TestCase):
                 np.testing.assert_allclose(res_2, out_2_np)
 
     # same test between layer and functional in this op.
-    @test_with_pir_api
+
     def test_static_graph_layer(self):
         for use_cuda in (
             [False, True] if core.is_compiled_with_cuda() else [False]

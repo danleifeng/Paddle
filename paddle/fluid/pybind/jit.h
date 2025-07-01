@@ -13,11 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 #pragma once
 
-// Avoid a problem with copysign defined in pyconfig.h on Windows.
-#ifdef copysign
-#undef copysign
-#endif
-
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 
@@ -25,7 +20,7 @@ namespace paddle {
 namespace pybind {
 
 void BindJit(pybind11::module *m);
-void BindEvalFrame(pybind11::module *m);
+void BindSot(pybind11::module *m);
 
 }  // namespace pybind
 }  // namespace paddle

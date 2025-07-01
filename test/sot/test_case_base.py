@@ -63,25 +63,71 @@ class TestCaseBase(unittest.TestCase):
                 self.assertEqual(x, y)
         elif cls_x in (np.ndarray, paddle.Tensor):
             # TODO: support assert_allclose github error log
-            np.testing.assert_allclose(x, y)
+            np.testing.assert_allclose(x, y, rtol=1e-6, atol=1e-8)
         else:
             self.assertEqual(x, y)
 
-    def assert_results(self, func, *inputs):
-        sym_output = symbolic_translate(func)(*inputs)
-        paddle_output = func(*inputs)
+    def assert_results(self, func, *args, **kwargs):
+        sym_output = symbolic_translate(func)(*args, **kwargs)
+        paddle_output = func(*args, **kwargs)
         self.assert_nest_match(sym_output, paddle_output)
 
-    def assert_results_with_side_effects(self, func, *inputs):
-        sym_inputs = copy.deepcopy(inputs)
-        sym_output = symbolic_translate(func)(*sym_inputs)
-        paddle_inputs = copy.deepcopy(inputs)
-        paddle_output = func(*paddle_inputs)
-        self.assert_nest_match(sym_inputs, paddle_inputs)
+    def assert_results_with_grad(self, inputs, func, *args, **kwargs):
+        def _find_all_tensors(obj):
+            ret = []
+            container_types = (tuple, list, set)
+            if isinstance(obj, container_types):
+                for item in obj:
+                    ret.extend(_find_all_tensors(item))
+            elif isinstance(obj, dict):
+                for value in obj.values():
+                    ret.extend(_find_all_tensors(value))
+            elif isinstance(obj, paddle.Tensor):
+                ret.append(obj)
+            return ret
+
+        def _accumulate(tensors: list):
+            out = paddle.empty(shape=[], dtype='float64')
+            for tensor in tensors:
+                out += paddle.mean(tensor.astype('float64'))
+            return out
+
+        def _cal_input_grads(outputs):
+            tensor_outs = _find_all_tensors(outputs)
+            acc = _accumulate(tensor_outs)
+            acc.backward()
+            tensor_inputs = _find_all_tensors(inputs)
+            input_grads = []
+            for input in tensor_inputs:
+                input_grads.append(
+                    None if input.grad is None else input.grad.clone()
+                )
+                input.clear_gradient()
+            return input_grads
+
+        sym_output = symbolic_translate(func)(*args, **kwargs)
+        paddle_output = func(*args, **kwargs)
+        sym_input_grads = _cal_input_grads(sym_output)
+        paddle_input_grads = _cal_input_grads(paddle_output)
+        self.assert_nest_match(sym_input_grads, paddle_input_grads)
+        self.assert_nest_match(sym_output, paddle_output)
+
+    def assert_exceptions(self, exec, info, func, *args, **kwargs):
+        self.assertRaisesRegex(
+            exec, info, symbolic_translate(func), *args, **kwargs
+        )
+
+    def assert_results_with_side_effects(self, func, *args, **kwargs):
+        sym_args, sym_kwargs = copy.deepcopy((args, kwargs))
+        sym_output = symbolic_translate(func)(*sym_args, **sym_kwargs)
+        paddle_args, paddle_kwargs = copy.deepcopy((args, kwargs))
+        paddle_output = func(*paddle_args, **paddle_kwargs)
+        self.assert_nest_match(sym_args, paddle_args)
+        self.assert_nest_match(sym_kwargs, paddle_kwargs)
         self.assert_nest_match(sym_output, paddle_output)
 
     def assert_results_with_global_check(
-        self, func, global_keys: list[str], *inputs
+        self, func, global_keys: list[str], *args, **kwargs
     ):
         def copy_fn(fn):
             return types.FunctionType(
@@ -95,8 +141,8 @@ class TestCaseBase(unittest.TestCase):
         sym_copied_fn = copy_fn(func)
         sym_fn = symbolic_translate(sym_copied_fn)
         paddle_fn = copy_fn(func)
-        sym_output = sym_fn(*inputs)
-        paddle_output = paddle_fn(*inputs)
+        sym_output = sym_fn(*args, **kwargs)
+        paddle_output = paddle_fn(*args, **kwargs)
         for key in global_keys:
             self.assert_nest_match(
                 sym_copied_fn.__globals__[key], paddle_fn.__globals__[key]

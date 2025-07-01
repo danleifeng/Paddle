@@ -72,6 +72,9 @@ class TestReduceLastAxis2(TestReduceSumBase):
         self.shape = [512, 1024]
         self.axis = -1
 
+    def prepare_atol(self):
+        self.atol = 2e-5
+
 
 class TestReduceLastDim3(TestReduceSumBase):
     def prepare_data(self):

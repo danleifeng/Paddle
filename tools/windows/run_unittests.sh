@@ -31,10 +31,8 @@ disable_wingpu_test="^test_model$|\
 ^test_py_reader_combination$|\
 ^test_py_reader_pin_memory$|\
 ^test_py_reader_push_pop$|\
-^test_reader_reset$|\
+^test_reader_reset_deprecated$|\
 ^test_imperative_se_resnext$|\
-^test_sync_batch_norm_op$|\
-^test_sync_batch_norm_op_static_build$|\
 ^test_dataloader_keep_order_deprecated$|\
 ^test_dataloader_unkeep_order_deprecated$|\
 ^test_multiprocess_dataloader_iterable_dataset_static$|\
@@ -43,6 +41,7 @@ disable_wingpu_test="^test_model$|\
 ^test_fuse_bn_add_act_pass$|\
 ^test_gather_op$|\
 ^test_activation_op$|\
+^test_activation_op_zero_size$|\
 ^test_norm_nn_grad$|\
 ^test_bilinear_interp_op$|\
 ^disable_wingpu_test$"
@@ -64,7 +63,7 @@ disable_wingpu_cuda12_test="^test_cholesky_op$|\
 ^test_mul_op$|\
 ^test_bmn$|\
 ^test_memory_efficient_attention$|\
-^test_fuse_gemm_epilogue_pass$|\
+^test_fuse_gemm_epilogue_pass_deprecated$|\
 ^test_tril_triu_op$|\
 ^test_train_step_resnet18_adam$|\
 ^test_train_step_resnet18_sgd$|\
@@ -73,8 +72,8 @@ disable_wingpu_cuda12_test="^test_cholesky_op$|\
 ^test_multi_precision_fp16_train$|\
 ^test_imperative_skip_op$|\
 ^test_qat$|\
-^test_standalone_cuda_graph_multi_stream$|\
-^test_standalone_cuda_graph_multi_stream_static_build$|\
+^test_standalone_cuda_graph_multi_stream_deprecated$|\
+^test_standalone_cuda_graph_multi_stream_deprecated_static_build$|\
 ^test_save_load$|\
 ^test_conv_transpose_nn_grad$|\
 ^test_dygraph_spectral_norm$|\
@@ -146,7 +145,7 @@ disable_wingpu_cuda12_test="^test_cholesky_op$|\
 ^paddle_infer_api_copy_tensor_tester$|\
 ^cudnn_helper_test$|\
 ^test_analyzer_small_dam$|\
-^test_analyzer_transformer$|\
+^test_analyzer_transformer_deprecated$|\
 ^test_analyzer_int8_mobilenetv3_large$|\
 ^test_analyzer_bfloat16_mobilenetv3_large$|\
 ^test_api_impl$|\
@@ -222,9 +221,7 @@ disable_wingpu_cuda12_test="^test_cholesky_op$|\
 ^test_decoupled_py_reader_deprecated$|\
 ^test_generator_dataloader_deprecated$|\
 ^test_py_reader_combination$|\
-^test_reader_reset$|\
-^test_sync_batch_norm_op$|\
-^test_sync_batch_norm_op_static_build$|\
+^test_reader_reset_deprecated$|\
 ^test_decoupled_py_reader_deprecated_static_build$|\
 ^test_multiprocess_dataloader_iterable_dataset_dynamic$|\
 ^test_multiprocess_dataloader_iterable_dataset_static$|\
@@ -239,7 +236,6 @@ disable_wingpu_cuda12_test="^test_cholesky_op$|\
 ^test_add_reader_dependency_deprecated$|\
 ^test_conv2d_fusion_op$|\
 ^test_fused_conv2d_add_act_op$|\
-^test_analyzer_detect_functional_mkldnn$|\
 ^test_audio_datasets$|\
 ^test_signal$|\
 ^test_stft_op$|\
@@ -392,7 +388,7 @@ disable_win_inference_test="^trt_quant_int8_yolov3_r50_test$|\
 ^test_model$|\
 ^test_py_reader_combination$|\
 ^test_py_reader_push_pop$|\
-^test_reader_reset$|\
+^test_reader_reset_deprecated$|\
 ^test_py_reader_pin_memory$|\
 ^test_multiprocess_dataloader_iterable_dataset_dynamic$|\
 ^test_multiprocess_dataloader_iterable_dataset_static$|\
@@ -405,8 +401,6 @@ disable_win_inference_test="^trt_quant_int8_yolov3_r50_test$|\
 ^test_py_reader_using_executor$|\
 ^test_dataloader_keep_order_deprecated$|\
 ^test_dataloader_unkeep_order_deprecated$|\
-^test_sync_batch_norm_op$|\
-^test_sync_batch_norm_op_static_build$|\
 ^test_fuse_bn_act_pass_deprecated$|\
 ^test_fuse_bn_act_pass_deprecated_static_build$|\
 ^test_fuse_bn_add_act_pass$|\
@@ -434,7 +428,7 @@ disable_win_inference_test="^trt_quant_int8_yolov3_r50_test$|\
 # /*==========Fixed Disabled Windows CPU OPENBLAS((PR-CI-Windows-OPENBLAS)) unittests==============================*/
 # TODO: fix these unittest that is bound to fail
 disable_wincpu_test="^jit_kernel_test$|\
-^test_analyzer_transformer$|\
+^test_analyzer_transformer_deprecated$|\
 ^test_vision_models$|\
 ^test_dygraph_multi_forward$|\
 ^test_imperative_transformer_sorted_gradient$|\
@@ -448,7 +442,7 @@ disable_wincpu_test="^jit_kernel_test$|\
 ^test_se_resnet$|\
 ^disable_wincpu_test$"
 
-# these unittest that cost long time, diabled temporarily, Maybe moved to the night
+# these unittest that cost long time, disabled temporarily, Maybe moved to the night
 long_time_test="^test_gru_op$|\
 ^decorator_test$|\
 ^test_dataset_imdb$|\
@@ -459,6 +453,7 @@ long_time_test="^test_gru_op$|\
 ^test_sequence_conv$|\
 ^test_activation_nn_grad$|\
 ^test_activation_op$|\
+^test_activation_op_zero_size$|\
 ^test_bicubic_interp_v2_op$|\
 ^test_bilinear_interp_v2_op$|\
 ^test_crop_tensor_op$|\
@@ -608,7 +603,7 @@ function run_unittest_gpu() {
 }
 
 function unittests_retry(){
-    is_retry_execuate=0
+    is_retry_execute=0
     wintest_error=1
     retry_time=3
     exec_times=0
@@ -651,13 +646,13 @@ function unittests_retry(){
                 done
     else
         # There are more than 30 failed unit tests, so no unit test retry
-        is_retry_execuate=1
+        is_retry_execute=1
     fi
     rm -f $tmp_dir/*
 }
 
 function show_ut_retry_result() {
-    if [[ "$is_retry_execuate" != "0" ]];then
+    if [[ "$is_retry_execute" != "0" ]];then
         failed_test_lists_ult=`echo "${failed_test_lists}"`
         echo "========================================="
         echo "There are more than 30 failed unit tests, so no unit test retry!!!"

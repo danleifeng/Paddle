@@ -16,6 +16,7 @@
 #include "paddle/common/flags.h"
 #include "paddle/phi/backends/all_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/funcs/strided_utils.h"
 #include "paddle/phi/kernels/slice_kernel.h"
 
@@ -34,9 +35,9 @@ void SliceGradStridedKernel(const Context& dev_ctx,
                             const std::vector<int64_t>& decrease_axis,
                             DenseTensor* input_grad) {
   if (!FLAGS_use_stride_kernel) {
-    PADDLE_THROW(
-        phi::errors::Fatal("FLAGS_use_stride_kernel is closed. Strided kernel "
-                           "be called, something wrong has happened!"));
+    PADDLE_THROW(common::errors::Fatal(
+        "FLAGS_use_stride_kernel is closed. Strided kernel "
+        "be called, something wrong has happened!"));
   }
   dev_ctx.Alloc(input_grad, input_grad->dtype());
   input_grad->set_strides(DenseTensorMeta::calc_strides(input_grad->dims()));
@@ -46,6 +47,16 @@ void SliceGradStridedKernel(const Context& dev_ctx,
                      }));
   DenseTensor tmp;
   tmp.set_meta(out_grad.meta());
+  if (out_grad.numel() == 0) {
+    // set zero to input_grad
+
+    PD_VISIT_ALL_TYPES(input.dtype(), "SliceGradStridedKernel", ([&] {
+                         phi::StridedTensorFill<data_t>(
+                             *input_grad, 0, input_grad);
+                       }));
+
+    return;
+  }
   SliceStridedKernel<Context>(dev_ctx,
                               *input_grad,
                               axes,

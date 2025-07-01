@@ -667,12 +667,12 @@ void NormDoubleGradFunctor(const DeviceContext &ctx,
 }
 
 template <typename T, typename BnT>
-__device__ __forceinline__ void BlockReduceByVetical(BnT x_sum,
-                                                     BnT x_square_sum,
-                                                     BnT *smem_sum,
-                                                     BnT *smem_square_sum,
-                                                     BnT *x_sum_out,
-                                                     BnT *x_square_sum_out) {
+__device__ __forceinline__ void BlockReduceByVertical(BnT x_sum,
+                                                      BnT x_square_sum,
+                                                      BnT *smem_sum,
+                                                      BnT *smem_square_sum,
+                                                      BnT *x_sum_out,
+                                                      BnT *x_square_sum_out) {
   int tid = threadIdx.x + threadIdx.y * blockDim.x;
 #pragma unroll
   for (int offset = blockDim.y / 2; offset > 0; offset >>= 1) {
@@ -733,7 +733,7 @@ __device__ __forceinline__ void ReduceSumPost(const int C,  // channels
     }
 
     // vertical block sum
-    funcs::BlockReduceByVetical<T, BnT>(
+    funcs::BlockReduceByVertical<T, BnT>(
         *sum1, *sum2, &cache1[0], &cache2[0], sum1, sum2);
   }
 }
@@ -753,14 +753,14 @@ void SetLaunchConfigInfoForChannelLast(const Context &ctx,
                                        dim3 *block,
                                        dim3 *grid) {
   const int MAX_GRID_SIZE = 128;
-  const int WARP_SIZE = 32;
+  const int64_t WARP_SIZE = 32;
 
   int block_x = std::min(phi::funcs::details::GetLastPow2(C), WARP_SIZE);
   int block_y = std::min(phi::funcs::details::GetLastPow2(N * H * W * D / 16),
-                         block_size / block_x);
+                         static_cast<int64_t>(block_size / block_x));
   if (block_x * block_y != block_size) {
-    block_x =
-        std::min(phi::funcs::details::GetLastPow2(C), block_size / block_y);
+    block_x = std::min(phi::funcs::details::GetLastPow2(C),
+                       static_cast<int64_t>(block_size / block_y));
   }
   int grid_x = (C + block_x - 1) / block_x;
   int grid_y = std::min((N * H * W * D + block_y * 16 - 1) / (block_y * 16),

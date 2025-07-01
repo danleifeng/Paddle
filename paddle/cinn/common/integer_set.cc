@@ -14,14 +14,130 @@
 
 #include "paddle/cinn/common/integer_set.h"
 
-#include "paddle/cinn/common/arithmetic.h"
+#include "paddle/cinn/common/ir_util.h"
 #include "paddle/cinn/ir/ir_mutator.h"
 #include "paddle/cinn/ir/op/ir_operators.h"
 #include "paddle/cinn/ir/utils/ir_copy.h"
 #include "paddle/cinn/optim/replace_var_with_expr.h"
+#include "paddle/cinn/optim/simplify_util.h"
+#include "paddle/common/enforce.h"
 
 namespace cinn {
 namespace common {
+CasInterval::CasInterval(ir::Expr expr_l, ir::Expr expr_r) {
+  VLOG(6) << "CasInterval is : [" << expr_l << ", " << expr_r << "].";
+  expr_r = ReplaceMinToConstant(expr_r);
+  expr_l = ReplaceMaxToConstant(expr_l);
+  expr_l = optim::ArithSimplify(expr_l);
+  expr_r = optim::ArithSimplify(expr_r);
+  VLOG(6) << "After simplify, CasInterval is : [" << expr_l << ", " << expr_r
+          << "].";
+
+  if (expr_l.is_constant() && expr_r.is_constant()) {
+    PADDLE_ENFORCE_EQ(
+        expr_l->type().is_integer(),
+        true,
+        ::common::errors::InvalidArgument("Expected expr_l to be an integer."));
+    PADDLE_ENFORCE_EQ(
+        expr_r->type().is_integer(),
+        true,
+        ::common::errors::InvalidArgument("Expected expr_r to be an integer."));
+    l = expr_l.as_int64();
+    r = expr_r.as_int64();
+    return;
+  }
+  e_l = expr_l;
+  e_r = expr_r;
+}
+
+/**
+ * @brief Given an expr, visit it. If there is an ir::Min and its operands are 1
+ * constant value and 1 inconstant value, return the constant min value. For
+ * example, if a < min(5, b), then we get a < 5 and a < b. Using a < 5 to
+ * simplify the condition ensures correctness, though not sufficient.
+ */
+ir::Expr CasInterval::ReplaceMinToConstant(ir::Expr expr) {
+  ir::Expr copied = ir::ir_utils::IRCopy(expr);
+  struct Mutator : public ir::IRMutator<ir::Expr*> {
+    void operator()(ir::Expr* expr) { Visit(expr); }
+    void Visit(ir::Expr* expr) { ir::IRMutator<>::Visit(expr, expr); }
+
+   private:
+    void Visit(const ir::Min* op, ir::Expr* expr) override {
+      auto a = op->a();
+      auto b = op->b();
+
+      Visit(&a);
+      Visit(&b);
+
+      auto min_a = op->a();
+      auto min_b = op->b();
+      if (min_a.is_constant() && !min_b.is_constant()) {
+        PADDLE_ENFORCE_EQ(
+            min_a->type().is_integer(),
+            true,
+            ::common::errors::InvalidArgument("Min a should be an integer."));
+        *expr = ir::ir_utils::IRCopy(min_a);
+      } else if (min_b.is_constant() && !min_a.is_constant()) {
+        PADDLE_ENFORCE_EQ(
+            min_b->type().is_integer(),
+            true,
+            ::common::errors::InvalidArgument("Min b should be an integer."));
+        *expr = ir::ir_utils::IRCopy(min_b);
+      }
+    }
+  };
+  Mutator()(&copied);
+  return copied;
+}
+
+/**
+ * @brief Given an expr, visit it. If there is an ir::Max and its operands are 1
+ * constant value and 1 inconstant value, return the constant max value.
+ */
+ir::Expr CasInterval::ReplaceMaxToConstant(ir::Expr expr) {
+  ir::Expr copied = ir::ir_utils::IRCopy(expr);
+  struct Mutator : public ir::IRMutator<ir::Expr*> {
+    void operator()(ir::Expr* expr) { Visit(expr); }
+    void Visit(ir::Expr* expr) { ir::IRMutator<>::Visit(expr, expr); }
+
+   private:
+    void Visit(const ir::Max* op, ir::Expr* expr) override {
+      auto a = op->a();
+      auto b = op->b();
+
+      Visit(&a);
+      Visit(&b);
+
+      auto max_a = op->a();
+      auto max_b = op->b();
+      if (max_a.is_constant() && !max_b.is_constant()) {
+        PADDLE_ENFORCE_EQ(
+            max_a->type().is_integer(),
+            true,
+            ::common::errors::InvalidArgument("Max a should be an integer."));
+        *expr = ir::ir_utils::IRCopy(max_a);
+      } else if (max_b.is_constant() && !max_a.is_constant()) {
+        PADDLE_ENFORCE_EQ(
+            max_b->type().is_integer(),
+            true,
+            ::common::errors::InvalidArgument("Max b should be an integer."));
+        *expr = ir::ir_utils::IRCopy(max_b);
+      }
+    }
+  };
+  Mutator()(&copied);
+  return copied;
+}
+
+std::ostream& operator<<(std::ostream& os, const CasInterval& i) {
+  if (i.e_l.defined() && i.e_r.defined()) {
+    os << "Expr e_l Interval[" << i.e_l << ", " << i.e_r << "]";
+  } else {
+    os << "Int l Interval[" << i.l << ", " << i.r << "]";
+  }
+  return os;
+}
 
 ir::Expr SymbolicExprLimit::positive_inf =
     ir::Expr(ir::Var("positive_infinity"));
@@ -58,96 +174,121 @@ cas_intervals_t CollectVarIntervalsOfExprs(const std::vector<ir::Expr>& exprs,
 
 std::optional<bool> SymbolicExprAnalyzer::Prove(
     const ir::Expr& condition) const {
-  if (condition.As<ir::EQ>()) {
-    return ProveEQ(condition.As<ir::EQ>()->a(), condition.As<ir::EQ>()->b());
+  try {
+    if (condition.As<ir::EQ>()) {
+      return ProveEQ(condition.As<ir::EQ>()->a(), condition.As<ir::EQ>()->b());
+    }
+    if (condition.As<ir::NE>()) {
+      return ProveNE(condition.As<ir::NE>()->a(), condition.As<ir::NE>()->b());
+    }
+    if (condition.As<ir::GE>()) {
+      return ProveGE(condition.As<ir::GE>()->a(), condition.As<ir::GE>()->b());
+    }
+    if (condition.As<ir::LE>()) {
+      return ProveLE(condition.As<ir::LE>()->a(), condition.As<ir::LE>()->b());
+    }
+    if (condition.As<ir::GT>()) {
+      return ProveGT(condition.As<ir::GT>()->a(), condition.As<ir::GT>()->b());
+    }
+    if (condition.As<ir::LT>()) {
+      return ProveLT(condition.As<ir::LT>()->a(), condition.As<ir::LT>()->b());
+    }
+    return std::nullopt;
+  } catch (const ::common::enforce::EnforceNotMet& e) {
+    LOG(WARNING) << "Error occurred during integer calculation: " << e.what()
+                 << ", so SymbolicExprAnalyzer cannot prove anything.";
+    return std::nullopt;
   }
-  if (condition.As<ir::NE>()) {
-    return ProveNE(condition.As<ir::NE>()->a(), condition.As<ir::NE>()->b());
-  }
-  if (condition.As<ir::GE>()) {
-    return ProveGE(condition.As<ir::GE>()->a(), condition.As<ir::GE>()->b());
-  }
-  if (condition.As<ir::LE>()) {
-    return ProveLE(condition.As<ir::LE>()->a(), condition.As<ir::LE>()->b());
-  }
-  if (condition.As<ir::GT>()) {
-    return ProveGT(condition.As<ir::GT>()->a(), condition.As<ir::GT>()->b());
-  }
-  if (condition.As<ir::LT>()) {
-    return ProveLT(condition.As<ir::LT>()->a(), condition.As<ir::LT>()->b());
-  }
-  return std::nullopt;
 }
 
 std::optional<bool> SymbolicExprAnalyzer::ProveEQ(const ir::Expr& lhs,
                                                   const ir::Expr& rhs) const {
-  if (lhs == rhs) {
-    return true;
+  try {
+    if (lhs == rhs) {
+      return true;
+    }
+    ir::Expr diff = optim::ArithSimplify(ir::Sub::Make(lhs, rhs));
+    if (diff.is_constant()) {
+      return diff.get_constant() == 0;
+    }
+    ir::Expr diff_lower_bound = LowerBound(diff);
+    VLOG(6) << "lower bound of " << diff << " = " << diff_lower_bound;
+    ir::Expr diff_upper_bound = UpperBound(diff);
+    VLOG(6) << "upper bound of " << diff << " = " << diff_upper_bound;
+    if (diff_lower_bound.is_constant() && diff_upper_bound.is_constant() &&
+        diff_lower_bound.get_constant() == diff_upper_bound.get_constant()) {
+      return diff_lower_bound.get_constant() == 0;
+    }
+    std::optional<bool> prove_gt = ProveGT(lhs, rhs);
+    if (prove_gt.has_value() && prove_gt.value()) {
+      return false;
+    }
+    std::optional<bool> prove_lt = ProveLT(lhs, rhs);
+    if (prove_lt.has_value() && prove_lt.value()) {
+      return false;
+    }
+    return std::nullopt;
+  } catch (const ::common::enforce::EnforceNotMet& e) {
+    LOG(WARNING) << "Error occurred during integer calculation: " << e.what()
+                 << ", so SymbolicExprAnalyzer cannot prove anything.";
+    return std::nullopt;
   }
-  ir::Expr diff = AutoSimplify(ir::Sub::Make(lhs, rhs), var_intervals_);
-  if (diff.is_constant()) {
-    return diff.get_constant() == 0;
-  }
-  ir::Expr diff_lower_bound = LowerBound(diff);
-  VLOG(6) << "lower bound of " << diff << " = " << diff_lower_bound;
-  ir::Expr diff_upper_bound = UpperBound(diff);
-  VLOG(6) << "upper bound of " << diff << " = " << diff_upper_bound;
-  if (diff_lower_bound.is_constant() && diff_upper_bound.is_constant() &&
-      diff_lower_bound.get_constant() == diff_upper_bound.get_constant()) {
-    return diff_lower_bound.get_constant() == 0;
-  }
-  std::optional<bool> prove_gt = ProveGT(lhs, rhs);
-  if (prove_gt.has_value() && prove_gt.value()) {
-    return false;
-  }
-  std::optional<bool> prove_lt = ProveLT(lhs, rhs);
-  if (prove_lt.has_value() && prove_lt.value()) {
-    return false;
-  }
-  return std::nullopt;
 }
 
 std::optional<bool> SymbolicExprAnalyzer::ProveNE(const ir::Expr& lhs,
                                                   const ir::Expr& rhs) const {
-  std::optional<bool> prove_eq = ProveEQ(lhs, rhs);
-  if (!prove_eq.has_value()) {
+  try {
+    std::optional<bool> prove_eq = ProveEQ(lhs, rhs);
+    if (!prove_eq.has_value()) {
+      return std::nullopt;
+    }
+    return !prove_eq.value();
+  } catch (const ::common::enforce::EnforceNotMet& e) {
+    LOG(WARNING) << "Error occurred during integer calculation: " << e.what()
+                 << ", so SymbolicExprAnalyzer cannot prove anything.";
     return std::nullopt;
   }
-  return !prove_eq.value();
 }
 
 std::optional<bool> SymbolicExprAnalyzer::ProveGE(const ir::Expr& lhs,
                                                   const ir::Expr& rhs) const {
-  if (lhs == rhs) {
-    return true;
+  try {
+    if (lhs == rhs) {
+      return true;
+    }
+    if (rhs == SymbolicExprLimit::positive_inf ||
+        lhs == SymbolicExprLimit::negative_inf) {
+      return false;
+    }
+    if (lhs == SymbolicExprLimit::positive_inf ||
+        rhs == SymbolicExprLimit::negative_inf) {
+      return true;
+    }
+    ir::Expr diff = optim::ArithSimplify(ir::Sub::Make(lhs, rhs));
+    VLOG(6) << "diff of " << ir::Sub::Make(lhs, rhs) << " = " << diff;
+    if (diff.is_constant() && diff.get_constant() < 0) {
+      return false;
+    }
+    if (diff.is_constant() && diff.get_constant() >= 0) {
+      return true;
+    }
+    ir::Expr diff_upper_bound = UpperBound(diff);
+    VLOG(6) << "upper bound of " << diff << " = " << diff_upper_bound;
+    if (diff_upper_bound.is_constant() && diff_upper_bound.get_constant() < 0) {
+      return false;
+    }
+    ir::Expr diff_lower_bound = LowerBound(diff);
+    VLOG(6) << "lower bound of " << diff << " = " << diff_lower_bound;
+    if (diff_lower_bound.is_constant() &&
+        diff_lower_bound.get_constant() >= 0) {
+      return true;
+    }
+    return std::nullopt;
+  } catch (const ::common::enforce::EnforceNotMet& e) {
+    LOG(WARNING) << "Error occurred during integer calculation: " << e.what()
+                 << ", so SymbolicExprAnalyzer cannot prove anything.";
+    return std::nullopt;
   }
-  if (rhs == SymbolicExprLimit::positive_inf ||
-      lhs == SymbolicExprLimit::negative_inf) {
-    return false;
-  }
-  if (lhs == SymbolicExprLimit::positive_inf ||
-      rhs == SymbolicExprLimit::negative_inf) {
-    return true;
-  }
-  ir::Expr diff = AutoSimplify(ir::Sub::Make(lhs, rhs), var_intervals_);
-  VLOG(6) << "diff of " << ir::Sub::Make(lhs, rhs) << " = " << diff;
-  if (diff.is_constant() && diff.get_constant() < 0) {
-    return false;
-  }
-  if (diff.is_constant() && diff.get_constant() >= 0) {
-    return true;
-  }
-  ir::Expr diff_upper_bound = UpperBound(diff);
-  VLOG(6) << "upper bound of " << diff << " = " << diff_upper_bound;
-  if (diff_upper_bound.is_constant() && diff_upper_bound.get_constant() < 0) {
-    return false;
-  }
-  ir::Expr diff_lower_bound = LowerBound(diff);
-  VLOG(6) << "lower bound of " << diff << " = " << diff_lower_bound;
-  if (diff_lower_bound.is_constant() && diff_lower_bound.get_constant() >= 0) {
-    return true;
-  }
-  return std::nullopt;
 }
 
 std::optional<bool> SymbolicExprAnalyzer::ProveLE(const ir::Expr& lhs,
@@ -157,37 +298,44 @@ std::optional<bool> SymbolicExprAnalyzer::ProveLE(const ir::Expr& lhs,
 
 std::optional<bool> SymbolicExprAnalyzer::ProveGT(const ir::Expr& lhs,
                                                   const ir::Expr& rhs) const {
-  if (lhs == rhs) {
-    return false;
-  }
-  if (rhs == SymbolicExprLimit::positive_inf ||
-      lhs == SymbolicExprLimit::negative_inf) {
-    return false;
-  }
-  if (lhs == SymbolicExprLimit::positive_inf ||
-      rhs == SymbolicExprLimit::negative_inf) {
-    return true;
-  }
-  ir::Expr diff = AutoSimplify(ir::Sub::Make(lhs, rhs), var_intervals_);
-  VLOG(6) << "diff of " << ir::Sub::Make(lhs, rhs) << " = " << diff;
-  if (diff.is_constant() && diff.get_constant() <= 0) {
-    return false;
-  }
-  if (diff.is_constant() && diff.get_constant() > 0) {
-    return true;
-  }
-  ir::Expr diff_upper_bound = UpperBound(diff);
-  VLOG(6) << "upper bound of " << diff << " = " << diff_upper_bound;
-  if (diff_upper_bound.is_constant() && diff_upper_bound.get_constant() <= 0) {
-    return false;
-  }
-  ir::Expr diff_lower_bound = LowerBound(diff);
-  VLOG(6) << "lower bound of " << diff << " = " << diff_lower_bound;
-  if (diff_lower_bound.is_constant() && diff_lower_bound.get_constant() > 0) {
-    return true;
-  }
+  try {
+    if (lhs == rhs) {
+      return false;
+    }
+    if (rhs == SymbolicExprLimit::positive_inf ||
+        lhs == SymbolicExprLimit::negative_inf) {
+      return false;
+    }
+    if (lhs == SymbolicExprLimit::positive_inf ||
+        rhs == SymbolicExprLimit::negative_inf) {
+      return true;
+    }
+    ir::Expr diff = optim::ArithSimplify(ir::Sub::Make(lhs, rhs));
+    VLOG(6) << "diff of " << ir::Sub::Make(lhs, rhs) << " = " << diff;
+    if (diff.is_constant() && diff.get_constant() <= 0) {
+      return false;
+    }
+    if (diff.is_constant() && diff.get_constant() > 0) {
+      return true;
+    }
+    ir::Expr diff_upper_bound = UpperBound(diff);
+    VLOG(6) << "upper bound of " << diff << " = " << diff_upper_bound;
+    if (diff_upper_bound.is_constant() &&
+        diff_upper_bound.get_constant() <= 0) {
+      return false;
+    }
+    ir::Expr diff_lower_bound = LowerBound(diff);
+    VLOG(6) << "lower bound of " << diff << " = " << diff_lower_bound;
+    if (diff_lower_bound.is_constant() && diff_lower_bound.get_constant() > 0) {
+      return true;
+    }
 
-  return std::nullopt;
+    return std::nullopt;
+  } catch (const ::common::enforce::EnforceNotMet& e) {
+    LOG(WARNING) << "Error occurred during integer calculation: " << e.what()
+                 << ", so SymbolicExprAnalyzer cannot prove anything.";
+    return std::nullopt;
+  }
 }
 
 std::optional<bool> SymbolicExprAnalyzer::ProveLT(const ir::Expr& lhs,
@@ -199,101 +347,124 @@ std::optional<bool> SymbolicExprAnalyzer::ProveLT(const ir::Expr& lhs,
 // and rhs must be a var
 std::optional<bool> SymbolicExprAnalyzer::ProveDivisible(
     const ir::Expr& lhs, const ir::Expr& rhs) const {
-  CHECK(rhs.is_var()) << "Rhs in ProveDivisible must be a var temporarily!\n";
-  CHECK(lhs.defined());
-  CHECK(rhs.defined());
-  CHECK(cinn::common::IsPureMath(lhs));
+  PADDLE_ENFORCE_EQ(rhs.is_var(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "Rhs in ProveDivisible must be a var temporarily!\n"));
+  PADDLE_ENFORCE_EQ(lhs.defined(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "Lhs in ProveDivisible must be defined."));
+  PADDLE_ENFORCE_EQ(rhs.defined(),
+                    true,
+                    ::common::errors::InvalidArgument(
+                        "Rhs in ProveDivisible must be defined."));
+  PADDLE_ENFORCE_EQ(
+      cinn::optim::IsPureMath(lhs),
+      true,
+      ::common::errors::InvalidArgument(
+          "Lhs in ProveDivisible must be a pure math expression."));
 
-  ir::Expr lhs_copy = ir::ir_utils::IRCopy(lhs);
-  if (cinn::common::is_zero(lhs_copy)) return true;
+  try {
+    ir::Expr lhs_copy = ir::ir_utils::IRCopy(lhs);
+    if (cinn::common::is_zero(lhs_copy)) return true;
 
-  auto OptionalAnd = [](const std::optional<bool>& lhs,
-                        const std::optional<bool>& rhs) -> std::optional<bool> {
-    if (lhs.has_value() && rhs.has_value()) {
-      return lhs.value() && rhs.value();
-    } else {
-      return std::nullopt;
-    }
-  };
-  auto OptionalOr = [](const std::optional<bool>& lhs,
-                       const std::optional<bool>& rhs) -> std::optional<bool> {
-    if (lhs.has_value() && rhs.has_value()) {
-      return lhs.value() || rhs.value();
-    } else if ((!lhs.has_value()) && (!rhs.has_value())) {
-      return std::nullopt;
-    } else if (lhs.has_value() && (!rhs.has_value())) {
-      return lhs.value() ? std::optional<bool>(lhs.value())
-                         : std::optional<bool>(std::nullopt);
-    } else {
-      return rhs.value() ? std::optional<bool>(rhs.value())
-                         : std::optional<bool>(std::nullopt);
-    }
-  };
-
-  std::vector<ir::Expr> ops{};
-  std::optional<bool> res = std::nullopt;
-  ir::Expr zero(0);
-  ir::Expr tmp_expr;
-
-  auto is_ge = ProveGE(lhs, rhs);
-
-  switch (lhs.node_type()) {
-    case cinn::ir::IrNodeTy::_Var_:
-      return ProveEQ(lhs, rhs);
-    case cinn::ir::IrNodeTy::IntImm:
-      return false;
-    case cinn::ir::IrNodeTy::Sum:
-      res = true;
-      ops = lhs.As<ir::Sum>()->operands();
-      CHECK(!ops.empty());
-      std::for_each(ops.begin(), ops.end(), [&](const ir::Expr& expr) {
-        res = OptionalAnd(res, this->ProveDivisible(expr, rhs));
-      });
-      res = OptionalAnd(res, is_ge);
-      return res;
-    case cinn::ir::IrNodeTy::Product:
-      res = false;
-      ops = lhs.As<ir::Product>()->operands();
-      CHECK(!ops.empty());
-      std::for_each(ops.begin(), ops.end(), [&](const ir::Expr& expr) {
-        res = OptionalOr(res, this->ProveDivisible(expr, rhs));
-        if (res.has_value() && res.value()) return;
-      });
-      res = OptionalAnd(res, is_ge);
-      return res;
-    case cinn::ir::IrNodeTy::FracOp:
-      tmp_expr = cinn::common::AutoSimplify(lhs);
-      if (tmp_expr.node_type() == cinn::ir::IrNodeTy::FracOp)
+    auto OptionalAnd =
+        [](const std::optional<bool>& lhs,
+           const std::optional<bool>& rhs) -> std::optional<bool> {
+      if (lhs.has_value() && rhs.has_value()) {
+        return lhs.value() && rhs.value();
+      } else {
         return std::nullopt;
-      return OptionalAnd(ProveDivisible(tmp_expr, rhs), is_ge);
-    case cinn::ir::IrNodeTy::FloatImm:
-      return false;
-    case cinn::ir::IrNodeTy::Add:
-      return OptionalAnd(
-          OptionalAnd(ProveDivisible(lhs.As<ir::Add>()->a(), rhs),
-                      ProveDivisible(lhs.As<ir::Add>()->b(), rhs)),
-          is_ge);
-    case cinn::ir::IrNodeTy::Sub:
-      return OptionalAnd(
-          OptionalAnd(ProveDivisible(lhs.As<ir::Sub>()->a(), rhs),
-                      ProveDivisible(lhs.As<ir::Sub>()->b(), rhs)),
-          is_ge);
-    case cinn::ir::IrNodeTy::Div:
-      tmp_expr = cinn::common::AutoSimplify(lhs);
-      if (tmp_expr.node_type() == cinn::ir::IrNodeTy::Div) return std::nullopt;
-      return OptionalAnd(ProveDivisible(tmp_expr, rhs), is_ge);
-    case cinn::ir::IrNodeTy::Mul:
-      return OptionalAnd(
-          OptionalOr(ProveDivisible(lhs.As<ir::Mul>()->a(), rhs),
-                     ProveDivisible(lhs.As<ir::Mul>()->b(), rhs)),
-          is_ge);
-    case cinn::ir::IrNodeTy::Mod:
-      return false;
-    case cinn::ir::IrNodeTy::Minus:
-      return ProveDivisible(lhs.As<ir::Minus>()->v(), rhs);
-    default:
-      PADDLE_THROW(phi::errors::InvalidArgument("Not supported yet!"));
-      break;
+      }
+    };
+    auto OptionalOr =
+        [](const std::optional<bool>& lhs,
+           const std::optional<bool>& rhs) -> std::optional<bool> {
+      if (lhs.has_value() && rhs.has_value()) {
+        return lhs.value() || rhs.value();
+      } else if ((!lhs.has_value()) && (!rhs.has_value())) {
+        return std::nullopt;
+      } else if (lhs.has_value() && (!rhs.has_value())) {
+        return lhs.value() ? std::optional<bool>(lhs.value())
+                           : std::optional<bool>(std::nullopt);
+      } else {
+        return rhs.value() ? std::optional<bool>(rhs.value())
+                           : std::optional<bool>(std::nullopt);
+      }
+    };
+
+    std::vector<ir::Expr> ops{};
+    std::optional<bool> res = std::nullopt;
+    ir::Expr zero(0);
+    ir::Expr tmp_expr;
+
+    auto is_ge = ProveGE(lhs, rhs);
+
+    switch (lhs.node_type()) {
+      case cinn::ir::IrNodeTy::_Var_:
+        return ProveEQ(lhs, rhs);
+      case cinn::ir::IrNodeTy::IntImm:
+        return false;
+      case cinn::ir::IrNodeTy::Sum:
+        res = true;
+        ops = lhs.As<ir::Sum>()->operands();
+        PADDLE_ENFORCE_NE(ops.empty(),
+                          true,
+                          ::common::errors::InvalidArgument(
+                              "Operands in Sum node should not be empty."));
+        std::for_each(ops.begin(), ops.end(), [&](const ir::Expr& expr) {
+          res = OptionalAnd(res, this->ProveDivisible(expr, rhs));
+        });
+        res = OptionalAnd(res, is_ge);
+        return res;
+      case cinn::ir::IrNodeTy::Product:
+        res = false;
+        ops = lhs.As<ir::Product>()->operands();
+        PADDLE_ENFORCE_NE(ops.empty(),
+                          true,
+                          ::common::errors::InvalidArgument(
+                              "Operands in Sum node should not be empty."));
+        std::for_each(ops.begin(), ops.end(), [&](const ir::Expr& expr) {
+          res = OptionalOr(res, this->ProveDivisible(expr, rhs));
+          if (res.has_value() && res.value()) return;
+        });
+        res = OptionalAnd(res, is_ge);
+        return res;
+      case cinn::ir::IrNodeTy::FloatImm:
+        return false;
+      case cinn::ir::IrNodeTy::Add:
+        return OptionalAnd(
+            OptionalAnd(ProveDivisible(lhs.As<ir::Add>()->a(), rhs),
+                        ProveDivisible(lhs.As<ir::Add>()->b(), rhs)),
+            is_ge);
+      case cinn::ir::IrNodeTy::Sub:
+        return OptionalAnd(
+            OptionalAnd(ProveDivisible(lhs.As<ir::Sub>()->a(), rhs),
+                        ProveDivisible(lhs.As<ir::Sub>()->b(), rhs)),
+            is_ge);
+      case cinn::ir::IrNodeTy::Div:
+        tmp_expr = optim::ArithSimplify(lhs);
+        if (tmp_expr.node_type() == cinn::ir::IrNodeTy::Div)
+          return std::nullopt;
+        return OptionalAnd(ProveDivisible(tmp_expr, rhs), is_ge);
+      case cinn::ir::IrNodeTy::Mul:
+        return OptionalAnd(
+            OptionalOr(ProveDivisible(lhs.As<ir::Mul>()->a(), rhs),
+                       ProveDivisible(lhs.As<ir::Mul>()->b(), rhs)),
+            is_ge);
+      case cinn::ir::IrNodeTy::Mod:
+        return false;
+      case cinn::ir::IrNodeTy::Minus:
+        return ProveDivisible(lhs.As<ir::Minus>()->v(), rhs);
+      default:
+        PADDLE_THROW(::common::errors::InvalidArgument("Not supported yet!"));
+        break;
+    }
+  } catch (const ::common::enforce::EnforceNotMet& e) {
+    LOG(WARNING) << "Error occurred during integer calculation: " << e.what()
+                 << ", so SymbolicExprAnalyzer cannot prove anything.";
+    return std::nullopt;
   }
 }
 
@@ -309,6 +480,9 @@ class BoundReplacer : public ir::IRMutator<> {
 
  private:
   void Visit(const ir::_Var_* var, ir::Expr* op) override {
+    // if the variable is S0/S1..., do not replace it.
+    if (var->is_symbolic_constant) return;
+
     ir::Expr lower_bound = SymbolicExprLimit::negative_inf;
     ir::Expr upper_bound = SymbolicExprLimit::positive_inf;
     if (var_intervals_.count(var->name) != 0) {
@@ -399,14 +573,14 @@ ir::Expr SymbolicExprAnalyzer::LowerBound(const ir::Expr& expr) const {
   BoundReplacer bound_replacer(var_intervals_, true);
   ir::Expr bound = ir::ir_utils::IRCopy(expr);
   bound_replacer(&bound);
-  return AutoSimplify(bound);
+  return optim::ArithSimplify(bound);
 }
 
 ir::Expr SymbolicExprAnalyzer::UpperBound(const ir::Expr& expr) const {
   BoundReplacer bound_replacer(var_intervals_, false);
   ir::Expr bound = ir::ir_utils::IRCopy(expr);
   bound_replacer(&bound);
-  return AutoSimplify(bound);
+  return optim::ArithSimplify(bound);
 }
 
 std::optional<bool> ProveEQ(const SingleIntervalIntSet& lhs,
@@ -597,10 +771,10 @@ std::optional<bool> SingleIntervalIntSet::ProveSuperSet(
 
 ir::Expr EnhancedSimplifyModExpr(
     ir::Expr e,
-    const absl::flat_hash_map<std::string, CasInterval>& var_intervals) {
+    const paddle::flat_hash_map<std::string, CasInterval>& var_intervals) {
   struct Mutator : public ir::IRMutator<ir::Expr*> {
     explicit Mutator(
-        const absl::flat_hash_map<std::string, CasInterval>& var_intervals)
+        const paddle::flat_hash_map<std::string, CasInterval>& var_intervals)
         : var_intervals_(var_intervals), analyzer_(var_intervals_) {}
 
     void operator()(ir::Expr* expr) { Visit(expr); }
@@ -615,7 +789,7 @@ ir::Expr EnhancedSimplifyModExpr(
     }
 
    private:
-    const absl::flat_hash_map<std::string, CasInterval>& var_intervals_;
+    const paddle::flat_hash_map<std::string, CasInterval>& var_intervals_;
     SymbolicExprAnalyzer analyzer_;
   };
 
@@ -624,6 +798,5 @@ ir::Expr EnhancedSimplifyModExpr(
   mutator(&copied);
   return copied;
 }
-
 }  // namespace common
 }  // namespace cinn

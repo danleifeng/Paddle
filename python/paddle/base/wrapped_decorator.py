@@ -28,13 +28,13 @@ __all__ = []
 def wrap_decorator(
     decorator_func: Callable[
         [Callable[_InputT, _RetT1]], Callable[_InputT, _RetT2]
-    ]
+    ],
 ) -> Callable[[Callable[_InputT, _RetT1]], Callable[_InputT, _RetT2]]:
     @decorator.decorator
     def __impl__(
         func: Callable[_InputT, _RetT1],
         *args: _InputT.args,
-        **kwargs: _InputT.kwargs
+        **kwargs: _InputT.kwargs,
     ) -> _RetT2:
         wrapped_func = decorator_func(func)
         return wrapped_func(*args, **kwargs)

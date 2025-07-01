@@ -35,20 +35,38 @@ class TestGammalnOp(OpTest):
         self.op_type = 'gammaln'
         self.python_api = paddle.gammaln
         self.init_dtype_type()
-        self.shape = (3, 40)
+        self.init_shape()
         self.x = np.random.random(self.shape).astype(self.dtype) + 1
         self.inputs = {'x': self.x}
         out = ref_gammaln(self.x)
         self.outputs = {'out': out}
 
+    def init_shape(self):
+        self.shape = (3, 40)
+
     def init_dtype_type(self):
         self.dtype = np.float64
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(['x'], 'out', check_pir=True)
+
+
+class TestGammalnOpZeroSize(TestGammalnOp):
+    def init_shape(self):
+        self.shape = (0, 3, 40)
+
+
+class TestGammalnOpZeroSize1(TestGammalnOp):
+    def init_shape(self):
+        self.shape = (10, 3, 0, 1)
+
+
+class TestGammalnOpZeroSize2(TestGammalnOp):
+    def init_shape(self):
+        self.shape = (10, 0)
 
 
 class TestGammalnOpFp32(TestGammalnOp):
@@ -92,6 +110,36 @@ class TestGammalnBigNumberOp(TestGammalnOp):
         )
 
 
+class TestGammalnNegativeInputFP64Op(TestGammalnOp):
+    def setUp(self):
+        self.op_type = 'gammaln'
+        self.python_api = paddle.gammaln
+        self.init_dtype_type()
+        self.init_shape()
+        self.x = np.random.random(self.shape).astype(self.dtype) - 1
+        self.inputs = {'x': self.x}
+        out = ref_gammaln(self.x)
+        self.outputs = {'out': out}
+
+    def init_dtype_type(self):
+        self.dtype = np.float64
+
+    def test_check_grad(self):
+        d_out = self.outputs['out']
+        d_x = ref_gammaln_grad(self.x, d_out)
+        self.check_grad(
+            ['x'],
+            'out',
+            user_defined_grads=[
+                d_x,
+            ],
+            user_defined_grad_outputs=[
+                d_out,
+            ],
+            check_pir=True,
+        )
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda()
     or not core.is_bfloat16_supported(core.CUDAPlace(0)),
@@ -109,7 +157,9 @@ class TestGammalnBF16Op(OpTest):
         self.outputs = {'out': convert_float_to_uint16(out)}
 
     def test_check_output(self):
-        self.check_output_with_place(core.CUDAPlace(0), check_pir=True)
+        self.check_output_with_place(
+            core.CUDAPlace(0), check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         self.check_grad_with_place(

@@ -32,7 +32,7 @@
 #include "paddle/cinn/backends/llvm/llvm_util.h"
 #include "paddle/cinn/backends/llvm/runtime_symbol_registry.h"
 #include "paddle/cinn/common/macros.h"
-
+#include "paddle/common/enforce.h"
 /**
  * Helper to register an external function into CINN, including the prototype,
  * the function address.
@@ -100,6 +100,9 @@ static const char* TargetToBackendRepr(Target target) {
       [&](common::NVGPUArch) -> const char* { return backend_nvgpu; },
       [&](common::HygonDCUArchHIP) -> const char* {
         return backend_hygondcu_hip;
+      },
+      [&](common::HygonDCUArchSYCL) -> const char* {
+        return backend_hygondcu_sycl;
       });
 }
 

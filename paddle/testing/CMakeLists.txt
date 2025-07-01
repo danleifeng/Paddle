@@ -7,13 +7,8 @@ if(WITH_TESTING)
       phi
       common
       init
-      allocator
       phi_utils
       proto_desc)
-
-  if(WITH_GPU OR WITH_ROCM)
-    list(APPEND paddle_gtest_main_deps gpu_info)
-  endif()
 
   cc_library(
     paddle_gtest_main
@@ -26,12 +21,11 @@ if(WITH_TESTING)
       SRCS paddle_gtest_main.cc
       DEPS gtest
            xxhash
-           framework_proto
            eigen3
            dlpack
            common
            init
-           allocator
+           phi
            phi_utils)
   else()
     cc_library(

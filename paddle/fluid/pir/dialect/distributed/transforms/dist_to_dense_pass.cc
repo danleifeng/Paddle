@@ -23,6 +23,7 @@
 #include "paddle/fluid/pir/dialect/distributed/ir/dist_attribute.h"
 #include "paddle/fluid/pir/dialect/distributed/ir/dist_dialect.h"
 #include "paddle/fluid/pir/dialect/distributed/ir/dist_interface.h"
+#include "paddle/fluid/pir/dialect/distributed/ir/dist_op.h"
 #include "paddle/fluid/pir/dialect/distributed/ir/dist_type.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_attribute.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
@@ -33,6 +34,7 @@
 #include "paddle/phi/core/enforce.h"
 #include "paddle/pir/include/core/attribute.h"
 #include "paddle/pir/include/core/builtin_attribute.h"
+#include "paddle/pir/include/dialect/control_flow/ir/cf_type.h"
 
 using paddle::dialect::DistDenseTensorType;
 
@@ -49,13 +51,8 @@ pir::Type CastToLocalType(pir::Type type) {
       local_types.push_back(CastToLocalType(vec_type[i]));
     }
     return pir::VectorType::get(vec_type.ir_context(), local_types);
-  } else if (!type) {
-    // skip if <<NULL TYPE>>
-    return nullptr;
   } else {
-    // TODO(2024-Q2) not all value are dist type
-    PADDLE_THROW(common::errors::PreconditionNotMet(
-        "The type[%s] is not Dist type.", type));
+    return type;
   }
 }
 
@@ -63,14 +60,39 @@ inline bool IsDistType(pir::Type type) { return type.isa<DistTypeInterface>(); }
 
 void ProcessDistBlock(pir::Block* block) {
   auto ctx = pir::IrContext::Instance();
+
+  auto keyword_arguments = block->kwargs();
+  for (auto [_, arg] : keyword_arguments) {
+    if (IsDistType(arg.type())) {
+      arg.set_type(CastToLocalType(arg.type()));
+    }
+  }
+  for (auto arg : block->args()) {
+    if (IsDistType(arg.type())) {
+      arg.set_type(CastToLocalType(arg.type()));
+    }
+  }
+  std::vector<pir::Operation*> del_ops;
   for (auto& val : *block) {
     pir::Operation* op_item = &val;
     VLOG(6) << "dist_to_dense main loop over op [" << op_item->name() << "].";
+
+    if (op_item->isa<DtensorFromLocalOp>() ||
+        op_item->isa<DtensorToLocalOp>()) {
+      op_item->result(0).ReplaceAllUsesWith(op_item->operand_source(0));
+      del_ops.push_back(op_item);
+      continue;
+    }
+
+    for (auto& sub_block : val.blocks()) {
+      ProcessDistBlock(&sub_block);
+    }
 
     for (size_t i = 0; i < op_item->num_results(); ++i) {
       auto result = op_item->result(i);
       result.set_type(CastToLocalType(result.type()));
     }
+
     if (op_item->isa<DataOp>()) {
       auto dense_tensor_type =
           op_item->result(0).type().dyn_cast<pir::DenseTensorType>();
@@ -93,9 +115,38 @@ void ProcessDistBlock(pir::Block* block) {
       auto array_attr = prev_op->attribute<pir::ArrayAttribute>("value");
       PADDLE_ENFORCE_EQ(array_attr.size(),
                         local_dims.size(),
-                        phi::errors::PreconditionNotMet(
+                        common::errors::PreconditionNotMet(
                             "The reshape's shape inputs element's size must "
                             "equal to result's dim size."));
+      std::vector<pir::Attribute> new_dims;
+      for (int index = 0; index < local_dims.size(); ++index) {
+        new_dims.push_back(pir::Int64Attribute::get(ctx, local_dims[index]));
+      }
+      prev_op->set_attribute("value", pir::ArrayAttribute::get(ctx, new_dims));
+    } else if (op_item->isa<RandintOp>() || op_item->isa<GaussianOp>() ||
+               op_item->isa<UniformOp>()) {
+      auto local_dims =
+          op_item->result_type(0).dyn_cast<pir::DenseTensorType>().dims();
+      auto shape_value = op_item->operand_source(0);
+      auto prev_op = shape_value.defining_op();
+      PADDLE_ENFORCE((prev_op != nullptr),
+                     common::errors::PreconditionNotMet(
+                         "The shape of randint, gaussian and uniform mush be "
+                         "the result of "
+                         "FullIntArrayOp, not null"));
+      PADDLE_ENFORCE_EQ(
+          prev_op->isa<FullIntArrayOp>(),
+          true,
+          common::errors::PreconditionNotMet(
+              "The shape of randint, gaussian and uniform mush be the result "
+              "of FullIntArrayOp."));
+      auto array_attr = prev_op->attribute<pir::ArrayAttribute>("value");
+      PADDLE_ENFORCE_EQ(
+          array_attr.size(),
+          local_dims.size(),
+          common::errors::PreconditionNotMet(
+              "The shape of randint, gaussian and uniform element's size must "
+              "equal to result's dim size."));
       std::vector<pir::Attribute> new_dims;
       for (int index = 0; index < local_dims.size(); ++index) {
         new_dims.push_back(pir::Int64Attribute::get(ctx, local_dims[index]));
@@ -111,22 +162,57 @@ void ProcessDistBlock(pir::Block* block) {
     //     common::errors::PreconditionNotMet("The op [%s] has not
     //     op_dist_attr.",
     //                                        op_item->name()));
+
+    int64_t chunk_id = -1;
     if (op_item->HasAttribute(kAttrOpDistAttr)) {
+      if (op_item->HasAttribute("chunk_id")) {
+        chunk_id = op_item->attribute("chunk_id")
+                       .dyn_cast<pir::Int32Attribute>()
+                       .data();
+      } else {
+        chunk_id = op_item->attribute<OperationDistAttribute>(kAttrOpDistAttr)
+                       .chunk_id();
+      }
       op_item->erase_attribute(kAttrOpDistAttr);
     }
+    op_item->set_attribute("chunk_id", pir::Int32Attribute::get(ctx, chunk_id));
 
     // TODO(2024-Q2) Handle other special dist op in future.
+  }
+  for (auto op : del_ops) {
+    op->Erase();
   }
 }
 
 /* Verification:
     1. no operator has not OperatorDistAttr.
-    2. all Values (Results) are DenseTensorType.
+    2. all Values are DenseTensorType.
     3. no shard_tensor / reshard in block.
 */
 void VerifyDenseBlock(pir::Block* block) {
+  for (auto [key, arg] : block->kwargs()) {
+    PADDLE_ENFORCE_EQ(
+        IsDistType(arg.type()),
+        false,
+        common::errors::PreconditionNotMet(
+            "Block still contain keyword argument [%s]  dist type.", key));
+  }
+
+  for (auto arg : block->args()) {
+    PADDLE_ENFORCE_EQ(
+        IsDistType(arg.type()),
+        false,
+        common::errors::PreconditionNotMet(
+            "Block still contain position argument [%d]  dist type.",
+            arg.dyn_cast<pir::BlockArgument>().index()));
+  }
+
   for (auto& val : *block) {
     pir::Operation* op_item = &val;
+
+    for (auto& sub_block : val.blocks()) {
+      VerifyDenseBlock(&sub_block);
+    }
 
     for (size_t i = 0; i < op_item->num_results(); ++i) {
       auto result = op_item->result(i);
@@ -134,7 +220,16 @@ void VerifyDenseBlock(pir::Block* block) {
       PADDLE_ENFORCE_EQ(
           IsDistType(result.type()),
           false,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
+              "Block op [%s] still contain dist type.", op_item->name()));
+    }
+
+    for (size_t i = 0; i < op_item->num_operands(); ++i) {
+      auto input = op_item->operand_source(i);
+      PADDLE_ENFORCE_EQ(
+          IsDistType(input.type()),
+          false,
+          common::errors::PreconditionNotMet(
               "Block op [%s] still contain dist type.", op_item->name()));
     }
 
@@ -147,10 +242,6 @@ void VerifyDenseBlock(pir::Block* block) {
 }
 
 void DistToDensePass(pir::Program* prog) {
-  if (FLAGS_print_ir) {
-    VLOG(0) << "IR before DistToDense Pass = " << *prog;
-  }
-
   pir::IrContext* ctx = pir::IrContext::Instance();
   ctx->GetOrRegisterDialect<OperatorDialect>();
   ctx->GetOrRegisterDialect<DistDialect>();

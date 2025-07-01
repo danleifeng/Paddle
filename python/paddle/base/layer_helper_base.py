@@ -21,7 +21,6 @@ import numpy as np
 import paddle
 
 from . import core, unique_name
-from .data_feeder import convert_dtype
 from .framework import (
     Variable,
     _current_expected_place,
@@ -340,7 +339,7 @@ class LayerHelperBase:
         is_bias=False,
         default_initializer=None,
         stop_gradient=False,
-        type=core.VarDesc.VarType.LOD_TENSOR,
+        type=core.VarDesc.VarType.DENSE_TENSOR,
     ):
         """Create parameters for this layers.
 
@@ -360,15 +359,15 @@ class LayerHelperBase:
             return None
         assert isinstance(attr, ParamAttr)
         for i, size in enumerate(shape):
-            assert size > 0, (
-                "Expected every dim's size to be larger than 0, "
+            assert size >= 0, (
+                "Expected every dim's size to be larger than or equal to 0, "
                 f"but the size of the {i}-th dim is {size}"
             )
         # set global dtype
         if not dtype:
             dtype = self.__dtype
         if isinstance(dtype, core.DataType):
-            dtype = convert_dtype(dtype)
+            dtype = paddle.pir.core.datatype_to_vartype[dtype]
         if is_bias:
             suffix = 'b'
             default_initializer = (
@@ -449,6 +448,8 @@ class LayerHelperBase:
             )
         else:
             if in_pir_mode():
+                if isinstance(dtype, core.VarDesc.VarType):
+                    dtype = paddle.pir.core.vartype_to_datatype[dtype]
                 return paddle.pir.core.create_parameter(
                     dtype=dtype,
                     shape=shape,
@@ -470,7 +471,7 @@ class LayerHelperBase:
         """Create a temporary variable that should be type inferred layer.
 
         Note:
-            The default type will be set to LOD_TENSOR. However, when
+            The default type will be set to DENSE_TENSOR. However, when
             the var is used as operator output, its type will be updated
             based on operator's `VarTypeInference` implementation in
             infer_var_type.
@@ -484,7 +485,7 @@ class LayerHelperBase:
             ),
             dtype=dtype,
             shape=shape,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=stop_gradient,
         )
@@ -495,7 +496,7 @@ class LayerHelperBase:
         """Create a global variable that should be type inferred layer.
 
         Note:
-            The default type will be set to LOD_TENSOR. However, when
+            The default type will be set to DENSE_TENSOR. However, when
             the var is used as operator output, its type will be updated
             based on operator's `VarTypeInference` implementation in
             infer_var_type.
@@ -509,7 +510,7 @@ class LayerHelperBase:
             ),
             dtype=dtype,
             shape=shape,
-            type=core.VarDesc.VarType.LOD_TENSOR,
+            type=core.VarDesc.VarType.DENSE_TENSOR,
             persistable=False,
             stop_gradient=stop_gradient,
         )

@@ -218,10 +218,16 @@ class XPUTestDropoutOp(XPUOpTestWrapper):
                     )
                     out.backward()
 
-                    np.testing.assert_allclose(
-                        input.gradient(),
-                        self.cal_grad_downscale_in_infer(mask.numpy()),
-                    )
+                    if self.in_type == np.uint16:
+                        np.testing.assert_allclose(
+                            input.gradient(),
+                            self.cal_grad_downscale_in_infer(mask.numpy()),
+                        )
+                    else:
+                        np.testing.assert_allclose(
+                            input.gradient(),
+                            self.cal_grad_downscale_in_infer(mask.numpy()),
+                        )
 
         def test_backward_upscale_train(self):
             for place in self.places:

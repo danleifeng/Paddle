@@ -15,15 +15,15 @@
 #include "paddle/fluid/imperative/xccl_context.h"
 
 #if defined(PADDLE_WITH_CUSTOM_DEVICE)
-#include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/gen_comm_id_helper.h"
+#include "paddle/phi/core/platform/collective_helper.h"
+#include "paddle/phi/core/platform/gen_comm_id_helper.h"
 #endif
 
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/variable.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/phi/common/place.h"
+#include "paddle/phi/core/platform/device_context.h"
 
 namespace paddle {
 namespace framework {
@@ -36,13 +36,13 @@ namespace imperative {
 
 static void XcclAllReduce(const phi::DenseTensor &src,
                           phi::DenseTensor *dst,
-                          const phi::stream::Stream &stream,
+                          const phi::stream::stream_t &stream,
                           const phi::ccl::CCLComm &comm) {
   const auto &place = src.place();
   PADDLE_ENFORCE_EQ(
       phi::is_custom_place(place),
       true,
-      phi::errors::Unimplemented(
+      common::errors::Unimplemented(
           "Dynamic graph mode does not support multi-CPU training yet."));
 
   void *src_ptr = const_cast<void *>(src.data());
@@ -162,16 +162,16 @@ void XCCLParallelContext::AllReduceByStream(const framework::Variable &src,
   PADDLE_ENFORCE_EQ(
       phi::is_custom_place(place_),
       true,
-      phi::errors::Unimplemented(
+      common::errors::Unimplemented(
           "Dynamic graph mode does not support multi-CPU training yet."));
   auto place = place_;
 
-  auto *dev_ctx = static_cast<platform::CustomDeviceContext *>(
+  auto *dev_ctx = static_cast<phi::CustomContext *>(
       phi::DeviceContextPool::Instance().Get(place));
   platform::XCCLComm *comm =
       platform::XCCLCommContext::Instance(place.GetDeviceType())
           .Get(ring_id, place);
-  auto stream = use_calc_stream ? dev_ctx->GetStream() : comm->stream();
+  auto stream = use_calc_stream ? dev_ctx->stream() : comm->stream();
 
   if (src.IsType<phi::DenseTensor>()) {
     if (!dst->IsType<phi::DenseTensor>()) {
@@ -179,14 +179,14 @@ void XCCLParallelContext::AllReduceByStream(const framework::Variable &src,
     }
     XcclAllReduce(src.Get<phi::DenseTensor>(),
                   dst->GetMutable<phi::DenseTensor>(),
-                  *stream,
+                  stream,
                   comm->comm());
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "custom device unsupported variable type %s for imperative allreduce, "
         "only "
-        "LoDTensor are supported.",
-        platform::demangle(framework::ToTypeName(src.Type()))));
+        "DenseTensor are supported.",
+        common::demangle(framework::ToTypeName(src.Type()))));
   }
 }
 
@@ -207,7 +207,7 @@ void XCCLParallelContext::Broadcast(framework::Variable *src, int ring_id) {
                                    src_tensor->dtype(),
                                    0,
                                    comm->comm(),
-                                   *stream);
+                                   stream);
 }
 
 phi::DeviceContext *XCCLParallelContext::GetDeviceContext(int ring_id) {
@@ -221,21 +221,21 @@ void XCCLParallelContext::WaitCompute(int ring_id) {
   PADDLE_ENFORCE_GE(
       ring_id,
       0,
-      phi::errors::OutOfRange("ring id must >= 0, but got %d", ring_id));
-  PADDLE_ENFORCE_LT(
-      ring_id,
-      compute_events_.size(),
-      phi::errors::OutOfRange("ring id must < compute events size,"
-                              "but got ring id = %d, compute events size = %d",
-                              ring_id,
-                              compute_events_.size()));
+      common::errors::OutOfRange("ring id must >= 0, but got %d", ring_id));
+  PADDLE_ENFORCE_LT(ring_id,
+                    compute_events_.size(),
+                    common::errors::OutOfRange(
+                        "ring id must < compute events size,"
+                        "but got ring id = %d, compute events size = %d",
+                        ring_id,
+                        compute_events_.size()));
 
   auto compute_stream = static_cast<phi::CustomContext *>(
                             phi::DeviceContextPool::Instance().Get(place_))
                             ->GetStream();
   auto comm_stream = platform::XCCLCommContext::Instance(place_.GetDeviceType())
                          .Get(ring_id, place_)
-                         ->stream();
+                         ->GetStream();
   auto event = compute_events_[ring_id].get();
 
   // compute_stream-->event-->comm_stream
@@ -247,21 +247,21 @@ void XCCLParallelContext::WaitComm(int ring_id) {
   PADDLE_ENFORCE_GE(
       ring_id,
       0,
-      phi::errors::OutOfRange("ring id must >= 0, but got %d", ring_id));
+      common::errors::OutOfRange("ring id must >= 0, but got %d", ring_id));
   PADDLE_ENFORCE_LT(
       ring_id,
       comm_events_.size(),
-      phi::errors::OutOfRange("ring id must < comm events size,"
-                              "but got ring id = %d, comm events size = %d",
-                              ring_id,
-                              comm_events_.size()));
+      common::errors::OutOfRange("ring id must < comm events size,"
+                                 "but got ring id = %d, comm events size = %d",
+                                 ring_id,
+                                 comm_events_.size()));
 
   auto compute_stream = static_cast<phi::CustomContext *>(
                             phi::DeviceContextPool::Instance().Get(place_))
                             ->GetStream();
   auto comm_stream = platform::XCCLCommContext::Instance(place_.GetDeviceType())
                          .Get(ring_id, place_)
-                         ->stream();
+                         ->GetStream();
   auto event = comm_events_[ring_id].get();
 
   // comm_stream-->event-->compute_stream

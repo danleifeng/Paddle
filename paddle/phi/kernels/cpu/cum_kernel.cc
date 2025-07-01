@@ -57,6 +57,10 @@ void ScanKernel(const Context& dev_ctx,
                 bool reverse,
                 Reducer reducer,
                 DenseTensor* out) {
+  if (out && out->numel() == 0) {
+    dev_ctx.template Alloc<T>(out);
+    return;
+  }
   dev_ctx.template Alloc<T>(out);
 
   if (x.numel() == 1) {
@@ -70,7 +74,7 @@ void ScanKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       axis < out_dims.size() && axis >= (0 - out_dims.size()),
       true,
-      phi::errors::OutOfRange(
+      common::errors::OutOfRange(
           "Attr(axis) is out of range, It's expected "
           "to be in range of [-%d, %d]. But received Attr(axis) = %d.",
           out_dims.size(),
@@ -271,7 +275,9 @@ PD_REGISTER_KERNEL(cumsum,
                    double,
                    int16_t,
                    int,
-                   int64_t) {}
+                   int64_t,
+                   phi::dtype::complex<float>,
+                   phi::dtype::complex<double>) {}
 
 PD_REGISTER_KERNEL(
     logcumsumexp, CPU, ALL_LAYOUT, phi::LogcumsumexpKernel, float, double) {}

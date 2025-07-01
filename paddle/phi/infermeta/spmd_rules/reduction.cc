@@ -21,8 +21,7 @@ limitations under the License. */
 #include "paddle/phi/core/distributed/auto_parallel/utils.h"
 #include "paddle/phi/infermeta/spmd_rules/utils.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 using phi::distributed::auto_parallel::str_join;
 
@@ -77,10 +76,10 @@ SpmdInfo ReductionInferSpmdBase(const DistMetaTensor& x,
   PADDLE_ENFORCE_EQ(
       x_ndim,
       x_dims_mapping.size(),
-      phi::errors::InvalidArgument("The Tensor X's rank [%d] and X's "
-                                   "dims_mapping size [%d] are not matched.",
-                                   x_ndim,
-                                   x_dims_mapping.size()));
+      common::errors::InvalidArgument("The Tensor X's rank [%d] and X's "
+                                      "dims_mapping size [%d] are not matched.",
+                                      x_ndim,
+                                      x_dims_mapping.size()));
 
   // Step1: Build Einsum Notation
   // get einsum notation for input
@@ -160,12 +159,23 @@ SpmdInfo ReductionMaxInferSpmdDynamic(const DistMetaTensor& x,
   return ReductionInferSpmdBase(
       x, axis.GetData(), keep_dim, static_cast<int>(ReduceType::kRedMax));
 }
-
+SpmdInfo ReductionMinInferSpmdDynamic(const DistMetaTensor& x,
+                                      const IntArray& axis,
+                                      bool keep_dim) {
+  return ReductionInferSpmdBase(
+      x, axis.GetData(), keep_dim, static_cast<int>(ReduceType::kRedMin));
+}
 SpmdInfo ReductionAllInferSpmdDynamic(const DistMetaTensor& x,
                                       const IntArray& axis,
                                       bool keep_dim) {
   return ReductionInferSpmdBase(
       x, axis.GetData(), keep_dim, static_cast<int>(ReduceType::kRedAll));
+}
+SpmdInfo ReductionAnyInferSpmdDynamic(const DistMetaTensor& x,
+                                      const IntArray& axis,
+                                      bool keep_dim) {
+  return ReductionInferSpmdBase(
+      x, axis.GetData(), keep_dim, static_cast<int>(ReduceType::kRedAny));
 }
 
 SpmdInfo ReductionInferSpmdReverse(const DistMetaTensor& x,
@@ -182,10 +192,10 @@ SpmdInfo ReductionInferSpmdReverse(const DistMetaTensor& x,
   PADDLE_ENFORCE_EQ(
       out_ndim,
       out_dims_mapping.size(),
-      phi::errors::InvalidArgument("The Tensor Out's rank [%d] and Out's "
-                                   "dims_mapping size [%d] are not matched.",
-                                   out_ndim,
-                                   out_dims_mapping.size()));
+      common::errors::InvalidArgument("The Tensor Out's rank [%d] and Out's "
+                                      "dims_mapping size [%d] are not matched.",
+                                      out_ndim,
+                                      out_dims_mapping.size()));
 
   // Step1: Build einsum notation
   // get einsum notation for input
@@ -284,5 +294,4 @@ SpmdInfo ReductionGradInferSpmd(const DistMetaTensor& x,
   return spmd_info;
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

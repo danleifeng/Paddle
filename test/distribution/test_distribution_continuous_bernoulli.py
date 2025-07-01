@@ -242,6 +242,11 @@ class TestContinuousBernoulli(unittest.TestCase):
     (parameterize.TEST_CASE_NAME, 'probs', 'value'),
     [
         (
+            'zero-dim',
+            np.array(0.3).astype("float32"),
+            parameterize.xrand((5,), min=0.0, max=1.0).astype("float32"),
+        ),
+        (
             'value-same-shape',
             parameterize.xrand((5,), min=0.0, max=1.0).astype("float32"),
             parameterize.xrand((5,), min=0.0, max=1.0).astype("float32"),
@@ -297,6 +302,11 @@ class TestContinuousBernoulliProbs(unittest.TestCase):
 @parameterize.parameterize_cls(
     (parameterize.TEST_CASE_NAME, 'p_1', 'p_2'),
     [
+        (
+            'zero-dim',
+            np.array(0.2).astype("float32"),
+            np.array(0.4).astype("float32"),
+        ),
         (
             'one-dim',
             parameterize.xrand((1,), min=0.0, max=1.0).astype("float32"),

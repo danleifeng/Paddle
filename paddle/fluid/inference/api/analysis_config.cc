@@ -18,15 +18,15 @@
 #include <unordered_set>
 
 #include "glog/logging.h"
-#include "paddle/common/flags.h"
+#include "paddle/common/errors.h"
 #include "paddle/fluid/inference/api/helper.h"
 #include "paddle/fluid/inference/api/paddle_analysis_config.h"
 #include "paddle/fluid/inference/api/paddle_pass_builder.h"
 #include "paddle/fluid/inference/utils/table_printer.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/errors.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
+#include "paddle/phi/core/platform/device/gpu/gpu_info.h"
+#include "paddle/phi/kernels/sparse/gpu/conv_host_buffer.h"
 #include "paddle/utils/string/split.h"
 
 #ifdef PADDLE_WITH_TENSORRT
@@ -41,9 +41,14 @@ COMMON_DECLARE_uint64(initial_gpu_memory_in_mb);
 COMMON_DECLARE_bool(use_cinn);
 #endif
 
+#ifdef PADDLE_WITH_OPENVINO
+#include "oneapi/tbb.h"
+#include "openvino/frontend/manager.hpp"
+#include "openvino/openvino.hpp"
+#endif
+
 COMMON_DECLARE_bool(enable_pir_api);
 namespace paddle {
-struct MkldnnQuantizerConfig;
 
 extern const std::vector<std::string> kTRTSubgraphPasses;
 
@@ -107,7 +112,7 @@ AnalysisConfig::AnalysisConfig(const std::string &prog_file_or_model_dir,
   PADDLE_ENFORCE_EQ(
       paddle::inference::IsFileExists(prog_file_),
       true,
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "Cannot open file %s, please confirm whether the file is normal.",
           prog_file_));
 
@@ -155,7 +160,7 @@ void AnalysisConfig::EnableUseGpu(uint64_t memory_pool_init_size_mb,
     enable_gpu_mixed_ = true;
     mixed_precision_mode_ = precision_mode;
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The GPU inference currently only supports float32/float16/bfloat16 "
         "precision. Please check the parameters you specified in EnableUseGpu "
         "or enable_use_gpu function."));
@@ -181,7 +186,8 @@ void AnalysisConfig::Exp_EnableUseCutlass() {
 
 void AnalysisConfig::SetExecStream(void *stream) {
   PADDLE_ENFORCE_NOT_NULL(
-      stream, phi::errors::InvalidArgument("`stream` should not be nullptr"));
+      stream,
+      common::errors::InvalidArgument("`stream` should not be nullptr"));
   exec_stream_ = stream;
   use_external_stream_ = true;
   Update();
@@ -190,7 +196,7 @@ void AnalysisConfig::SetExecStream(void *stream) {
 void *AnalysisConfig::GetExecStream() const {
   PADDLE_ENFORCE_NOT_NULL(
       exec_stream_,
-      phi::errors::InvalidArgument("`stream` should not be nullptr"));
+      common::errors::InvalidArgument("`stream` should not be nullptr"));
   return exec_stream_;
 }
 
@@ -238,7 +244,7 @@ void AnalysisConfig::EnableXpu(int l3_size,
       transformer_encoder_adaptive_seqlen;
   Update();
 #else
-  PADDLE_THROW(phi::errors::PreconditionNotMet(
+  PADDLE_THROW(common::errors::PreconditionNotMet(
       "To use XPU inference, please compile with option 'WITH_XPU' or "
       "'LITE_WITH_XPU' first."));
 #endif
@@ -247,7 +253,7 @@ void AnalysisConfig::EnableXpu(int l3_size,
 void AnalysisConfig::SetXpuDeviceId(int device_id) {
   PADDLE_ENFORCE_EQ(use_xpu_,
                     true,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "Should call EnableXpu before SetXpuDeviceId."));
   xpu_config_.device_id = device_id;
   Update();
@@ -255,12 +261,12 @@ void AnalysisConfig::SetXpuDeviceId(int device_id) {
 
 void AnalysisConfig::SetXpuConfig(const XpuConfig &config) {
   PADDLE_ENFORCE(use_xpu_,
-                 phi::errors::PreconditionNotMet(
+                 common::errors::PreconditionNotMet(
                      "Should call EnableXpu before SetXpuConfig."));
   PADDLE_ENFORCE_LE(
       config.l3_autotune_size,
       config.l3_size,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "l3_autotune_size(%zu) should be less than or equal to l3_size(%zu).",
           config.l3_autotune_size,
           config.l3_size));
@@ -283,7 +289,7 @@ void AnalysisConfig::EnableCustomDevice(const std::string &device_type,
     enable_custom_device_mixed_ = true;
     LOG(INFO) << "enable_custom_device_mixed_";
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "The Paddle-CustomDevice inference currently only supports "
         "float32/float16/bfloat16 precision. Please check the parameters "
         "you specified in EnableCustomDevice function."));
@@ -346,7 +352,7 @@ void AnalysisConfig::LoadIpuConfig(const std::string &config_path) {
   PADDLE_ENFORCE_EQ(
       static_cast<bool>(fin.is_open()),
       true,
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "Cannot open file %s, please confirm whether the file is normal.",
           config_path));
   std::string line;
@@ -391,8 +397,8 @@ void AnalysisConfig::LoadIpuConfig(const std::string &config_path) {
     };
 
     if (ipu_config_mapper_.find(key) == ipu_config_mapper_.end()) {
-      PADDLE_THROW(
-          phi::errors::InvalidArgument("invalid key %s in IPU config: ", key));
+      PADDLE_THROW(common::errors::InvalidArgument(
+          "invalid key %s in IPU config: ", key));
     }
     switch (ipu_config_mapper_.at(key)) {
       case ipu_config_code::ipu_device_num:
@@ -429,8 +435,8 @@ void AnalysisConfig::LoadIpuConfig(const std::string &config_path) {
         ipu_enable_model_runtime_executor_ = string2bool(value);
         break;
       default:
-        PADDLE_THROW(
-            phi::errors::InvalidArgument("invalid key %s in IPU config", key));
+        PADDLE_THROW(common::errors::InvalidArgument(
+            "invalid key %s in IPU config", key));
         break;
     }
   }
@@ -495,6 +501,11 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
   CP_MEMBER(enable_low_precision_io_);
 
   CP_MEMBER(enable_memory_optim_);
+#ifdef PADDLE_WITH_OPENVINO
+  // Openvino related.
+  CP_MEMBER(use_openvino_);
+  CP_MEMBER(openvino_inference_precision_);
+#endif
   // TensorRT related.
   CP_MEMBER(use_tensorrt_);
   CP_MEMBER(tensorrt_workspace_size_);
@@ -540,8 +551,6 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
   CP_MEMBER(use_mkldnn_int8_);
   CP_MEMBER(quantize_enabled_op_types_);
   CP_MEMBER(quantize_excluded_op_ids_);
-  CP_MEMBER(use_mkldnn_quantizer_);
-  CP_MEMBER(mkldnn_quantizer_config_);
   CP_MEMBER(min_input_shape_);
   CP_MEMBER(max_input_shape_);
   CP_MEMBER(optim_input_shape_);
@@ -587,9 +596,6 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
   CP_MEMBER(ipu_custom_ops_info_);
   CP_MEMBER(ipu_custom_patterns_);
 
-  // fleet exe related
-  CP_MEMBER(dist_config_);
-
   // custom device related.
   CP_MEMBER(use_custom_device_);
   CP_MEMBER(custom_device_type_);
@@ -611,7 +617,7 @@ AnalysisConfig::AnalysisConfig(const AnalysisConfig &other) {
   if (use_gpu_) {
     PADDLE_ENFORCE_EQ(use_xpu_,
                       false,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "Only one choice can be made between CPU and XPU."));
     pass_builder_ = std::make_unique<GpuPassStrategy>(
         *static_cast<GpuPassStrategy *>(other.pass_builder()));
@@ -684,19 +690,6 @@ void AnalysisConfig::SetMkldnnCacheCapacity(int capacity) {
 #endif
 }
 
-void AnalysisConfig::EnableMkldnnQuantizer() {
-#ifdef PADDLE_WITH_DNNL
-  if (!mkldnn_quantizer_config_)
-    mkldnn_quantizer_config_ = std::make_unique<MkldnnQuantizerConfig>();
-  use_mkldnn_quantizer_ = true;
-#else
-  LOG(ERROR) << "Please compile with MKLDNN first to use MkldnnQuantizer";
-  use_mkldnn_quantizer_ = false;
-#endif
-
-  Update();
-}
-
 void AnalysisConfig::EnableMkldnnBfloat16() {
 #ifdef PADDLE_WITH_DNNL
   if (phi::backends::cpu::MayIUse(phi::backends::cpu::cpu_isa_t::avx512_core)) {
@@ -743,11 +736,23 @@ void AnalysisConfig::EnableMkldnnInt8(
   Update();
 }
 
-MkldnnQuantizerConfig *AnalysisConfig::mkldnn_quantizer_config() const {
-  PADDLE_ENFORCE_NOT_NULL(
-      mkldnn_quantizer_config_,
-      phi::errors::PreconditionNotMet("MkldnnQuantizer was not enabled yet."));
-  return mkldnn_quantizer_config_.get();
+void AnalysisConfig::EnableOpenVINOEngine(Precision inference_precision) {
+#ifdef PADDLE_WITH_OPENVINO
+  use_openvino_ = true;
+  openvino_inference_precision_ = inference_precision;
+  Update();
+#else
+  PADDLE_THROW(common::errors::PreconditionNotMet(
+      "To use Paddle-OpenVINO, please compile with OpenVINO first."));
+#endif
+}
+
+bool AnalysisConfig::openvino_engine_enabled() const {
+#ifdef PADDLE_WITH_OPENVINO
+  return use_openvino_;
+#else
+  return false;
+#endif
 }
 
 void AnalysisConfig::EnableTensorRtEngine(int64_t workspace_size,
@@ -778,7 +783,7 @@ void AnalysisConfig::EnableTensorRtEngine(int64_t workspace_size,
 
   Update();
 #else
-  PADDLE_THROW(phi::errors::PreconditionNotMet(
+  PADDLE_THROW(common::errors::PreconditionNotMet(
       "To use Paddle-TensorRT, please compile with TENSORRT first."));
 #endif
 }
@@ -799,18 +804,18 @@ void AnalysisConfig::EnableTensorRTMemoryOptim(bool engine_memory_sharing,
   PADDLE_ENFORCE_EQ(
       use_tensorrt_,
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "To enable TensorRT memory optim, please call "
           "EnableTensorRtEngine or enable_tensorrt_engine first."));
   PADDLE_ENFORCE_GE(sharing_identifier,
                     0,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The value of sharing_identifier must be greater "
                         "than or equal to 0."));
   if (!engine_memory_sharing) {
     PADDLE_ENFORCE_EQ(sharing_identifier,
                       0,
-                      phi::errors::InvalidArgument(
+                      common::errors::InvalidArgument(
                           "The value of sharing_identifier must be equal to 0 "
                           "when engine_memory_sharing is false."));
   }
@@ -822,7 +827,7 @@ void AnalysisConfig::EnableLowPrecisionIO(bool x) {
   PADDLE_ENFORCE_EQ(
       enable_gpu_mixed_ || !x,
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "To enable low precision io, please call EnableUseGPU() to specify "
           "precision mode as low precision."));
   enable_low_precision_io_ = x;
@@ -886,7 +891,7 @@ void AnalysisConfig::EnableVarseqlen() { trt_use_varseqlen_ = true; }
 void AnalysisConfig::SetTensorRtOptimizationLevel(int level) {
   PADDLE_ENFORCE(
       level >= 0 && level <= 5,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The input level in SetTRTOptimizationLevel is invalid. The "
           "level must be in range [0, 5], but received level = %d (default "
           "level is 3).",
@@ -917,14 +922,14 @@ void AnalysisConfig::Update() {
       PADDLE_ENFORCE_EQ(
           use_gpu(),
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Only one choice can be made between CPU and XPU."));
       pass_builder_ = std::make_unique<XpuPassStrategy>();
     } else if (use_custom_device()) {
       PADDLE_ENFORCE_EQ(
           use_gpu(),
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Only one choice can be made between GPU and CustomDevice."));
       pass_builder_ = std::make_unique<CustomDevicePassStrategy>();
     } else {
@@ -943,7 +948,7 @@ void AnalysisConfig::Update() {
       PADDLE_ENFORCE_EQ(
           use_gpu(),
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Only one choice can be made between CPU and XPU."));
       pass_builder_ = std::make_unique<XpuPassStrategy>(
           *static_cast<XpuPassStrategy *>(pass_builder_.get()));
@@ -951,7 +956,7 @@ void AnalysisConfig::Update() {
       PADDLE_ENFORCE_EQ(
           use_gpu(),
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Only one choice can be made between GPU and CustomDevice."));
       pass_builder_ = std::make_unique<CustomDevicePassStrategy>(
           *static_cast<CustomDevicePassStrategy *>(pass_builder_.get()));
@@ -980,7 +985,14 @@ void AnalysisConfig::Update() {
     pass_builder()->DisableMKLDNN();
   }
 #endif
-
+#ifdef PADDLE_WITH_OPENVINO
+  if (use_openvino_) {
+    pass_builder()->ClearPasses();
+    for (const auto &pass : kOVSubgraphPasses) {
+      pass_builder()->AppendPass(pass);
+    }
+  }
+#endif
   if (use_tensorrt_) {
     pass_builder()->ClearPasses();
     for (const auto &pass : kTRTSubgraphPasses) {
@@ -1026,17 +1038,6 @@ void AnalysisConfig::Update() {
     }
   }
 
-  // Quantization passes must come after all other optimization passes
-  if (use_mkldnn_quantizer_) {
-    if (!enable_ir_optim_) {
-      LOG(ERROR) << "EnableMkldnnQuantizer() only works when IR optimization "
-                    "is enabled.";
-    }
-#ifdef PADDLE_WITH_DNNL
-    pass_builder()->EnableMkldnnQuantizer();
-#endif
-  }
-
   if (use_mkldnn_bfloat16_) {
 #ifdef PADDLE_WITH_DNNL
     pass_builder()->EnableMkldnnBfloat16();
@@ -1071,25 +1072,25 @@ void AnalysisConfig::Update() {
 #if (defined PADDLE_WITH_XPU)
     PADDLE_ENFORCE_EQ(use_gpu_,
                       false,
-                      phi::errors::Unavailable(
+                      common::errors::Unavailable(
                           "Currently, XPU and GPU cannot be enabled in the "
                           "same analysis configuration."));
 #else
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "You tried to use an XPU device, but Paddle was not compiled "
         "with XPU-runtime."));
 #endif
   }
   if (use_ipu_) {
 #ifndef PADDLE_WITH_IPU
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "You tried to enable the ipu "
         "but did not have the option -DWITH_IPU compiled."));
 #endif
   }
   if (use_custom_device_) {
 #ifndef PADDLE_WITH_CUSTOM_DEVICE
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "You tried to enable the custom device "
         "but did not have the option -DWITH_CUSTOM_DEVICE compiled."));
 #endif
@@ -1144,7 +1145,6 @@ std::string AnalysisConfig::SerializeInfoCache() {
   for (auto &item : mkldnn_enabled_op_types_) ss << item;
   ss << ";";
 
-  ss << use_mkldnn_quantizer_;
   ss << use_mkldnn_bfloat16_;
   for (auto &item : bfloat16_enabled_op_types_) ss << item;
   ss << use_mkldnn_int8_;
@@ -1308,13 +1308,17 @@ std::string AnalysisConfig::Summary() {
     os.InsertRow({"model_from_memory", params_file_});
   }
   os.InsetDivider();
-
   // cpu info
   os.InsertRow(
       {"cpu_math_thread", std::to_string(cpu_math_library_num_threads_)});
   os.InsertRow({"enable_mkldnn", use_mkldnn_ ? "true" : "false"});
   os.InsertRow(
       {"mkldnn_cache_capacity", std::to_string(mkldnn_cache_capacity_)});
+#ifdef PADDLE_WITH_OPENVINO
+  os.InsertRow({"use_openvino", use_openvino_ ? "true" : "false"});
+  os.InsertRow({"openvino_inference_precision",
+                inference::Precision2String(openvino_inference_precision_)});
+#endif
   os.InsetDivider();
 
   // gpu info
@@ -1475,7 +1479,7 @@ void AnalysisConfig::CollectShapeRangeInfo(
   collect_shape_range_info_ = true;
   PADDLE_ENFORCE_EQ(shape_range_info_path.empty(),
                     false,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The shape_range_info_path should not be empty, please "
                         "re-check the argument."));
   shape_range_info_path_ = shape_range_info_path;
@@ -1514,12 +1518,20 @@ void AnalysisConfig::Exp_EnableMixedPrecisionOps(
   mixed_white_list_ = white_list;
 }
 
+void AnalysisConfig::Exp_SparseConvUsingBuffer(
+    const std::vector<std::vector<int>> &kernels,
+    const std::vector<std::vector<int>> &strides) {
+  phi::sparse::ConvHostBuffer &conv_buffer_instance =
+      phi::sparse::ConvHostBuffer::getInstance();
+  conv_buffer_instance.init_from_config(kernels, strides);
+}
+
 void AnalysisConfig::EnableCINN() {
 #ifdef PADDLE_WITH_CINN
   use_cinn_ = true;
   Update();
 #else
-  PADDLE_THROW(phi::errors::Unavailable(
+  PADDLE_THROW(common::errors::Unavailable(
       "You tried to use CINN compiler, but Paddle was not compiled "
       "with CINN."));
 #endif
@@ -1539,8 +1551,8 @@ void AnalysisConfig::EnableCustomPasses(const std::vector<std::string> &passes,
   custom_pass_only_ = custom_pass_only;
 }
 
-void AnalysisConfig::DeletePass(const std::vector<std::string> &passes) {
-  deleted_passes_ = passes;
+void AnalysisConfig::DeletePass(const std::string &pass_name) {
+  deleted_passes_.push_back(pass_name);
 }
 
 void AnalysisConfig::SetOptimizationLevel(int opt_level) {

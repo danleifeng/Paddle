@@ -19,8 +19,7 @@ limitations under the License. */
 #include "paddle/phi/core/distributed/auto_parallel/utils.h"
 #include "paddle/phi/infermeta/spmd_rules/utils.h"
 
-namespace phi {
-namespace distributed {
+namespace phi::distributed {
 
 using phi::distributed::auto_parallel::str_join;
 
@@ -57,18 +56,18 @@ SpmdInfo TransposeInferSpmd(const DistMetaTensor& x,
   PADDLE_ENFORCE_EQ(
       x_ndim,
       x_dims_mapping.size(),
-      phi::errors::InvalidArgument("The Tensor X's rank [%d] and X's "
-                                   "dims_mapping size [%d] are not matched.",
-                                   x_ndim,
-                                   x_dims_mapping.size()));
+      common::errors::InvalidArgument("The Tensor X's rank [%d] and X's "
+                                      "dims_mapping size [%d] are not matched.",
+                                      x_ndim,
+                                      x_dims_mapping.size()));
   // check perm size
   PADDLE_ENFORCE_EQ(
       x_ndim,
       perm.size(),
-      phi::errors::InvalidArgument("The Tensor X's rank [%d] and "
-                                   "perm size [%d] are not matched.",
-                                   x_ndim,
-                                   perm.size()));
+      common::errors::InvalidArgument("The Tensor X's rank [%d] and "
+                                      "perm size [%d] are not matched.",
+                                      x_ndim,
+                                      perm.size()));
 
   // Step1: Build Einsum Notation
   std::string x_axes;
@@ -87,13 +86,14 @@ SpmdInfo TransposeInferSpmd(const DistMetaTensor& x,
       GetDimsMappingForAxes(out_axes, axis_to_dim_map);
 
   auto x_dist_attr_dst = CopyTensorDistAttrForOutput(x_dist_attr_src);
+  x_dist_attr_dst.set_partial_status(x_dist_attr_src.partial_status());
   x_dist_attr_dst.set_dims_mapping(x_dims_mapping);
 
   // initialize output dist_attr's process_mesh, batch_dim and dynamic dims with
   // input dist_attr.
   TensorDistAttr out_dist_attr = CopyTensorDistAttrForOutput(x_dist_attr_src);
   out_dist_attr.set_dims_mapping(out_dims_mapping);
-  out_dist_attr.set_partial_status(x_dist_attr_src.partial_status());
+  out_dist_attr.set_partial_status(x_dist_attr_dst.partial_status());
 
   VLOG(4) << "TransposeInferSpmd:";
   VLOG(4) << "Input: shape: [" << str_join(x_shape) << "] "
@@ -118,25 +118,25 @@ SpmdInfo TransposeInferSpmdReverse(const DistMetaTensor& x,
   PADDLE_ENFORCE_EQ(
       out_ndim,
       out_dims_mapping.size(),
-      phi::errors::InvalidArgument("The Tensor Out's rank [%d] and Out's "
-                                   "dims_mapping size [%d] are not matched.",
-                                   out_ndim,
-                                   out_dims_mapping.size()));
+      common::errors::InvalidArgument("The Tensor Out's rank [%d] and Out's "
+                                      "dims_mapping size [%d] are not matched.",
+                                      out_ndim,
+                                      out_dims_mapping.size()));
   PADDLE_ENFORCE_EQ(
       x_ndim,
       out_ndim,
-      phi::errors::InvalidArgument("The Tensor X's rank [%d] and "
-                                   "Out's rank [%d] are not matched.",
-                                   x_ndim,
-                                   out_ndim));
+      common::errors::InvalidArgument("The Tensor X's rank [%d] and "
+                                      "Out's rank [%d] are not matched.",
+                                      x_ndim,
+                                      out_ndim));
   // check perm size
   PADDLE_ENFORCE_EQ(
       out_ndim,
       perm.size(),
-      phi::errors::InvalidArgument("The Tensor Out's rank [%d] and "
-                                   "perm size [%d] are not matched.",
-                                   out_ndim,
-                                   perm.size()));
+      common::errors::InvalidArgument("The Tensor Out's rank [%d] and "
+                                      "perm size [%d] are not matched.",
+                                      out_ndim,
+                                      perm.size()));
 
   // Step1: Build Einsum Notation
   std::string x_axes;
@@ -184,7 +184,7 @@ SpmdInfo TransposeGradInferSpmd(const DistMetaTensor& out_grad,
   size_t out_grad_dims_mapping_size = out_grad_dims_mapping.size();
   PADDLE_ENFORCE_EQ(out_grad_ndim,
                     out_grad_dims_mapping_size,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The Tensor Out_grad's rank [%d] and "
                         "Out_grad's dims_mapping size [%d] are not matched.",
                         out_grad_ndim,
@@ -192,7 +192,7 @@ SpmdInfo TransposeGradInferSpmd(const DistMetaTensor& out_grad,
   size_t perm_size = perm.size();
   PADDLE_ENFORCE_EQ(out_grad_ndim,
                     perm_size,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The Tensor Out_grad's rank [%d] and perm size "
                         "[%d] are not matched.",
                         out_grad_ndim,
@@ -210,5 +210,4 @@ SpmdInfo TransposeGradInferSpmd(const DistMetaTensor& out_grad,
   return {{out_grad_dist_attr}, {x_grad_dist_attr}};
 }
 
-}  // namespace distributed
-}  // namespace phi
+}  // namespace phi::distributed

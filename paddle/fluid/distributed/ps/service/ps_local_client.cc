@@ -107,9 +107,10 @@ int32_t PsLocalClient::Initialize() {
   size_t region_data_idx = 0;
   size_t shard_data_size = num_per_shard;
   size_t shard_buffer_remain = shard_data_size * sizeof(float);
-  PADDLE_ENFORCE_EQ(shard_buffer_remain,
-                    region_buffer.size() * sizeof(float),
-                    phi::errors::PreconditionNotMet("pull dense size error."));
+  PADDLE_ENFORCE_EQ(
+      shard_buffer_remain,
+      region_buffer.size() * sizeof(float),
+      common::errors::PreconditionNotMet("pull dense size error."));
   size_t index = 0;
   while (shard_buffer_remain > 0 && region_idx < region_num) {
     auto& region = regions[region_idx];
@@ -204,7 +205,7 @@ int32_t PsLocalClient::Initialize() {
     PADDLE_ENFORCE_LE(
         offset + data_num,
         data_size,
-        phi::errors::PreconditionNotMet(
+        common::errors::PreconditionNotMet(
             "invalid dense size, cur pos[%d] data_num[%d] size[%d]",
             offset,
             data_num,
@@ -255,11 +256,18 @@ int32_t PsLocalClient::Initialize() {
   return done();
 }
 
-::std::future<int32_t> PsLocalClient::PrintTableStat(uint32_t table_id) {
+::std::future<int32_t> PsLocalClient::PrintTableStat(uint32_t table_id,
+                                                     uint16_t pass_id,
+                                                     size_t threshold) {
   auto* table_ptr = GetTable(table_id);
   std::pair<int64_t, int64_t> ret = table_ptr->PrintTableStat();
   VLOG(0) << "table id: " << table_id << ", feasign size: " << ret.first
           << ", mf size: " << ret.second;
+  // > 50亿，40%内存
+  if (static_cast<size_t>(ret.first) > threshold) {
+    VLOG(0) << "run cache table";
+    table_ptr->CacheTable(pass_id);
+  }
   return done();
 }
 

@@ -22,8 +22,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/device_worker_factory.h"
 #include "paddle/fluid/framework/trainer.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 
 void DistMultiTrainer::Initialize(const TrainerDesc &trainer_desc,
                                   Dataset *dataset) {
@@ -94,16 +93,15 @@ void DistMultiTrainer::InitDumpEnv() {
   }
 }
 
-inline std::vector<std::shared_ptr<paddle::framework::ThreadPool>>
-    &GetThreadPool(int thread_num) {
-  static std::vector<std::shared_ptr<paddle::framework::ThreadPool>>
-      thread_pools;
+inline std::vector<std::shared_ptr<phi::ThreadPool>> &GetThreadPool(
+    int thread_num) {
+  static std::vector<std::shared_ptr<phi::ThreadPool>> thread_pools;
   if (!thread_pools.empty()) {
     return thread_pools;
   }
   thread_pools.resize(thread_num);
   for (int i = 0; i < thread_num; ++i) {
-    thread_pools[i].reset(new paddle::framework::ThreadPool(1));
+    thread_pools[i].reset(new phi::ThreadPool(1));
   }
   return thread_pools;
 }
@@ -112,7 +110,13 @@ void DistMultiTrainer::InitTrainerEnv(const ProgramDesc &main_program,
                                       const phi::Place &place) {
   auto pool = GetThreadPool(thread_num_);
   std::vector<std::future<void>> wait_futures;
-  CHECK_EQ(static_cast<int>(pool.size()), thread_num_);
+  PADDLE_ENFORCE_EQ(static_cast<int>(pool.size()),
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "static_cast<int>(pool.size()) is invalid, "
+                        "expected %d but received %d.",
+                        thread_num_,
+                        static_cast<int>(pool.size())));
   for (int i = 0; i < thread_num_; ++i) {
     wait_futures.emplace_back(pool[i]->Run([this, i, &main_program, &place]() {
       workers_[i]->SetPlace(place);
@@ -155,7 +159,13 @@ void DistMultiTrainer::InitOtherEnv(const ProgramDesc &main_program) {
 void DistMultiTrainer::Run() {
   auto pool = GetThreadPool(thread_num_);
   std::vector<std::future<void>> wait_futures;
-  CHECK_EQ(static_cast<int>(pool.size()), thread_num_);
+  PADDLE_ENFORCE_EQ(static_cast<int>(pool.size()),
+                    thread_num_,
+                    common::errors::InvalidArgument(
+                        "static_cast<int>(pool.size()) is invalid, "
+                        "expected %d but received %d.",
+                        thread_num_,
+                        static_cast<int>(pool.size())));
   for (int i = 0; i < thread_num_; ++i) {
     if (!debug_) {  // NOLINT
       wait_futures.emplace_back(
@@ -232,5 +242,4 @@ void DistMultiTrainer::MergeToRootScope(phi::DenseTensor *root_tensor,
     root_data[i] += data[i];
   }
 }
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework

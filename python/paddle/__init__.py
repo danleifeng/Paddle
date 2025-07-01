@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import typing
 
 __is_metainfo_generated = False
@@ -75,6 +76,8 @@ from .framework.dtype import (
     int16,
     int32,
     int64,
+    pstring,
+    raw,
     uint8,
 )
 
@@ -87,42 +90,44 @@ else:
 import paddle.distributed.fleet
 import paddle.text
 import paddle.vision
-from paddle import (  # noqa: F401
-    amp,
-    audio,
-    autograd,
-    dataset,
-    decomposition,
-    device,
-    distributed,
-    distribution,
-    geometric,
-    incubate,
-    inference,
-    io,
-    jit,
-    metric,
-    nn,
-    onnx,
-    optimizer,
-    quantization,
-    reader,
-    regularizer,
-    sparse,
-    static,
-    sysconfig,
-    vision,
+from paddle import (
+    amp as amp,
+    audio as audio,
+    autograd as autograd,
+    dataset as dataset,
+    decomposition as decomposition,
+    device as device,
+    distributed as distributed,
+    distribution as distribution,
+    geometric as geometric,
+    incubate as incubate,
+    inference as inference,
+    io as io,
+    jit as jit,
+    metric as metric,
+    nn as nn,
+    onnx as onnx,
+    optimizer as optimizer,
+    quantization as quantization,
+    reader as reader,
+    regularizer as regularizer,
+    sparse as sparse,
+    static as static,
+    sysconfig as sysconfig,
+    vision as vision,
 )
 
 # high-level api
-from . import (  # noqa: F401
-    _pir_ops,
+from . import (
+    _pir_ops as _pir_ops,
     _typing as _typing,
-    callbacks,
-    fft,
-    hub,
-    linalg,
-    signal,
+    callbacks as callbacks,
+    fft as fft,
+    hub as hub,
+    linalg as linalg,
+    signal as signal,
+    tensor as tensor,
+    utils as utils,
 )
 from .autograd import (
     enable_grad,
@@ -151,6 +156,7 @@ from .framework import (  # noqa: F401
     CustomPlace,
     IPUPlace,
     ParamAttr,
+    XPUPinnedPlace,
     XPUPlace,
     async_save,
     clear_async_save_task_queue,
@@ -223,6 +229,7 @@ from .tensor.linalg import (  # noqa: F401
     cdist,
     cholesky,
     cross,
+    diagonal,
     dist,
     dot,
     eigvalsh,
@@ -230,17 +237,21 @@ from .tensor.linalg import (  # noqa: F401
     histogram_bin_edges,
     histogramdd,
     matmul,
+    matrix_transpose,
     mv,
     norm,
     t,
     t_,
     transpose,
     transpose_,
+    vecdot,
 )
 from .tensor.logic import (
     allclose,
     bitwise_and,
     bitwise_and_,
+    bitwise_invert,
+    bitwise_invert_,
     bitwise_not,
     bitwise_not_,
     bitwise_or,
@@ -257,6 +268,8 @@ from .tensor.logic import (
     is_empty,
     is_tensor,
     isclose,
+    less,
+    less_,
     less_equal,
     less_equal_,
     less_than,
@@ -375,6 +388,8 @@ from .tensor.math import (  # noqa: F401
     atan_,
     atanh,
     atanh_,
+    baddbmm,
+    baddbmm_,
     bitwise_left_shift,
     bitwise_left_shift_,
     bitwise_right_shift,
@@ -400,7 +415,6 @@ from .tensor.math import (  # noqa: F401
     cumsum_,
     cumulative_trapezoid,
     deg2rad,
-    diagonal,
     diff,
     digamma,
     digamma_,
@@ -487,10 +501,12 @@ from .tensor.math import (  # noqa: F401
     nansum,
     neg,
     neg_,
+    negative,
     nextafter,
     outer,
     polygamma,
     polygamma_,
+    positive,
     pow,
     pow_,
     prod,
@@ -545,6 +561,7 @@ from .tensor.random import (
     randint,
     randint_like,
     randn,
+    randn_like,
     randperm,
     standard_gamma,
     standard_normal,
@@ -578,16 +595,25 @@ from .tensor.stat import (
     var,
 )
 from .tensor.to_string import set_printoptions
+from .utils.dlpack import (
+    from_dlpack,
+    to_dlpack,
+)
 
 # CINN has to set a flag to include a lib
 if is_compiled_with_cinn():
     import os
+    import sys
+    from importlib import resources
 
     package_dir = os.path.dirname(os.path.abspath(__file__))
     runtime_include_dir = os.path.join(package_dir, "libs")
     cuh_file = os.path.join(runtime_include_dir, "cinn_cuda_runtime_source.cuh")
     if os.path.exists(cuh_file):
         os.environ.setdefault('runtime_include_dir', runtime_include_dir)
+
+    data_file_path = resources.files('paddle.cinn_config')
+    os.environ['CINN_CONFIG_PATH'] = str(data_file_path)
 
 if __is_metainfo_generated and is_compiled_with_cuda():
     import os
@@ -622,6 +648,10 @@ if __is_metainfo_generated and is_compiled_with_cuda():
 
         cupti_dir_lib_path = package_dir + "/.." + "/nvidia/cuda_cupti/lib"
         set_flags({"FLAGS_cupti_dir": cupti_dir_lib_path})
+
+        if is_compiled_with_cinn():
+            cuda_cccl_path = package_dir + "/.." + "/nvidia/cuda_cccl/include/"
+            set_flags({"FLAGS_cuda_cccl_dir": cuda_cccl_path})
 
     elif (
         platform.system() == 'Windows'
@@ -725,7 +755,7 @@ if __is_metainfo_generated and is_compiled_with_cuda():
                     if not path_patched:
                         prev_path = os.environ['PATH']
                         os.environ['PATH'] = ';'.join(
-                            dll_paths + [os.environ['PATH']]
+                            [*dll_paths, os.environ['PATH']]
                         )
                         path_patched = True
                     res = kernel32.LoadLibraryW(dll)
@@ -743,6 +773,14 @@ from .pir_utils import IrGuard
 
 ir_guard = IrGuard()
 ir_guard._switch_to_pir()
+
+
+# Constants
+newaxis: None = None
+inf = math.inf
+nan = math.nan
+pi = math.pi
+e = math.e
 
 __all__ = [
     'block_diag',
@@ -763,8 +801,12 @@ __all__ = [
     'bool',
     'complex64',
     'complex128',
+    'pstring',
+    'raw',
     'addmm',
     'addmm_',
+    'baddbmm',
+    'baddbmm_',
     'allclose',
     'isclose',
     't',
@@ -847,6 +889,8 @@ __all__ = [
     'full_like',
     'less_than',
     'less_than_',
+    'less',
+    'less_',
     'kron',
     'clip',
     'Tensor',
@@ -890,10 +934,13 @@ __all__ = [
     'bitwise_xor_',
     'bitwise_not',
     'bitwise_not_',
+    'bitwise_invert',
+    'bitwise_invert_',
     'mm',
     'flip',
     'rot90',
     'bincount',
+    'histogram_bin_edges',
     'histogram',
     'histogramdd',
     'multiplex',
@@ -966,6 +1013,7 @@ __all__ = [
     'conj',
     'neg',
     'neg_',
+    'negative',
     'lgamma',
     'lgamma_',
     'gammaincc',
@@ -1031,6 +1079,7 @@ __all__ = [
     'cauchy_',
     'geometric_',
     'randn',
+    'randn_like',
     'strided_slice',
     'unique',
     'unique_consecutive',
@@ -1070,6 +1119,7 @@ __all__ = [
     'reverse',
     'nonzero',
     'CUDAPinnedPlace',
+    'XPUPinnedPlace',
     'logical_not',
     'logical_not_',
     'add_n',
@@ -1159,6 +1209,7 @@ __all__ = [
     'masked_fill_',
     'masked_scatter',
     'masked_scatter_',
+    'matrix_transpose',
     'hypot',
     'hypot_',
     'index_fill',
@@ -1166,4 +1217,23 @@ __all__ = [
     'diagonal_scatter',
     'combinations',
     'signbit',
+    'positive',
+    'from_dlpack',
+    'to_dlpack',
+    'inf',
+    'newaxis',
+    'vecdot',
+    'nan',
+    'pi',
+    'e',
 ]
+
+import os
+
+FLAGS_trace_api = os.environ.get("FLAGS_trace_api", None)
+if FLAGS_trace_api is not None and FLAGS_trace_api != "":
+    from .api_tracer import start_api_tracer
+
+    api_path = FLAGS_trace_api.split(",")[0]
+    save_config_path = FLAGS_trace_api.split(",")[1]
+    start_api_tracer(api_path, save_config_path)

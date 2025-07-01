@@ -75,13 +75,12 @@ void PartialSumOpCUDAKernel(const Context &dev_ctx,
                             int start_index,
                             int length,
                             DenseTensor *out) {
-  auto ctx = dev_ctx;
   auto in_vars = x;
 
   PADDLE_ENFORCE_EQ(
       x.size() > 0,
       true,
-      phi::errors::InvalidArgument("The input should not be null."));
+      common::errors::InvalidArgument("The input should not be null."));
 
   auto place = dev_ctx.GetPlace();  // GPUPlace only now
   auto batch_size = in_vars[0]->dims()[0];
@@ -153,7 +152,7 @@ void PartialSumGradOpCUDAKernel(const Context &dev_ctx,
   PADDLE_ENFORCE_EQ(
       ins.size() > 0,
       true,
-      phi::errors::InvalidArgument("The input should not be null."));
+      common::errors::InvalidArgument("The input should not be null."));
   if (length == -1) {
     length = ins[0]->dims()[1] - start_index;
   }

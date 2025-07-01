@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import copy
 import os
@@ -160,10 +161,10 @@ class ElasticManager:
                 node_ips, self.devices_per_proc, self.start_port
             )
             self.trainer_endpoints_list = [
-                "%s:%d" % (ip, self.start_port) for ip in node_ips
+                f"{ip}:{self.start_port}" for ip in node_ips
             ]
 
-        self.curr_host = "%s:%d" % (self.host, self.start_port)
+        self.curr_host = f"{self.host}:{self.start_port}"
         logger.info(f'start job with np={self.np}')
         logger.info(
             f"trainers={self.trainers}, trainer_endpoints_list={self.trainer_endpoints_list}"
@@ -326,7 +327,7 @@ class ElasticManager:
                 port = start_port
 
             ports = list(range(port, port + len(devices_per_proc)))
-            endpoint_list.extend(["%s:%d" % (ip, port) for port in ports])
+            endpoint_list.extend([f"{ip}:{port}" for port in ports])
 
         dist_endpoints = ','.join(endpoint_list)
         return dist_endpoints
@@ -386,7 +387,7 @@ class ElasticManager:
             min_np = int(np_dict[0])
             max_np = int(np_dict[1])
             min_np = 1 if min_np <= 0 else min_np
-            max_np = min_np if min_np > max_np else max_np
+            max_np = max(max_np, min_np)
         else:
             raise ValueError(
                 f'the np={np} needs to be in "MIN" or "MIN:MAX" format'
@@ -406,7 +407,7 @@ class ElasticManager:
 
         return int(self.etcd.get(self.prefix)[0]) == 1
 
-    def _match(self, host_list: list = None):
+    def _match(self, host_list: list | None = None):
         if host_list:
             self.hosts = host_list
         else:

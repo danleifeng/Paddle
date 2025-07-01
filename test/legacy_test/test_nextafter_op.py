@@ -18,7 +18,6 @@ import numpy as np
 from op_test import OpTest
 
 import paddle
-from paddle.pir_utils import test_with_pir_api
 
 
 def ref_nextafter(x, y):
@@ -40,7 +39,6 @@ class TestNextafterAPI(unittest.TestCase):
             else paddle.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_static_api(self):
         paddle.enable_static()
         with paddle.static.program_guard(paddle.static.Program()):
@@ -97,23 +95,84 @@ class TestNextafterOP(OpTest):
         self.op_type = "nextafter"
         self.python_api = paddle.nextafter
         self.init_dtype()
+        self.init_shape()
 
-        x = np.array([1, 2]).astype(self.dtype)
-        y = np.array([2, 1]).astype(self.dtype)
+        x = np.random.rand(*self.x_shape).astype(self.dtype)
+        y = np.random.rand(*self.y_shape).astype(self.dtype)
         out = np.nextafter(x, y)
         self.inputs = {'x': x, 'y': y}
         self.outputs = {'out': out}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def init_dtype(self):
         self.dtype = np.float64
+
+    def init_shape(self):
+        self.x_shape = (2,)
+        self.y_shape = (2,)
 
 
 class TestNextafterOPFP32(TestNextafterOP):
     def init_dtype(self):
         self.dtype = np.float32
+
+
+class TestNextafterOPFP32Case1(TestNextafterOP):
+    def init_dtype(self):
+        self.dtype = np.float32
+
+    def init_shape(self):
+        self.x_shape = (5,)
+        self.y_shape = (2, 3, 4, 5)
+
+
+class TestNextafterOPFP32Case2(TestNextafterOP):
+    def init_dtype(self):
+        self.dtype = np.float32
+
+    def init_shape(self):
+        self.x_shape = (2, 3, 4, 5)
+        self.y_shape = (1,)
+
+
+class TestNextafterOPCase1(TestNextafterOP):
+    def init_shape(self):
+        self.x_shape = (5,)
+        self.y_shape = (2, 3, 4, 5)
+
+
+class TestNextafterOPCase2(TestNextafterOP):
+    def init_shape(self):
+        self.x_shape = (2, 3, 4, 5)
+        self.y_shape = (1,)
+
+
+class TestNextafterOPZeroDim1(TestNextafterOP):
+    def setUp(self):
+        self.op_type = "nextafter"
+        self.python_api = paddle.nextafter
+        self.init_dtype()
+
+        x = np.random.rand(0, 3, 2).astype(self.dtype)
+        y = np.random.rand(0, 3, 2).astype(self.dtype)
+        out = np.nextafter(x, y)
+        self.inputs = {'x': x, 'y': y}
+        self.outputs = {'out': out}
+
+
+class TestNextafterOPZeroDim2(TestNextafterOP):
+    def setUp(self):
+        self.op_type = "nextafter"
+        self.python_api = paddle.nextafter
+        self.init_dtype()
+
+        x = np.random.rand(4, 0, 2).astype(self.dtype)
+        y = np.random.rand(4, 0, 2).astype(self.dtype)
+        out = np.nextafter(x, y)
+        self.inputs = {'x': x, 'y': y}
+        self.outputs = {'out': out}
 
 
 if __name__ == "__main__":

@@ -15,9 +15,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void AddVarToScope(Scope* param_scope,
                    const std::string& name,
@@ -48,9 +46,9 @@ TEST(MultiHeadMatmulFusePass, basic) {
   // (layer_norm_out, weights_0)      mul              -> mul_out0
   // (layer_norm_out, weights_1)      mul              -> mul_out1
   // (layer_norm_out, weights_2)      mul              -> mul_out2
-  // (mul_out0, bias_0)               elementweise_add -> eltadd_0
-  // (mul_out1, bias_1)               elementweise_add -> eltadd_1
-  // (mul_out2, bias_2)               elementweise_add -> eltadd_2
+  // (mul_out0, bias_0)               elementwise_add  -> eltadd_0
+  // (mul_out1, bias_1)               elementwise_add  -> eltadd_1
+  // (mul_out2, bias_2)               elementwise_add  -> eltadd_2
   // (eltadd_0)                       reshape2         -> reshape_0
   // (eltadd_1)                       reshape2         -> reshape_1
   // (eltadd_2)                       reshape2         -> reshape_2
@@ -126,14 +124,14 @@ TEST(MultiHeadMatmulFusePass, basic) {
   PADDLE_ENFORCE_EQ(
       num_nodes_before,
       num_nodes_after + 39,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "After the multihead_matmul pass, The node num in graph "
           "should be %d, but the result is %d",
           num_nodes_before - 39,
           num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fused_nodes_after,
                     1,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "After the multihead_matmul pass, there should be one "
                         "multihead_matmul op, but the result is %d",
                         num_fused_nodes_after));
@@ -145,9 +143,7 @@ TEST(MultiHeadMatmulFusePass, pass_op_version_check) {
           .IsPassCompatible("multihead_matmul_fuse_pass_v2"));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(multihead_matmul_fuse_pass);
 USE_PASS(multihead_matmul_fuse_pass_v2);

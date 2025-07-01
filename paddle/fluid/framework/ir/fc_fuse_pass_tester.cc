@@ -17,9 +17,7 @@
 #include "paddle/fluid/framework/ir/fc_fuse_pass.h"
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 void AddVarToScope(Scope* param_scope,
                    const std::string& name,
@@ -80,26 +78,24 @@ TEST(FCFusePass, basic) {
   int num_fc_nodes_after = GetNumOpNodes(graph, "fc");
   VLOG(3) << DebugString(graph);
 
-  PADDLE_ENFORCE_EQ(
-      num_nodes_before,
-      num_nodes_after + 6,
-      phi::errors::InvalidArgument("num_nodes_before=%d, num_nodes_after=%d.",
-                                   num_nodes_before,
-                                   num_nodes_after));
+  PADDLE_ENFORCE_EQ(num_nodes_before,
+                    num_nodes_after + 6,
+                    common::errors::InvalidArgument(
+                        "num_nodes_before=%d, num_nodes_after=%d.",
+                        num_nodes_before,
+                        num_nodes_after));
   PADDLE_ENFORCE_EQ(num_fc_nodes_after,
                     2,
-                    phi::errors::InvalidArgument("num_fc_nodes_after=%d.",
-                                                 num_fc_nodes_after));
+                    common::errors::InvalidArgument("num_fc_nodes_after=%d.",
+                                                    num_fc_nodes_after));
   PADDLE_ENFORCE_EQ(num_mul_nodes_before,
                     num_fc_nodes_after,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "num_mul_nodes_before=%d, num_fc_nodes_after=%d.",
                         num_mul_nodes_before,
                         num_fc_nodes_after));
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 USE_PASS(fc_fuse_pass);

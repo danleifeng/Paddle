@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def temporal_shift(x, seg_num, shift_ratio, data_format):
@@ -110,6 +109,14 @@ class TestTemporalShift4(TestTemporalShift):
         self.data_format = 'NHWC'
 
 
+class TestTemporalShift_ZeroSize(TestTemporalShift):
+    def initTestCase(self):
+        self.x_shape = (0, 9, 7, 7)
+        self.seg_num = 2
+        self.shift_ratio = 0.2
+        self.data_format = 'NCHW'
+
+
 @unittest.skipIf(
     not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
 )
@@ -147,7 +154,6 @@ class TestTemporalShiftAPI(unittest.TestCase):
                 x=input, seg_num=2, shift_ratio=0.2
             )
 
-    @test_with_pir_api
     def test_static_fp16_gpu(self):
         if paddle.base.core.is_compiled_with_cuda():
             place = paddle.CUDAPlace(0)
@@ -173,7 +179,6 @@ class TestTemporalShiftAPI(unittest.TestCase):
                     fetch_list=[y],
                 )
 
-    @test_with_pir_api
     def test_error(self):
         def attr_data_format():
             input = paddle.randn([6, 4, 2, 2])

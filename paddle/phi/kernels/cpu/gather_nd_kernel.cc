@@ -21,28 +21,28 @@
 namespace phi {
 
 template <typename T, typename Context>
-void GatherNdKernel(const Context &ctx,
+void GatherNdKernel(const Context &dev_ctx,
                     const DenseTensor &x,
                     const DenseTensor &index,
                     DenseTensor *out) {
-  ctx.template Alloc<T>(out);
-  if (x.numel() == 0) return;
+  dev_ctx.template Alloc<T>(out);
+  if (x.numel() == 0 || out->numel() == 0) return;
   if (index.dims()[0] == 0 && index.numel() == 0) return;
   auto index_type = index.dtype();
   bool index_type_match =
       index_type == phi::DataType::INT32 || index_type == phi::DataType::INT64;
-  PADDLE_ENFORCE_EQ(
-      index_type_match,
-      true,
-      phi::errors::InvalidArgument("Index holds the wrong type, it holds [%s],"
-                                   "but desires to be [%s] or [%s]",
-                                   index_type,
-                                   phi::DataType::INT32,
-                                   phi::DataType::INT64));
+  PADDLE_ENFORCE_EQ(index_type_match,
+                    true,
+                    common::errors::InvalidArgument(
+                        "Index holds the wrong type, it holds [%s],"
+                        "but desires to be [%s] or [%s]",
+                        index_type,
+                        phi::DataType::INT32,
+                        phi::DataType::INT64));
   if (index_type == phi::DataType::INT32) {
-    phi::funcs::CPUGatherNd<T, int>(ctx, x, index, out);
+    phi::funcs::CPUGatherNd<T, int>(dev_ctx, x, index, out);
   } else if (index_type == phi::DataType::INT64) {
-    phi::funcs::CPUGatherNd<T, int64_t>(ctx, x, index, out);
+    phi::funcs::CPUGatherNd<T, int64_t>(dev_ctx, x, index, out);
   }
 }
 

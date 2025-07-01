@@ -15,11 +15,11 @@
 #include "paddle/fluid/framework/ir/cost_model.h"
 
 #include "gtest/gtest.h"
+#include "paddle/common/errors.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/program_desc.h"
-#include "paddle/fluid/platform/errors.h"
-#include "paddle/fluid/platform/event.h"
+#include "paddle/phi/api/profiler/event.h"
 
 namespace paddle {
 namespace framework {
@@ -76,13 +76,13 @@ ProgramDesc CreateTestProgram() {
   auto *global_block = program.MutableBlock(0);
 
   auto *x = global_block->Var("X");
-  x->SetType(proto::VarType::LOD_TENSOR);
+  x->SetType(proto::VarType::DENSE_TENSOR);
   x->SetLoDLevel(0);
   x->SetDataType(proto::VarType::FP32);
   x->SetShape({1000, 784});
 
   auto *y = global_block->Var("Y");
-  y->SetType(proto::VarType::LOD_TENSOR);
+  y->SetType(proto::VarType::DENSE_TENSOR);
   y->SetLoDLevel(0);
   y->SetDataType(proto::VarType::FP32);
   y->SetShape({784, 100});
@@ -93,11 +93,11 @@ ProgramDesc CreateTestProgram() {
   op0->SetInput("Y", {y->Name()});
 
   auto *z = global_block->Var("Z");
-  z->SetType(proto::VarType::LOD_TENSOR);
+  z->SetType(proto::VarType::DENSE_TENSOR);
   op0->SetOutput("Out", {z->Name()});
 
   auto *w = global_block->Var("W");
-  w->SetType(proto::VarType::LOD_TENSOR);
+  w->SetType(proto::VarType::DENSE_TENSOR);
   w->SetLoDLevel(0);
   w->SetDataType(proto::VarType::FP32);
   w->SetShape({100, 10});
@@ -108,7 +108,7 @@ ProgramDesc CreateTestProgram() {
   op1->SetInput("Y", {w->Name()});
 
   auto *out = global_block->Var("Out");
-  out->SetType(proto::VarType::LOD_TENSOR);
+  out->SetType(proto::VarType::DENSE_TENSOR);
   op1->SetOutput("Out", {out->Name()});
   return program;
 }
@@ -175,36 +175,36 @@ TEST(CostDataTest, TestEmptyTimeEvent) {
 TEST(CostDataTest, TestNoOpEvent) {
   CostData cost_data;
   ProgramDesc program = CreateTestProgram();
-  std::vector<platform::Event> thread_events;
+  std::vector<phi::Event> thread_events;
   thread_events.push_back(
-      platform::Event(platform::EventType::kPushRange, "not exist name", 0));
-  std::vector<std::vector<platform::Event>> time_events{thread_events};
+      phi::Event(phi::EventType::kPushRange, "not exist name", 0));
+  std::vector<std::vector<phi::Event>> time_events{thread_events};
   EXPECT_EQ(cost_data.SetCostData(program, time_events), false);
 }
 
 TEST(CostDataTest, TestNoOpPopEvent) {
   CostData cost_data;
   ProgramDesc program = CreateTestProgram();
-  std::vector<platform::Event> thread_events;
+  std::vector<phi::Event> thread_events;
   thread_events.push_back(
-      platform::Event(platform::EventType::kPushRange, "fake_test_op", 0));
-  std::vector<std::vector<platform::Event>> time_events{thread_events};
+      phi::Event(phi::EventType::kPushRange, "fake_test_op", 0));
+  std::vector<std::vector<phi::Event>> time_events{thread_events};
   EXPECT_EQ(cost_data.SetCostData(program, time_events), false);
 }
 
 TEST(CostDataTest, TestNoWholeEvent) {
   CostData cost_data;
   ProgramDesc program = CreateTestProgram();
-  std::vector<platform::Event> thread_events;
+  std::vector<phi::Event> thread_events;
   thread_events.push_back(
-      platform::Event(platform::EventType::kPushRange, "fake_test_op", 0));
+      phi::Event(phi::EventType::kPushRange, "fake_test_op", 0));
   thread_events.push_back(
-      platform::Event(platform::EventType::kPopRange, "fake_test_op", 0));
+      phi::Event(phi::EventType::kPopRange, "fake_test_op", 0));
   thread_events.push_back(
-      platform::Event(platform::EventType::kPushRange, "fake_test_op", 0));
+      phi::Event(phi::EventType::kPushRange, "fake_test_op", 0));
   thread_events.push_back(
-      platform::Event(platform::EventType::kPopRange, "fake_test_op", 0));
-  std::vector<std::vector<platform::Event>> time_events{thread_events};
+      phi::Event(phi::EventType::kPopRange, "fake_test_op", 0));
+  std::vector<std::vector<phi::Event>> time_events{thread_events};
   EXPECT_EQ(cost_data.SetCostData(program, time_events), false);
 }
 

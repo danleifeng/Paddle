@@ -31,16 +31,23 @@ void ReduceMaxGradKernel(const Context& dev_ctx,
                          bool keep_dim,
                          bool reduce_all,
                          DenseTensor* x_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    return;
+  }
+  using XPUDataType = typename XPUTypeTrait<T>::Type;
   reduce_all = recompute_reduce_all(x, dims_arr, reduce_all);
   auto dims = dims_arr.GetData();
 
   dev_ctx.template Alloc<T>(x_grad);
-  const T* x_data = x.data<T>();
-  const T* out_data = out.data<T>();
-  const T* out_grad_data = out_grad.data<T>();
-  auto* x_grad_data = x_grad->data<T>();
+  const XPUDataType* x_data = reinterpret_cast<const XPUDataType*>(x.data<T>());
+  const XPUDataType* out_data =
+      reinterpret_cast<const XPUDataType*>(out.data<T>());
+  const XPUDataType* out_grad_data =
+      reinterpret_cast<const XPUDataType*>(out_grad.data<T>());
+  XPUDataType* x_grad_data = reinterpret_cast<XPUDataType*>(x_grad->data<T>());
   const auto& input_dim_size = x.dims().size();
-  std::vector<int> true_dims;
+  std::vector<int64_t> true_dims;
   for (size_t i = 0; i < dims.size(); ++i) {
     if (dims[i] < 0) {
       true_dims.push_back(dims[i] + input_dim_size);
@@ -48,9 +55,9 @@ void ReduceMaxGradKernel(const Context& dev_ctx,
       true_dims.push_back(dims[i]);
     }
   }
-  std::vector<int> ydims(input_dim_size);
-  std::vector<int> xdims((input_dim_size));
-  std::set<int> dims_set(true_dims.begin(), true_dims.end());
+  std::vector<int64_t> ydims(input_dim_size);
+  std::vector<int64_t> xdims((input_dim_size));
+  std::set<int64_t> dims_set(true_dims.begin(), true_dims.end());
   for (auto i = 0; i < input_dim_size; i++) {
     xdims[i] = x.dims()[i];
     if (dims_set.find(i) != dims_set.end() || reduce_all) {
@@ -60,13 +67,13 @@ void ReduceMaxGradKernel(const Context& dev_ctx,
     }
   }
 
-  T* broadcast1 = nullptr;
-  T* broadcast2 = nullptr;
+  XPUDataType* broadcast1 = nullptr;
+  XPUDataType* broadcast2 = nullptr;
   bool* equal = nullptr;
 
   xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
 
-  broadcast1 = RAII_GUARD.alloc_l3_or_gm<T>(x.numel());
+  broadcast1 = RAII_GUARD.alloc_l3_or_gm<XPUDataType>(x.numel());
   PADDLE_ENFORCE_NOT_NULL(
       broadcast1, errors::ResourceExhausted("XPU has no enough memory"));
 
@@ -74,44 +81,50 @@ void ReduceMaxGradKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_NOT_NULL(
       equal, errors::ResourceExhausted("XPU has no enough memory"));
 
-  broadcast2 = RAII_GUARD.alloc_l3_or_gm<T>(x.numel());
+  broadcast2 = RAII_GUARD.alloc_l3_or_gm<XPUDataType>(x.numel());
   PADDLE_ENFORCE_NOT_NULL(
       broadcast2, errors::ResourceExhausted("XPU has no enough memory"));
 
   // use [1] to replace [], because xpu not support []
   if (xdims.size() == 0) {
-    xdims = std::vector<int>({1});
+    xdims = std::vector<int64_t>({1});
   }
   if (ydims.size() == 0) {
-    ydims = std::vector<int>({1});
+    ydims = std::vector<int64_t>({1});
   }
 
   // step 1. broadcast out and out_grad
-  int r = xpu::broadcast<T>(
-      dev_ctx.x_context(), out_data, broadcast1, ydims, xdims);
+  int r =
+      xpu::broadcast(dev_ctx.x_context(), out_data, broadcast1, ydims, xdims);
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "broadcast");
 
-  r = xpu::broadcast<T>(
+  r = xpu::broadcast(
       dev_ctx.x_context(), out_grad_data, broadcast2, ydims, xdims);
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "broadcast");
 
   // step 2. compare out_broadcast and x
-  r = xpu::equal<T>(dev_ctx.x_context(), x_data, broadcast1, equal, x.numel());
+  r = xpu::equal(dev_ctx.x_context(), x_data, broadcast1, equal, x.numel());
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "equal");
   // step 3. get x_grad
-  r = xpu::constant<T>(dev_ctx.x_context(), broadcast1, x.numel(), 0);
+  r = xpu::constant(
+      dev_ctx.x_context(), broadcast1, x.numel(), static_cast<XPUDataType>(0));
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "constant");
-  r = xpu::select<T>(dev_ctx.x_context(),
-                     equal,
-                     broadcast2,
-                     broadcast1,
-                     x_grad_data,
-                     xdims,
-                     xdims);
+  r = xpu::select(dev_ctx.x_context(),
+                  equal,
+                  broadcast2,
+                  broadcast1,
+                  x_grad_data,
+                  xdims,
+                  xdims);
   PADDLE_ENFORCE_XDNN_SUCCESS(r, "select");
 }
 
 }  // namespace phi
 
-PD_REGISTER_KERNEL(max_grad, XPU, ALL_LAYOUT, phi::ReduceMaxGradKernel, float) {
-}
+PD_REGISTER_KERNEL(max_grad,
+                   XPU,
+                   ALL_LAYOUT,
+                   phi::ReduceMaxGradKernel,
+                   float,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16) {}

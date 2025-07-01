@@ -187,6 +187,7 @@ class CoordinatorClient : public BrpcPsClient {
 
   virtual ~CoordinatorClient() {}
 
+  using BrpcPsClient::Initialize;
   int32_t Initialize(const std::vector<std::string>& trainer_endpoints);
 
   void SetTotalFLClientsNum(uint32_t all_fl_clients_num) {

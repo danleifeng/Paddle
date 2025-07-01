@@ -14,9 +14,9 @@
 
 #pragma once
 
+#include "paddle/phi/kernels/full_kernel.h"
 #include "paddle/phi/kernels/impl/kron_kernel_impl.h"
 #include "paddle/phi/kernels/reduce_sum_kernel.h"
-
 namespace phi {
 
 template <typename T>
@@ -199,8 +199,8 @@ struct KronGradOpFunctor {
     p_stride_dout = stride_dout.Get();
     p_shape_y = dim_y.Get();
 #endif
-    // dout_x: dout * kron(ones(X), Y) re-aranged in shape (numel_x, numel_y)
-    // dout_y: dout * kron(X, ones(Y)) re-aranged in shape (numel_y, numel_x)
+    // dout_x: dout * kron(ones(X), Y) re-arranged in shape (numel_x, numel_y)
+    // dout_y: dout * kron(X, ones(Y)) re-arranged in shape (numel_y, numel_x)
     DenseTensor dout_x;
     T *p_dout_x = nullptr;
     if (dx) {
@@ -248,29 +248,54 @@ struct KronGradOpFunctor {
     if (dx) {
       auto eigen_dout_x = EigenMatrix<T>::Reshape(dout_x, 1);
       auto eigen_vec_dx = EigenVector<T>::Flatten(*dx);
-      eigen_vec_dx.device(*place) = eigen_dout_x.sum(reduce_dim);
+      if constexpr (std::is_same_v<T, phi::dtype::float16> ||
+                    std::is_same_v<T, phi::dtype::bfloat16>) {
+        eigen_vec_dx.device(*place) = eigen_dout_x.template cast<float>()
+                                          .sum(reduce_dim)
+                                          .template cast<T>();
+      } else {
+        eigen_vec_dx.device(*place) = eigen_dout_x.sum(reduce_dim);
+      }
     }
     if (dy) {
       auto eigen_dout_y = EigenMatrix<T>::Reshape(dout_y, 1);
       auto eigen_vec_dy = EigenVector<T>::Flatten(*dy);
-      eigen_vec_dy.device(*place) = eigen_dout_y.sum(reduce_dim);
+      if constexpr (std::is_same_v<T, phi::dtype::float16> ||
+                    std::is_same_v<T, phi::dtype::bfloat16>) {
+        eigen_vec_dy.device(*place) = eigen_dout_y.template cast<float>()
+                                          .sum(reduce_dim)
+                                          .template cast<T>();
+      } else {
+        eigen_vec_dy.device(*place) = eigen_dout_y.sum(reduce_dim);
+      }
     }
 #endif
   }
 };
 
 template <typename T, typename Context>
-void KronGradKernel(const Context &ctx,
+void KronGradKernel(const Context &dev_ctx,
                     const DenseTensor &x,
                     const DenseTensor &y,
                     const DenseTensor &out_grad,
                     DenseTensor *x_grad,
                     DenseTensor *y_grad) {
+  if (out_grad.numel() == 0) {
+    if (x_grad) {
+      phi::Full<T, Context>(
+          dev_ctx, phi::IntArray(common::vectorize(x_grad->dims())), 0, x_grad);
+    }
+    if (y_grad) {
+      phi::Full<T, Context>(
+          dev_ctx, phi::IntArray(common::vectorize(y_grad->dims())), 0, y_grad);
+    }
+    return;
+  }
   if (x_grad) {
-    ctx.template Alloc<T>(x_grad);
+    dev_ctx.template Alloc<T>(x_grad);
   }
   if (y_grad) {
-    ctx.template Alloc<T>(y_grad);
+    dev_ctx.template Alloc<T>(y_grad);
   }
 
   int ndims = out_grad.dims().size();
@@ -292,7 +317,7 @@ void KronGradKernel(const Context &ctx,
   }
 
   KronGradOpFunctor<Context, T> func;
-  func(ctx, out_grad, xx, yy, pdxx, pdyy);
+  func(dev_ctx, out_grad, xx, yy, pdxx, pdyy);
 }
 
 }  // namespace phi

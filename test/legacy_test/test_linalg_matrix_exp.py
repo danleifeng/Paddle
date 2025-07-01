@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import sys
 import unittest
 
@@ -22,12 +23,20 @@ import paddle
 from paddle import base
 from paddle.base import core
 
+os.environ['NVIDIA_TF32_OVERRIDE'] = '0'
+
 if sys.platform == 'win32':
     RTOL = {'float32': 1e-02, 'float64': 1e-04}
     ATOL = {'float32': 1e-02, 'float64': 1e-04}
-else:
+elif sys.platform == 'darwin':
+    RTOL = {'float32': 1e-06, 'float64': 1e-12}
+    ATOL = {'float32': 1e-06, 'float64': 1e-12}
+elif scipy.__version__ < '1.15':
     RTOL = {'float32': 1e-06, 'float64': 1e-15}
     ATOL = {'float32': 1e-06, 'float64': 1e-15}
+else:
+    RTOL = {'float32': 1e-06, 'float64': 1e-13}
+    ATOL = {'float32': 1e-06, 'float64': 1e-13}
 
 
 class MatrixExpTestCase(unittest.TestCase):
@@ -35,7 +44,13 @@ class MatrixExpTestCase(unittest.TestCase):
         self.init_config()
         self.generate_input()
         self.generate_output()
-        self.places = [paddle.CPUPlace()]
+        self.places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            self.places.append(paddle.CPUPlace())
         if core.is_compiled_with_cuda():
             self.places.append(paddle.CUDAPlace(0))
 
@@ -66,10 +81,16 @@ class MatrixExpTestCase(unittest.TestCase):
             )
 
     # TODO(megemini): cond/while_loop should be tested in pir
-    # @test_with_pir_api
+    #
     def test_static(self):
         paddle.enable_static()
-        places = [base.CPUPlace()]
+        places = []
+        if (
+            os.environ.get('FLAGS_CI_both_cpu_and_gpu', 'False').lower()
+            in ['1', 'true', 'on']
+            or not core.is_compiled_with_cuda()
+        ):
+            places.append(base.CPUPlace())
         if core.is_compiled_with_cuda():
             places.append(base.CUDAPlace(0))
 

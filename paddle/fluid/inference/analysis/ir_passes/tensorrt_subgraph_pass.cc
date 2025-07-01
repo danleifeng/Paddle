@@ -38,9 +38,7 @@
 #include "paddle/phi/common/backend.h"
 #include "paddle/phi/common/data_type.h"
 
-namespace paddle {
-namespace inference {
-namespace analysis {
+namespace paddle::inference::analysis {
 namespace {
 
 // if in mixed model precision, we should make all tensorrt_engine's output
@@ -64,7 +62,7 @@ void OutputProcess(framework::ir::Graph *graph,
   } else if (precision == phi::DataType::FLOAT32) {
     return;
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument(
+    PADDLE_THROW(common::errors::InvalidArgument(
         "mixed_precision currently not supported dtype %d, we now only support "
         "fp16 and bf16.",
         static_cast<int>(precision)));
@@ -160,7 +158,7 @@ void analysis::TensorRtSubgraphPass::ApplyImpl(
              node->Op()->Type()) != trt_disabled_ops.end()) {
       VLOG(3) << node->Op()->Type().c_str()
 
-              << " is diabled by config in TensorRT";
+              << " is disabled by config in TensorRT";
       return false;
     }
     for (const auto &out_var : node->Op()->OutputNames()) {
@@ -168,7 +166,7 @@ void analysis::TensorRtSubgraphPass::ApplyImpl(
         if (find(trt_disabled_ops.begin(), trt_disabled_ops.end(), var_name) !=
             trt_disabled_ops.end()) {
           VLOG(3) << node->Op()->Type().c_str()
-                  << " is diabled by config in TensorRT";
+                  << " is disabled by config in TensorRT";
           return false;
         }
       }
@@ -237,7 +235,7 @@ void analysis::TensorRtSubgraphPass::ApplyImpl(
               inference::tensorrt::TRTEngineManager>::Global()
               .Has(name),
           true,
-          phi::errors::PreconditionNotMet(
+          common::errors::PreconditionNotMet(
               "TRTEngineManager should has engine %s, but not found.", name));
       paddle::inference::Singleton<
           inference::tensorrt::TRTEngineManager>::Global()
@@ -305,7 +303,7 @@ std::string TensorRtSubgraphPass::CreateTensorRTOp(
   PADDLE_ENFORCE_EQ(
       subgraph.empty(),
       false,
-      phi::errors::PreconditionNotMet("The subgraph should not be empty."));
+      common::errors::PreconditionNotMet("The subgraph should not be empty."));
 
   framework::ProgramDesc *program_desc =
       Get<framework::ProgramDesc *>("program");
@@ -596,7 +594,7 @@ std::string TensorRtSubgraphPass::CreateTensorRTOp(
   for (auto name : output_names) {
     PADDLE_ENFORCE_NE(output_name_map.count(name),
                       0,
-                      phi::errors::PreconditionNotMet(
+                      common::errors::PreconditionNotMet(
                           "The output_name_map should have %s", name));
     output_mapping.push_back(output_name_map[name]);
     renamed_output_rank.push_back(origin_name_output_rank[name]);
@@ -626,12 +624,12 @@ std::string TensorRtSubgraphPass::CreateTensorRTOp(
   }
   PADDLE_ENFORCE_EQ(output_mapping.empty(),
                     false,
-                    phi::errors::PreconditionNotMet(
+                    common::errors::PreconditionNotMet(
                         "The output_mapping should not be empty."));
   PADDLE_ENFORCE_EQ(
       !block_desc.Proto()->vars().empty(),
       true,
-      phi::errors::PreconditionNotMet("the block has no var-desc"));
+      common::errors::PreconditionNotMet("the block has no var-desc"));
 
   // Get pass attrs.
   auto use_varseqlen = Get<bool>("use_varseqlen");
@@ -761,7 +759,7 @@ std::string TensorRtSubgraphPass::CreateTensorRTOp(
   op_desc->SetAttr("calibration_data", calibration_data);
   op_desc->SetAttr("enable_int8", enable_int8);
   op_desc->SetAttr("enable_fp16", enable_fp16);
-  op_desc->SetAttr("enbale_bfp16", enable_bfp16);
+  op_desc->SetAttr("enable_bfp16", enable_bfp16);
   op_desc->SetAttr("use_calib_mode", use_calib_mode);
   op_desc->SetAttr("engine_key", engine_key);
   op_desc->SetAttr("calibration_engine_key", calibration_engine_key);
@@ -934,9 +932,7 @@ std::string TensorRtSubgraphPass::CreateTensorRTOp(
   return engine_key + std::to_string(predictor_id);
 }
 
-}  // namespace analysis
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::analysis
 
 REGISTER_PASS(tensorrt_subgraph_pass,
               paddle::inference::analysis::TensorRtSubgraphPass)

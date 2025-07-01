@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 import numbers
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -25,6 +25,8 @@ from paddle.base import framework
 from paddle.distribution.transformed_distribution import TransformedDistribution
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
     from paddle.distribution import Transform, Uniform
 
@@ -248,11 +250,11 @@ class Gumbel(TransformedDistribution):
         """
         return paddle.log(self.scale) + 1 + np.euler_gamma
 
-    def sample(self, shape: Sequence[int]) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Sample from ``Gumbel``.
 
         Args:
-            shape (Sequence[int], optional): The sample shape. Defaults to ().
+            shape (Sequence[int], optional): The sample shape. Defaults to [].
 
         Returns:
             Tensor: A tensor with prepended dimensions shape.The data type is float32.
@@ -261,10 +263,10 @@ class Gumbel(TransformedDistribution):
         with paddle.no_grad():
             return self.rsample(shape)
 
-    def rsample(self, shape: Sequence[int]) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """reparameterized sample
         Args:
-            shape (Sequence[int]): 1D `int32`. Shape of the generated samples.
+            shape (Sequence[int], optional): 1D `int32`. Shape of the generated samples. Defaults to [].
 
         Returns:
             Tensor: A tensor with prepended dimensions shape.The data type is float32.

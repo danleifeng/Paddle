@@ -14,20 +14,19 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/variable_helper.h"
 
+#include "paddle/fluid/framework/dense_tensor_array.h"
 #include "paddle/fluid/framework/feed_fetch_type.h"
-#include "paddle/fluid/framework/lod_rank_table.h"
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/framework/lod_tensor_array.h"
-#include "paddle/fluid/framework/reader.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/framework/selected_rows_utils.h"
-#include "paddle/fluid/framework/string_array.h"
 #include "paddle/phi/common/place.h"
+#include "paddle/phi/core/framework/reader.h"
+#include "paddle/phi/core/vocab/string_array.h"
 
 namespace paddle::framework {
 
 void InitializeVariable(Variable *var, proto::VarType::Type var_type) {
-  if (var_type == proto::VarType::LOD_TENSOR) {
+  if (var_type == proto::VarType::DENSE_TENSOR) {
     var->GetMutable<phi::DenseTensor>();
   } else if (var_type == proto::VarType::SELECTED_ROWS) {
     var->GetMutable<phi::SelectedRows>();
@@ -37,10 +36,8 @@ void InitializeVariable(Variable *var, proto::VarType::Type var_type) {
     var->GetMutable<FetchList>();
   } else if (var_type == proto::VarType::STEP_SCOPES) {
     var->GetMutable<std::vector<framework::Scope *>>();
-  } else if (var_type == proto::VarType::LOD_RANK_TABLE) {
-    var->GetMutable<LoDRankTable>();
-  } else if (var_type == proto::VarType::LOD_TENSOR_ARRAY) {
-    var->GetMutable<LoDTensorArray>();
+  } else if (var_type == proto::VarType::DENSE_TENSOR_ARRAY) {
+    var->GetMutable<phi::TensorArray>();
   } else if (var_type == proto::VarType::STRINGS) {
     var->GetMutable<Strings>();
   } else if (var_type == proto::VarType::VOCAB) {
@@ -54,9 +51,9 @@ void InitializeVariable(Variable *var, proto::VarType::Type var_type) {
   } else if (var_type == proto::VarType::SPARSE_COO) {
     var->GetMutable<phi::SparseCooTensor>();
   } else {
-    PADDLE_THROW(phi::errors::Unavailable(
+    PADDLE_THROW(common::errors::Unavailable(
         "Variable type %d is not in "
-        "[LOD_TENSOR, SELECTED_ROWS, FEED_MINIBATCH, FETCH_LIST, "
+        "[DENSE_TENSOR, SELECTED_ROWS, FEED_MINIBATCH, FETCH_LIST, "
         "LOD_RANK_TABLE, PLACE_LIST, READER, RAW].",
         var_type));
   }
@@ -80,7 +77,7 @@ void CopyVariable(const Variable &src_var, Variable *dst_var) {
     auto *dst_t = tmp_grad_slr->mutable_value();
     framework::TensorCopy(src_t, cpu_place, dst_t);
   } else {
-    PADDLE_THROW(phi::errors::Unavailable("Unknown variable type to copy."));
+    PADDLE_THROW(common::errors::Unavailable("Unknown variable type to copy."));
   }
 }
 

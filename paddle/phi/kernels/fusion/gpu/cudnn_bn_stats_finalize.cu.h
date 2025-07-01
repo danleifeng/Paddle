@@ -40,7 +40,7 @@ struct BNStatsFinalizeArgs {
     PADDLE_ENFORCE_EQ(
         param_shape.size(),
         4U,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The size of param_shape is expected to 4. But received "
             "param_shape's size is %d, param_shape is [%s].",
             param_shape.size(),
@@ -61,7 +61,7 @@ struct BNStatsFinalizeArgs {
 template <typename T>
 class CudnnBNStatsFinalize {
  public:
-  CudnnBNStatsFinalize(const phi::GPUContext &ctx,
+  CudnnBNStatsFinalize(const phi::GPUContext &dev_ctx,
                        const std::vector<int> &param_shape)
       : train_op_(CUDNN_FUSED_BN_FINALIZE_STATISTICS_TRAINING),
         inference_op_(CUDNN_FUSED_BN_FINALIZE_STATISTICS_INFERENCE) {
@@ -69,7 +69,7 @@ class CudnnBNStatsFinalize {
   }
   ~CudnnBNStatsFinalize() {}
 
-  void Forward(const phi::GPUContext &ctx,
+  void Forward(const phi::GPUContext &dev_ctx,
                const phi::DenseTensor &sum,
                const phi::DenseTensor &sum_of_squares,
                const phi::DenseTensor &scale,
@@ -85,9 +85,9 @@ class CudnnBNStatsFinalize {
                int64_t ele_count,
                bool is_train) {
     if (is_train) {
-      TrainInit(ctx);
+      TrainInit(dev_ctx);
     } else {
-      InferenceInit(ctx);
+      InferenceInit(dev_ctx);
     }
     auto &op = is_train ? train_op_ : inference_op_;
 
@@ -97,18 +97,18 @@ class CudnnBNStatsFinalize {
         const_cast<float *>(sum_of_squares.data<float>());
     float *scale_ptr = const_cast<float *>(scale.data<float>());
     float *bias_ptr = const_cast<float *>(bias.data<float>());
-    float *saved_mean_ptr = ctx.template Alloc<float>(
+    float *saved_mean_ptr = dev_ctx.template Alloc<float>(
         saved_mean, saved_mean->numel() * sizeof(float));
-    float *saved_invstd_ptr = ctx.template Alloc<float>(
+    float *saved_invstd_ptr = dev_ctx.template Alloc<float>(
         saved_invstd, saved_invstd->numel() * sizeof(float));
-    float *running_mean_ptr = ctx.template Alloc<float>(
+    float *running_mean_ptr = dev_ctx.template Alloc<float>(
         running_mean, running_mean->numel() * sizeof(float));
-    float *running_var_ptr = ctx.template Alloc<float>(
+    float *running_var_ptr = dev_ctx.template Alloc<float>(
         running_var, running_var->numel() * sizeof(float));
-    T *equiv_scale_ptr =
-        ctx.template Alloc<T>(equiv_scale, equiv_scale->numel() * sizeof(T));
+    T *equiv_scale_ptr = dev_ctx.template Alloc<T>(
+        equiv_scale, equiv_scale->numel() * sizeof(T));
     T *equiv_bias_ptr =
-        ctx.template Alloc<T>(equiv_bias, equiv_bias->numel() * sizeof(T));
+        dev_ctx.template Alloc<T>(equiv_bias, equiv_bias->numel() * sizeof(T));
     op.SetOpVariantParamAttrPtr(CUDNN_PTR_BN_SCALE, scale_ptr);
     op.SetOpVariantParamAttrPtr(CUDNN_PTR_BN_BIAS, bias_ptr);
     op.SetOpVariantParamAttrPtr(CUDNN_PTR_BN_RUNNING_MEAN, running_mean_ptr);
@@ -130,12 +130,12 @@ class CudnnBNStatsFinalize {
                                   &avg_factor);
     }
     // fused op execute
-    auto handle = ctx.cudnn_handle();
+    auto handle = dev_ctx.cudnn_handle();
     op.Execute(handle);
   }
 
  private:
-  void TrainInit(const phi::GPUContext &ctx) {
+  void TrainInit(const phi::GPUContext &dev_ctx) {
     // Set constant_param for train op
     train_op_.SetOpConstParamAttr({CUDNN_PARAM_YSUM_PLACEHOLDER,
                                    CUDNN_PARAM_YSQSUM_PLACEHOLDER,
@@ -156,23 +156,23 @@ class CudnnBNStatsFinalize {
                                   args_.out_desc.desc());
 
     // Get workspace
-    auto handle = ctx.cudnn_handle();
+    auto handle = dev_ctx.cudnn_handle();
     train_op_.SetOpConstParamAttr(CUDNN_PARAM_BN_MODE,
                                   CUDNN_BATCHNORM_SPATIAL_PERSISTENT);
     // Check workspace size, also creates plan.
     size_t workspace_size_bytes = train_op_.GetWorkspaceSizeInBytes(handle);
-    PADDLE_ENFORCE_EQ(
-        workspace_size_bytes,
-        0U,
-        phi::errors::InvalidArgument("Unexpected non-zero workspace size for "
-                                     "CudnnBNStatsFinalize."));
+    PADDLE_ENFORCE_EQ(workspace_size_bytes,
+                      0U,
+                      common::errors::InvalidArgument(
+                          "Unexpected non-zero workspace size for "
+                          "CudnnBNStatsFinalize."));
     train_op_.SetOpVariantParamAttrPtr(CUDNN_PTR_WORKSPACE,
                                        static_cast<void *>(nullptr));
     train_op_.SetOpVariantParamAttrPtr(CUDNN_PTR_WORKSPACE,
                                        &workspace_size_bytes);
   }
 
-  void InferenceInit(const phi::GPUContext &ctx) {
+  void InferenceInit(const phi::GPUContext &dev_ctx) {
     // Set constant_param for inference op
     inference_op_.SetOpConstParamAttr({CUDNN_PARAM_BN_SCALE_PLACEHOLDER,
                                        CUDNN_PARAM_BN_BIAS_PLACEHOLDER,
@@ -188,16 +188,16 @@ class CudnnBNStatsFinalize {
                                       args_.out_desc.desc());
 
     // Get workspace
-    auto handle = ctx.cudnn_handle();
+    auto handle = dev_ctx.cudnn_handle();
     inference_op_.SetOpConstParamAttr(CUDNN_PARAM_BN_MODE,
                                       CUDNN_BATCHNORM_SPATIAL_PERSISTENT);
     // Check workspace size, also creates plan.
     size_t workspace_size_bytes = inference_op_.GetWorkspaceSizeInBytes(handle);
-    PADDLE_ENFORCE_EQ(
-        workspace_size_bytes,
-        0U,
-        phi::errors::InvalidArgument("Unexpected non-zero workspace size for "
-                                     "CudnnBNStatsFinalize."));
+    PADDLE_ENFORCE_EQ(workspace_size_bytes,
+                      0U,
+                      common::errors::InvalidArgument(
+                          "Unexpected non-zero workspace size for "
+                          "CudnnBNStatsFinalize."));
     inference_op_.SetOpVariantParamAttrPtr(CUDNN_PTR_WORKSPACE,
                                            static_cast<void *>(nullptr));
     inference_op_.SetOpVariantParamAttrPtr(CUDNN_PTR_WORKSPACE,

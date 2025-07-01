@@ -31,7 +31,7 @@ namespace phi {
 template <typename T, bool IsFoundInfOnCPU>
 class UpdateLossScalingFunctor<phi::CPUContext, T, IsFoundInfOnCPU> {
  public:
-  void operator()(const phi::CPUContext& ctx UNUSED,
+  void operator()(const phi::CPUContext& dev_ctx UNUSED,
                   const bool* found_inf_data,
                   const T* pre_loss_scaling_data,
                   const int* good_in_data,
@@ -46,7 +46,7 @@ class UpdateLossScalingFunctor<phi::CPUContext, T, IsFoundInfOnCPU> {
     PADDLE_ENFORCE_EQ(
         IsFoundInfOnCPU,
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The Input(FoundInfinite) should be on the CPUPlace."));
     Update<T>(found_inf_data,
               pre_loss_scaling_data,

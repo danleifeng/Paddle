@@ -58,9 +58,9 @@
 
 - op : adam_ (adam)
   inputs :
-    {param: Param, grad: Grad, learning_rate: LearningRate, moment1: Moment1, moment2: Moment2, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, master_param: MasterParam, skip_update: SkipUpdate}
+    {param: Param, grad: Grad, learning_rate: LearningRate, moment1: Moment1, moment2: Moment2, moment2_max: Moment2Max, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, master_param: MasterParam, skip_update: SkipUpdate}
   outputs :
-    {param_out: ParamOut, moment1_out: Moment1Out, moment2_out: Moment2Out, beta1_pow_out: Beta1PowOut, beta2_pow_out: Beta2PowOut, master_param_out: MasterParamOut}
+    {param_out: ParamOut, moment1_out: Moment1Out, moment2_out: Moment2Out, moment2_max_out: Moment2MaxOut, beta1_pow_out: Beta1PowOut, beta2_pow_out: Beta2PowOut, master_param_out: MasterParamOut}
   scalar :
     beta1 :
       data_type : float
@@ -81,9 +81,9 @@
 
 - op : adamw_ (adamw)
   inputs :
-    {param: Param, grad: Grad, learning_rate: LearningRate, moment1: Moment1, moment2: Moment2, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, master_param: MasterParam, skip_update: SkipUpdate}
+    {param: Param, grad: Grad, learning_rate: LearningRate, moment1: Moment1, moment2: Moment2, moment2_max: Moment2Max, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, master_param: MasterParam, skip_update: SkipUpdate}
   outputs :
-    {param_out: ParamOut, moment1_out: Moment1Out, moment2_out: Moment2Out, beta1_pow_out: Beta1PowOut, beta2_pow_out: Beta2PowOut, master_param_out: MasterParamOut}
+    {param_out: ParamOut, moment1_out: Moment1Out, moment2_out: Moment2Out, moment2_max_out: Moment2MaxOut, beta1_pow_out: Beta1PowOut, beta2_pow_out: Beta2PowOut, master_param_out: MasterParamOut}
   scalar :
     beta1 :
       data_type : float
@@ -206,6 +206,12 @@
     amin_grad : GetReduceGradExpectedKernelType
   manual_signature : [amin]
 
+- op : anchor_generator
+  inputs:
+    input : Input
+  outputs:
+    {anchors : Anchors, variances_out : Variances}
+
 - op : angle
   backward : angle_grad
   inputs :
@@ -233,6 +239,16 @@
     {start : Start, end : End, step : Step}
   outputs :
     out : Out
+  scalar:
+    start:
+      data_type : double
+      support_tensor : true
+    end:
+      data_type : double
+      support_tensor : true
+    step:
+      data_type : double
+      support_tensor : true
 
 - op : argmax(arg_max)
   inputs :
@@ -356,6 +372,17 @@
   outputs :
     {auc : AUC, stat_pos_out : StatPosOut, stat_neg_out : StatNegOut}
 
+- op : baddbmm
+  backward : baddbmm_grad
+  inputs :
+    {input : Input, x : X, y : Y}
+  outputs :
+    out : Out
+  attrs :
+    {alpha : Alpha, beta : Beta}
+  extra :
+    attrs : [bool use_mkldnn = false]
+
 - op : barrier
   inputs :
     {x : X}
@@ -435,7 +462,7 @@
   attrs:
     data_format: data_layout
   extra :
-    attrs : [bool use_mkldnn = false]
+    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32"]
 
 - op : bincount
   inputs :
@@ -480,6 +507,7 @@
     {out : Out}
 
 - op : bmm
+  backward : bmm_grad, bmm_double_grad
   inputs :
     {x : X, y : Y}
   outputs :
@@ -504,6 +532,7 @@
   drop_empty_grad : [input_grad]
 
 - op : c_concat
+  backward: c_concat_grad
   inputs :
     x : X
   outputs :
@@ -535,7 +564,7 @@
   outputs :
     out : Out
   extra :
-    attrs : [bool use_mkldnn = false]
+    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32"]
 
 - op : ceil
   backward : ceil_grad
@@ -662,7 +691,7 @@
   extra :
     attrs : [bool is_test = false, bool use_cudnn = true, bool use_mkldnn = false, bool use_addto = false,
              bool force_fp32_output = false,
-             int workspace_size_MB = phi::backends::gpu::GetDefaultConvWorkspaceSizeLimitMB(), bool exhaustive_search = false]
+             int workspace_size_MB = phi::backends::gpu::GetDefaultConvWorkspaceSizeLimitMB(), bool exhaustive_search = false, str mkldnn_data_type = "float32"]
   get_expected_kernel_type :
     conv2d : GetConvExpectedKernelType
 
@@ -942,14 +971,6 @@
     {x : X, y : Y}
   outputs :
     out : Out
-
-- op : distributed_push_sparse
-  inputs :
-    {ids : Ids, shows : Shows, clicks: Clicks}
-  outputs :
-    output : Outputs
-  extra :
-    attrs : ['int[] slots = {}']
 
 - op : divide (elementwise_div)
   backward : divide_grad (elementwise_div_grad)
@@ -1243,6 +1264,12 @@
     out_scale : OutScale
     out_scales : OutScales
 
+- op : faster_tokenizer
+  inputs:
+    {vocab : Vocab, text : Text, text_pair : TextPair}
+  outputs:
+    {input_ids : InputIds, segment_ids : SegmentIds}
+
 - op : fc
   inputs :
     input : Input
@@ -1299,6 +1326,26 @@
     {x : X, y : Y}
   outputs :
     out : Out
+
+- op : flash_attn_unpadded
+  backward : flash_attn_unpadded_grad
+  scalar :
+    max_seqlen_q :
+      data_type : int64_t
+      support_tensor : true
+    max_seqlen_k :
+      data_type : int64_t
+      support_tensor : true
+
+- op : flash_attn_varlen_qkvpacked
+  backward : flash_attn_varlen_qkvpacked_grad
+  scalar :
+    max_seqlen_q :
+      data_type : int64_t
+      support_tensor : true
+    max_seqlen_k :
+      data_type : int64_t
+      support_tensor : true
 
 - op : flatten (flatten_contiguous_range)
   backward : flatten_grad (flatten_contiguous_range_grad)
@@ -1419,10 +1466,10 @@
 - op : fused_adam_(fused_adam)
   inputs :
     {params : Params, grads : Grads, learning_rate : LearningRate, moments1 : Moments1,
-     moments2 : Moments2, beta1_pows : Beta1Pows, beta2_pows : Beta2Pows, master_params : MasterParams,
+     moments2 : Moments2, moments2_max : Moments2Max, beta1_pows : Beta1Pows, beta2_pows : Beta2Pows, master_params : MasterParams,
      skip_update : SkipUpdate}
   outputs :
-    {params_out : ParamsOut, moments1_out : Moments1Out, moments2_out : Moments2Out,
+    {params_out : ParamsOut, moments1_out : Moments1Out, moments2_out : Moments2Out, moments2_max_out : Moments2MaxOut,
      beta1_pows_out : Beta1PowsOut, beta2_pows_out : Beta2PowsOut, master_params_out : MasterParamsOut}
 
 - op : fused_attention
@@ -1633,6 +1680,13 @@
     dropout1_out: Dropout1Out
     dropout2_out: Dropout2Out
 
+- op : fused_gate_attention
+  backward: fused_gate_attention_grad
+  inputs:
+    {query : Query, key : Key, query_weight : QueryWeight, key_weight : KeyWeight, value_weight : ValueWeight, qkv_weight : QKVWeight, nonbatched_bias : NonbatchedBias, src_mask : SrcMask, gate_weight : GateWeight, gate_bias : GateBias, out_linear_weight : OutLinearWeight, out_linear_bias : OutLinearBias}
+  outputs:
+    {query_transpose_out : QueryTransposeOut, key_transpose_out : KeyTransposeOut, value_transpose_out : ValueTransposeOut, qkv_transpose_out : QKVTransposeOut, softmax_out : SoftmaxOut, softmax_lse : SoftmaxLse, fmha_out : FMHAOut, gate_out : GateOut, out : Out}
+
 - op : fused_gemm_epilogue
   inputs:
     {x : X, y : Y, bias : Bias}
@@ -1644,6 +1698,24 @@
     {x : X, y : Y, reserve_space: ReserveSpace, out_grad : DOut}
   outputs :
     {x_grad : DX, y_grad : DY, bias_grad : DBias}
+
+- op : fused_multi_transformer_int8
+  inputs:
+    {x : X, ln_scale : LnScale, ln_bias : LnBias, qkv_w : QKVW, qkv_bias : QKVBias, cache_kv : CacheKV,
+    time_step : TimeStep, src_mask : SrcMask, out_linear_w : OutLinearW, out_linear_bias : OutLinearBias,
+    ffn_ln_scale : FFNLnScale, ffn_ln_bias : FFNLnBias, ffn1_weight : FFN1Weight, ffn1_bias : FFN1Bias,
+    ffn2_weight : FFN2Weight, ffn2_bias : FFN2Bias, qkv_out_scale : QKVOutScale, out_linear_out_scale : OutLinearOutScale,
+    ffn1_out_scale : FFN1OutScale, ffn2_out_scale : FFN2OutScale}
+  outputs:
+    {cache_kv_out : CacheKVOut, out : Out}
+
+- op : fused_seqpool_cvm
+  backward: fused_seqpool_cvm_grad
+  inputs:
+    {x : X, cvm : CVM}
+  outputs:
+    out : Out
+  drop_empty_grad : [x_grad]
 
 - op : fused_transpose
   inputs:
@@ -1716,15 +1788,6 @@
     context_length : contextLength
     context_start : contextStart
     context_stride : contextStride
-
-- op : fusion_seqexpand_concat_fc
-  inputs :
-    x : X
-    fc_weight : FCWeight
-    fc_bias : FCBias
-  outputs :
-    out : Out
-    fc_out : FCOut
 
 - op : fusion_seqpool_concat
   inputs:
@@ -1973,6 +2036,7 @@
     out : Out
 
 - op : index_select
+  backward : index_select_grad, index_select_double_grad
   inputs :
     {x : X, index : Index}
   outputs :
@@ -2141,6 +2205,20 @@
   outputs:
     {rpn_rois : RpnRois, rpn_roi_probs : RpnRoiProbs, rpn_rois_num : RpnRoisNum}
 
+- op : legacy_matmul (matmul)
+  backward : legacy_matmul_grad (matmul_grad), legacy_matmul_double_grad (matmul_grad_grad)
+  inputs :
+    {x : X, y : Y, out_grad : DOut, x_grad_grad : DDX, y_grad_grad : DDY}
+  attrs :
+    {transpose_x : transpose_X, transpose_y : transpose_Y}
+  outputs :
+    {out : Out, x_grad : DX, y_grad : DY}
+  extra :
+    attrs : [bool use_quantizer = false, str mkldnn_data_type = "float32",
+             float Scale_x = 1.0f, float Scale_y = 1.0f,
+             float Scale_out = 1.0f, bool force_fp32_output = false]
+  complex_promote : [X, Y]
+
 - op : legacy_nearest_interp (nearest_interp)
   backward : legacy_nearest_interp_grad (nearest_interp_grad)
   inputs :
@@ -2151,6 +2229,21 @@
     data_format: data_layout
   extra :
     attrs : [bool use_mkldnn = false]
+
+- op : legacy_reshape (reshape)
+  backward : legacy_reshape_grad (reshape_grad)
+  inputs:
+    x : X
+  outputs:
+    out : Out
+    xshape: XShape
+  int_array:
+    shape :
+      data_type : int
+      tensor_name : Shape
+      tensors_name : ShapeTensor
+  extra :
+    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32", bool use_quantizer = false]
 
 - op : lerp
   backward : lerp_grad
@@ -2192,6 +2285,13 @@
   inputs :
     {start : Start, stop : Stop, number : Num}
   outputs :
+    out : Out
+
+- op : lod_reset
+  backward : lod_reset_grad
+  inputs:
+    {x : X, y : Y}
+  outputs:
     out : Out
 
 - op : log
@@ -2299,6 +2399,16 @@
   outputs :
     out : Out
 
+- op : lookup_table
+  backward: lookup_table_grad
+  inputs:
+    {w : W, ids : Ids}
+  outputs:
+    out : Out
+  extra:
+    attrs: [int slot = 0]
+  manual_signature : [lookup_table, lookup_table_grad]
+
 - op : lrn
   backward : lrn_grad
   inputs :
@@ -2333,6 +2443,7 @@
     {softmax : Softmax, loss : Loss}
 
 - op : masked_select
+  backward : masked_select_grad, masked_select_double_grad
   inputs :
     {x : X, mask : Mask}
   outputs :
@@ -2354,7 +2465,7 @@
   outputs :
     out : Out
   extra :
-    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32"]
+    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32", bool force_fp32_output = false]
   complex_promote : [X, Y]
 
 - op : matmul_with_flatten (mul)
@@ -2451,6 +2562,10 @@
     {axis : dim, keepdim : keep_dim}
   extra :
     attrs : [bool use_mkldnn = false]
+  int_array:
+      axis :
+        data_type : int
+        support_tensor : true
 
 - op : mean_all (mean)
   backward : mean_all_grad (mean_grad)
@@ -2458,6 +2573,16 @@
     x : X
   outputs :
     out : Out
+
+- op : memory_efficient_attention
+  backward : memory_efficient_attention_grad
+  scalar :
+    max_seqlen_q :
+      data_type : int64_t
+      support_tensor : true
+    max_seqlen_k :
+      data_type : int64_t
+      support_tensor : true
 
 - op : merge_selected_rows
   inputs :
@@ -2467,9 +2592,9 @@
 
 - op : merged_adam_
   inputs :
-    {param: Param, grad: Grad, learning_rate: LearningRate, moment1: Moment1, moment2: Moment2, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, master_param: MasterParam}
+    {param: Param, grad: Grad, learning_rate: LearningRate, moment1: Moment1, moment2: Moment2, moment2_max: Moment2Max, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, master_param: MasterParam}
   outputs :
-    {param_out: ParamOut, moment1_out: Moment1Out, moment2_out: Moment2Out, beta1_pow_out: Beta1PowOut, beta2_pow_out: Beta2PowOut, master_param_out: MasterParamOut}
+    {param_out: ParamOut, moment1_out: Moment1Out, moment2_out: Moment2Out, moment2_max_out: Moment2MaxOut, beta1_pow_out: Beta1PowOut, beta2_pow_out: Beta2PowOut, master_param_out: MasterParamOut}
   scalar :
     beta1 :
       data_type : float
@@ -2638,12 +2763,6 @@
       data_type : int
   extra:
     outputs : [medians]
-
-- op : nce
-  backward : nce_grad
-  extra :
-    attrs : [int trainer_id = 0, 'int64_t[] height_sections = {}', 'str[] epmap = {}',
-             'str[] table_names = {}', 'int[] custom_neg_classes = {}']
 
 - op : nearest_interp (nearest_interp_v2)
   backward : nearest_interp_grad (nearest_interp_v2_grad)
@@ -2899,55 +3018,8 @@
   outputs :
     out : Out
 
-- op : pull_box_sparse
-  inputs :
-    { w : W, ids: Ids}
-  outputs :
-    out : Out
-  attrs :
-    sparse : is_sparse
-  extra :
-    attrs : [bool is_sparse = false, bool is_distributed = false, int size = 1]
-
-- op : pull_gpups_sparse
-  backward : push_gpups_sparse
-  inputs :
-    {w : W, ids : Ids}
-  outputs :
-    out : Out
-
-- op : pull_sparse_v2
-  inputs :
-    { ids : Ids, w : W}
-  outputs :
-    out : Out
-  extra :
-    attrs : [int embedding_dim = 11, int table_id = 0, str accessor_class = "", str ctr_label_name = "", int padding_id = 0, bool scale_sparse_grad = true, 'str[] input_names = {}', bool is_distributed = true]
-
-- op : push_box_sparse
-  inputs :
-    ids: Ids
-  outputs :
-    out : Out
-  attrs :
-    sparse : is_sparse
-
-- op : push_dense
-  inputs :
-    ids : Ids
-  attrs :
-    {table_id : TableId, scale_data_norm : ScaleDataNorm, input_names: InputNames}
-
-- op : push_sparse_v2
-  inputs :
-    { x : Ids, W : w}
-  outputs :
-    out : Out
-  extra :
-    attrs : [int embedding_dim = 11, int table_id = 0, str accessor_class = "", str ctr_labe_lname = "", int padding_id = 0, bool scales_parse_grad = true, 'str[] input_names = {}', bool is_distributed = true]
-
 - op : put_along_axis
-  backward : put_along_axis_grad
+  backward : put_along_axis_grad, put_along_axis_double_grad
   inputs :
     {arr : Input, indices : Index, values : Value}
   outputs :
@@ -3022,7 +3094,7 @@
   outputs :
     out : Out
   extra :
-    attrs : [bool use_mkldnn = false, bool use_cudnn = false]
+    attrs : [bool use_mkldnn = false, bool use_cudnn = false, str mkldnn_data_type = "float32"]
 
 - op : relu6
   backward : relu6_grad
@@ -3062,7 +3134,7 @@
     repeats : Repeats
 
 - op : repeat_interleave
-  backward : repeat_interleave_grad
+  backward : repeat_interleave_grad, repeat_interleave_double_grad
   inputs :
     x : X
   outputs :
@@ -3071,7 +3143,7 @@
     {repeats : Repeats, axis : dim}
 
 - op : repeat_interleave_with_tensor_index
-  backward : repeat_interleave_with_tensor_index_grad
+  backward : repeat_interleave_with_tensor_index_grad, repeat_interleave_with_tensor_index_double_grad
   inputs :
     {x : X, repeats: RepeatTensor}
   outputs:
@@ -3209,7 +3281,7 @@
       data_type : float
       support_tensor : false
   extra :
-    attrs : [bool use_mkldnn = false]
+    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32"]
 
 - op : scatter
   backward : scatter_grad
@@ -3254,12 +3326,6 @@
   backward : selu_grad
   inputs :
     x : X
-  outputs :
-    out : Out
-
-- op : send_and_recv
-  inputs :
-    x: X
   outputs :
     out : Out
 
@@ -3378,7 +3444,7 @@
   outputs :
     out : Out
   extra :
-    attrs : [bool use_mkldnn = false, bool use_cudnn = false]
+    attrs : [bool use_mkldnn = false, bool use_cudnn = false, str mkldnn_data_type = "float32"]
 
 - op : sign
   backward : sign_grad
@@ -3537,22 +3603,22 @@
   outputs:
     out : Out
   int_array:
-      sections :
-          data_type : int
-          support_tensor : true
+    sections :
+      data_type : int
+      support_tensor : true
   scalar :
-      axis :
-        data_type : int
-        support_tensor : true
+    axis :
+      data_type : int
+      support_tensor : true
   extra :
     attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32"]
 
 - op : split_with_num
   scalar :
-      axis :
-        data_type : int
-        support_tensor : true
-        tensor_name : AxisTensor
+    axis :
+      data_type : int
+      support_tensor : true
+      tensor_name : AxisTensor
 
 - op : sqrt
   backward : sqrt_grad, sqrt_double_grad (sqrt_grad_grad)
@@ -3605,6 +3671,12 @@
   outputs :
     out : Out
 
+- op : straight_through_estimator_grad
+  inputs :
+    x : X
+  outputs :
+    out : Out
+
 - op : strided_slice
   backward : strided_slice_grad
   inputs :
@@ -3649,7 +3721,7 @@
   attrs:
     { axis : dim,  keepdim : keep_dim, dtype : out_dtype}
   extra :
-    attrs : [bool use_mkldnn = false]
+    attrs : [bool use_mkldnn = false, str mkldnn_data_type = "float32"]
   int_array:
       axis :
         data_type : int
@@ -3947,7 +4019,7 @@
     {warpctcgrad : WarpCTCGrad, loss : Loss}
 
 - op : where
-  backward : where_grad
+  backward : where_grad, where_double_grad
   inputs :
     {condition : Condition, x : X, y : Y}
   outputs :
@@ -3992,85 +4064,13 @@
   outputs:
     output : Output
 
-- op: c_allgather
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_allreduce_avg
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_allreduce_max
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_allreduce_min
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_allreduce_prod
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
 - op: c_allreduce_sum
   inputs :
     x : X
   outputs :
     out: Out
 
-- op: c_broadcast
-  inputs :
-    x : X
-  outputs :
-    out : Out
-
 - op: c_identity
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_reduce_avg
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_reduce_max
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_reduce_min
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_reduce_prod
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_reduce_sum
-  inputs :
-    x : X
-  outputs :
-    out: Out
-
-- op: c_reducescatter
   inputs :
     x : X
   outputs :
@@ -4081,18 +4081,6 @@
     x : X
   outputs :
     out: Out
-
-- op: c_sync_calc_stream
-  inputs :
-    x : X
-  outputs :
-    out : Out
-
-- op: c_sync_comm_stream
-  inputs :
-    x : X
-  outputs :
-    out : Out
 
 - op: channel_shuffle
   inputs:
@@ -4105,6 +4093,8 @@
     {inference : Inference, label : Label, seq_length : SeqLength}
   outputs:
     {precision : Precision, recall : Recall, f1_score : F1-Score, num_infer_chunks : NumInferChunks, num_label_chunks : NumLabelChunks, num_correct_chunks : NumCorrectChunks}
+
+- op: comm_init_all
 
 - op: crf_decoding
   inputs:
@@ -4155,13 +4145,6 @@
   outputs:
     out : Out
 
-- op: detection_map
-  backward: detection_map_grad
-  inputs:
-    {detect_res : DetectRes, label : Label, has_state : HasState, pos_count : PosCount, true_pos : TruePos, false_pos : FalsePos}
-  outputs:
-    {accum_pos_count : AccumPosCount, accum_true_pos : AccumTruePos, accum_false_pos : AccumFalsePos, m_ap : MAP}
-
 - op: dgc
   inputs:
     {u: U, v: V, grad: Grad}
@@ -4182,23 +4165,11 @@
     multi_level_rois_num: MultiLevelRoIsNum
     restore_index: RestoreIndex
 
-- op: distributed_fused_lamb
-  inputs:
-    {param: Param, grad: Grad, fp32_fused_param: FP32FusedParam, fp32_fused_grad: FP32FusedGrad, fp16_fused_param: FP16FusedParam, fp16_fused_grad: FP16FusedGrad, moment1: Moment1, moment2: Moment2, beta1pow: Beta1Pow, beta2pow: Beta2Pow, fused_param_offsets: FusedParamOffsets, fp32_shard_fused_param_offsets: FP32ShardFusedParamOffsets, fp16_shard_fused_param_offsets: FP16ShardFusedParamOffsets, param_info: ParamInfo, param_order: ParamOrder, learning_rate: LearningRate, global_scale: GlobalScale}
-  outputs:
-    {param_out : ParamOut, fp32_fused_param_out: FP32FusedParamOut, fp16_fused_param_out: FP16FusedParamOut, fp32_acc_fused_grad: FP32AccFusedGrad, fp16_acc_fused_grad: FP16AccFusedGrad, moment1_out: Moment1Out, moment2_out: Moment2Out, beta1pow_out: Beta1PowOut, beta2pow_out: Beta2PowOut, found_inf: FoundInf, acc_step: AccStep, stop_update: StopUpdate, step: Step}
-
 - op: distributed_fused_lamb_init
   inputs:
     {param: Param, grad: Grad}
   outputs:
     {fp32_fused_param: FP32FusedParam, fp32_fused_grad: FP32FusedGrad, fp16_fused_param: FP16FusedParam, fp16_fused_grad: FP16FusedGrad, moment1: Moment1, moment2: Moment2, beta1_pow: Beta1Pow, beta2_pow: Beta2Pow, fused_param_offsets: FusedParamOffsets, fp32_shard_fused_param_offsets: FP32ShardFusedParamOffsets, fp16_shard_fused_param_offsets: FP16ShardFusedParamOffsets, param_info: ParamInfo, param_order: ParamOrder, param_out: ParamOut, master_param_out: MasterParamOut, grad_out: GradOut, global_scale: GlobalScale, step: Step}
-
-- op: distributed_lookup_table
-  inputs:
-    {ids: Ids, w: W}
-  outputs:
-    outputs: Outputs
 
 - op: dpsgd
   inputs:
@@ -4404,15 +4375,10 @@
   outputs :
     out : Out
 
-- op: moe
-  inputs:
-    x: X
-    gate: Gate
-    bmm0: Bmm0
-    bias0: Bias0
-    bmm1: Bmm1
-    bias1: Bias1
-  outputs:
+- op: mp_allreduce_sum
+  inputs :
+    x : X
+  outputs :
     out: Out
 
 - op: nce
@@ -4421,6 +4387,9 @@
     {input : Input, label : Label, weight : Weight, bias : Bias, sample_weight : SampleWeight, custom_dist_probs : CustomDistProbs, custom_dist_alias : CustomDistAlias, custom_dist_alias_probs : CustomDistAliasProbs}
   outputs:
     {cost : Cost, sample_logits : SampleLogits, sample_labels : SampleLabels}
+  extra :
+    attrs : [int trainer_id = 0, 'int64_t[] height_sections = {}', 'str[] epmap = {}',
+             'str[] table_names = {}', 'int[] custom_neg_classes = {}']
 
 - op: nop
   inputs :
@@ -4606,6 +4575,18 @@
   inputs:
     {x : X, window : Window}
   outputs:
+    out : Out
+
+- op: sync_calc_stream(c_sync_calc_stream)
+  inputs :
+    x : X
+  outputs :
+    out : Out
+
+- op: sync_comm_stream(c_sync_comm_stream)
+  inputs :
+    x : X
+  outputs :
     out : Out
 
 - op: temporal_shift

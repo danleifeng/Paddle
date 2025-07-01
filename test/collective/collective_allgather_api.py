@@ -91,17 +91,6 @@ class TestCollectiveAllgatherAPI(test_base.TestCollectiveAPIRunnerBase):
             paddle.distributed.all_gather(tensor_list, tindata)
             return tensor_list
 
-    def get_model_new(
-        self, main_prog, startup_program, rank, dtype=None, reduce_type=None
-    ):
-        with base.program_guard(main_prog, startup_program):
-            tensor_list = []
-            tindata = paddle.static.data(
-                name="tindata", shape=[10, 1000], dtype=dtype
-            )
-            all_gather_new(tensor_list, tindata)
-            return tensor_list
-
     def run_trainer(self, args):
         train_prog = base.Program()
         startup_prog = base.Program()
@@ -109,10 +98,9 @@ class TestCollectiveAllgatherAPI(test_base.TestCollectiveAPIRunnerBase):
         rank = args["trainerid"]
         current_endpoint = args["currentendpoint"]
         nranks = 2
-        if args["use_comm_context"] or args["dynamic_static_unified_comm"]:
-            paddle.distributed.collective._init_parallel_env(args["backend"])
-        else:
-            paddle.distributed.init_parallel_env()
+
+        paddle.distributed.collective._init_parallel_env(args["backend"])
+
         if args['backend'] == 'nccl':
             device_id = int(os.getenv("FLAGS_selected_gpus", "0"))
             place = base.CUDAPlace(

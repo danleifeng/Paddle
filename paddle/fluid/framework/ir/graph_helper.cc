@@ -25,9 +25,8 @@ limitations under the License. */
 
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/framework/details/nccl_op_handle.h"
-#include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/phi/core/distributed/nccl_comm_context.h"
-COMMON_DECLARE_bool(dynamic_static_unified_comm);
+#include "paddle/phi/core/platform/collective_helper.h"
 #endif
 #include "paddle/common/flags.h"
 PD_DECLARE_bool(convert_all_blocks);
@@ -153,10 +152,10 @@ bool FindCircleSubGraph(const Graph &graph,
 std::vector<ir::Node *> TopologySortOperations(const Graph &graph) {
   std::map<ir::Node *, std::set<ir::Node *, ir::NodeComp>, ir::NodeComp>
       adj_list = BuildOperationAdjList(graph);
-  PADDLE_ENFORCE_EQ(
-      HasCircleInternal(adj_list, nullptr),
-      false,
-      phi::errors::InvalidArgument("Generated graph shouldn't contain cycle."));
+  PADDLE_ENFORCE_EQ(HasCircleInternal(adj_list, nullptr),
+                    false,
+                    common::errors::InvalidArgument(
+                        "Generated graph shouldn't contain cycle."));
   std::unordered_set<ir::Node *> visited;
   std::vector<ir::Node *> ret;
   for (auto const &adj : adj_list) {
@@ -208,7 +207,7 @@ std::map<ir::Node *, std::unordered_set<ir::Node *>> BuildOperationOutAdjList(
       for (auto &adj_n : var->outputs) {
         PADDLE_ENFORCE_EQ(adj_n->NodeType(),
                           ir::Node::Type::kOperation,
-                          phi::errors::InvalidArgument(
+                          common::errors::InvalidArgument(
                               "Node(%s)'s type(%d) must be kOperation type.",
                               adj_n->Name(),
                               static_cast<int>(adj_n->NodeType())));
@@ -385,7 +384,7 @@ size_t GraphNum(const Graph &graph) {
           new std::ofstream(FLAGS_print_sub_graph_dir));
       PADDLE_ENFORCE_EQ(fout->good(),
                         true,
-                        phi::errors::Unavailable(
+                        common::errors::Unavailable(
                             "Can not open file %s for printing the graph.",
                             FLAGS_print_sub_graph_dir));
       *fout << out.str();
@@ -436,10 +435,10 @@ std::vector<ir::Node *> TopologySortGraphByDescOrder(const Graph &graph) {
            std::set<ir::Node *, DescOrderComparator>,
            DescOrderComparator>
       adj_list = BuildOperationAdjList<DescOrderComparator>(graph);
-  PADDLE_ENFORCE_EQ(
-      HasCircleInternal<DescOrderComparator>(adj_list, nullptr),
-      false,
-      phi::errors::InvalidArgument("Generated graph shouldn't contain cycle."));
+  PADDLE_ENFORCE_EQ(HasCircleInternal<DescOrderComparator>(adj_list, nullptr),
+                    false,
+                    common::errors::InvalidArgument(
+                        "Generated graph shouldn't contain cycle."));
   std::unordered_set<ir::Node *> visited;
   std::vector<ir::Node *> ret;
   for (auto const &adj : adj_list) {
@@ -451,7 +450,7 @@ std::vector<ir::Node *> TopologySortGraphByDescOrder(const Graph &graph) {
   return ret;
 }
 
-void RemoveControlDepInputAndOuput(OpDesc *op_desc) {
+void RemoveControlDepInputAndOutput(OpDesc *op_desc) {
   auto remove_control_dep_var = [](VariableNameMap *var_name_map) {
     for (auto &pair : *var_name_map) {
       std::vector<std::string> &var_names = pair.second;
@@ -499,7 +498,7 @@ void ReplaceAllReduceOp(const Node &node,
     all_reduce_var_name = "fake_coalesce_" + std::to_string(ops->size());
     proto::VarDesc var_desc;
     var_desc.set_name(all_reduce_var_name);
-    var_desc.mutable_type()->set_type(proto::VarType::LOD_TENSOR);
+    var_desc.mutable_type()->set_type(proto::VarType::DENSE_TENSOR);
     block->mutable_vars()->Add()->CopyFrom(var_desc);
     VLOG(4) << "add variable for check_memory_continue: "
             << all_reduce_var_name;
@@ -525,24 +524,19 @@ void ReplaceAllReduceOp(const Node &node,
     all_reduce_var_name = in_var_handles[0]->Name();
   }
 
-  // add c_allreduce_sum OP
+  // add all_reduce_sum OP
   ops->emplace_back();
   OpDesc &all_reduce_op_desc = ops->back();
-  all_reduce_op_desc.SetType("c_allreduce_sum");
-  all_reduce_op_desc.SetInput("X", {all_reduce_var_name});
-  all_reduce_op_desc.SetOutput("Out", {all_reduce_var_name});
+  all_reduce_op_desc.SetType("all_reduce");
+  all_reduce_op_desc.SetInput("x", {all_reduce_var_name});
+  all_reduce_op_desc.SetOutput("out", {all_reduce_var_name});
   int ring_id = -1;
-  if (FLAGS_dynamic_static_unified_comm) {
-    ring_id = phi::distributed::CommContextManager::GetInstance().GetRingId(
-        dynamic_cast<details::NCCLOpHandleBase *>(&op_handle)->GetComm());
-    VLOG(3) << "New CommContextManager gets ring_id: " << ring_id;
-  } else {
-    ring_id = platform::NCCLCommContext::Instance().GetRingId(
-        dynamic_cast<details::NCCLOpHandleBase *>(&op_handle)->GetComm());
-    VLOG(3) << "Old NCCLCommContext gets ring_id: " << ring_id;
-  }
+  ring_id = phi::distributed::CommContextManager::GetInstance().GetRingId(
+      dynamic_cast<details::NCCLOpHandleBase *>(&op_handle)->GetComm());
+  VLOG(3) << "New CommContextManager gets ring_id: " << ring_id;
   all_reduce_op_desc.SetAttr("ring_id", ring_id);
-  all_reduce_op_desc.SetAttr("use_calc_stream", false);
+  all_reduce_op_desc.SetAttr("reduce_type",
+                             static_cast<int>(phi::ReduceType::kRedSum));
   all_reduce_op_desc.SetAttr(OpProtoAndCheckerMaker::OpRoleAttrName(),
                              (static_cast<int>(OpRole::kBackward)));
 
@@ -557,7 +551,7 @@ void ReplaceAllReduceOp(const Node &node,
   // ### v0 = op0(grad0)
   // ### v1 = op1(grad1)
   // We should add the following dependency to ensure that op0 and op1 both run
-  // afer c_sum_allreduce:
+  // after c_sum_allreduce:
   // ### grad0 =  depend(grad0, fused_grad)
   // ### grad1 = depend(grad1, fused_grad)
   if (is_fused) {
@@ -575,8 +569,8 @@ void ReplaceAllReduceOp(const Node &node,
   }
 #else
   PADDLE_THROW(
-      phi::errors::Unimplemented("ReplaceAllReduceOp is only implemented "
-                                 "for paddle compiled with NCCL/RCCL."));
+      common::errors::Unimplemented("ReplaceAllReduceOp is only implemented "
+                                    "for paddle compiled with NCCL/RCCL."));
 #endif
 }
 
@@ -586,8 +580,8 @@ void UpdateControlOpSkipEagerDeletionVars(const Node &node,
                                           const std::string &control_type) {
   // Node(zhangbo): SkipEagerDeletionVars pass policy for control flow class op:
   // 1) if op is in main_block: SkipEagerDeletionVars information will be
-  // writted into Graph OpNode which wrapped by OpHandleBase; 2) if op is in
-  // sub_block: SkipEagerDeletionVars information will be writted into graph's
+  // written into Graph OpNode which wrapped by OpHandleBase; 2) if op is in
+  // sub_block: SkipEagerDeletionVars information will be written into graph's
   // OriginProgram OpDesc. Please refer to
   // FindAllConditionalBlockAndConditionalBlockGradOp in
   // "paddle/fluid/operators/controlflow/conditional_block_op_helper.cc"
@@ -633,7 +627,7 @@ static void GetGraphOpDesc(const std::vector<Node *> &nodes,
     if ((n->Name() == "allreduce" || n->Name() == "fused_all_reduce") &&
         dynamic_cast<details::NCCLOpHandleBase *>(
             &(n->Wrapper<details::OpHandleBase>())) != nullptr) {
-      VLOG(4) << "convert op node " << n->Name() << " to desc c_allreduce_sum";
+      VLOG(4) << "convert op node " << n->Name() << " to desc all_reduce_sum";
       ReplaceAllReduceOp(*n, block, ops);
       VLOG(4) << n->ToString();
       continue;
@@ -714,7 +708,7 @@ static void GraphToBlock(const Graph &graph,
         graph, removed_vars, &vars_in_graph);
   }
 
-  // add vars_in_graph to blcok
+  // add vars_in_graph to block
   block->clear_vars();
   std::unordered_set<std::string> visited_vars;
   for (proto::VarDesc &var : vars_in_graph) {
@@ -743,7 +737,7 @@ static void GraphToBlock(const Graph &graph,
   GetGraphOpDesc(nodes, block, &ops, graph, graph_idx);
 
   for (auto &op : ops) {
-    RemoveControlDepInputAndOuput(&op);
+    RemoveControlDepInputAndOutput(&op);
     block->add_ops()->MergeFrom(*op.Proto());
   }
 }
@@ -753,12 +747,12 @@ void GraphToProgram(const Graph &graph,
                     const SortKind *sort_kind) {
   PADDLE_ENFORCE_EQ(graph.IsMainGraph(),
                     true,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "This graph is a sub_graph, "
                         "and can't convert to program individually"));
   PADDLE_ENFORCE_NOT_NULL(
       program,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "program must not be nullptr when converting graph to program"));
 
   proto::ProgramDesc program_pb(*(program->Proto()));
@@ -865,8 +859,8 @@ static std::vector<std::vector<ir::Node::Dep>> GetOpDependencies(
     PADDLE_ENFORCE_EQ(
         op_id_to_idx.emplace(op_desc->OriginalId(), op_idx).second,
         true,
-        phi::errors::InvalidArgument("There should not be duplicate op id: %d",
-                                     op_desc->OriginalId()));
+        common::errors::InvalidArgument(
+            "There should not be duplicate op id: %d", op_desc->OriginalId()));
   }
 
   std::vector<std::vector<ir::Node::Dep>> dep_matrix(op_num);
@@ -877,10 +871,10 @@ static std::vector<std::vector<ir::Node::Dep>> GetOpDependencies(
 
   auto get_op_idx_by_id = [&op_id_to_idx](uint64_t op_id) {
     auto iter = op_id_to_idx.find(op_id);
-    PADDLE_ENFORCE_NE(
-        iter,
-        op_id_to_idx.end(),
-        phi::errors::InvalidArgument("Cannot find OpDesc with id %d", op_id));
+    PADDLE_ENFORCE_NE(iter,
+                      op_id_to_idx.end(),
+                      common::errors::InvalidArgument(
+                          "Cannot find OpDesc with id %d", op_id));
     return iter->second;
   };
 

@@ -27,8 +27,10 @@ import paddle
 import paddle.distributed as dist
 from paddle import nn
 from paddle.distributed.auto_parallel.static.pir_pass import (
-    apply_reshard_pass,
+    ReshardPasses,
 )
+from paddle.distributed.auto_parallel.static.utils import set_all_ops_op_role
+from paddle.distributed.fleet.meta_optimizers.common import OpRole
 from paddle.framework import core
 
 
@@ -88,7 +90,8 @@ class TestReshardPToR:
                 reshard_tensor = paddle._C_ops.reshard(
                     input_tensor, self._mesh, [dist.Replicate()]
                 )
-            apply_reshard_pass(main_program)
+            set_all_ops_op_role(main_program.global_block(), OpRole.Forward)
+            ReshardPasses.apply_reshard_pass(main_program)
         np.testing.assert_equal(main_program.num_ops(), 4)
         ops = main_program.global_block().ops
         np.testing.assert_equal(
@@ -97,12 +100,15 @@ class TestReshardPToR:
                 'builtin.parameter',
                 'pd_op.data',
                 'dist_op.shard_tensor',
-                'pd_op.c_allreduce_sum',
+                'pd_op.all_reduce',
             ],
         )
 
         for op in ops:
-            if op.name() == 'pd_op.c_allreduce_sum':
+            if (
+                op.name() == 'pd_op.all_reduce'
+                and op.int_attr('reduce_type') == dist.ReduceOp.SUM
+            ):
                 # check op dist_attr
                 assert op.dist_attr.num_operands() == 1
                 assert op.dist_attr.num_results() == 1
@@ -167,7 +173,7 @@ class TestReshardPToR:
             "pd_op.sgd_",
             "pd_op.sgd_",
             "pd_op.relu_grad",
-            "pd_op.c_allreduce_sum",
+            "pd_op.all_reduce",
             "pd_op.matmul_grad",
             "pd_op.relu_grad",
             "pd_op.matmul_grad",

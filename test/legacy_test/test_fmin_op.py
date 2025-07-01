@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -46,7 +45,6 @@ class ApiFMinTest(unittest.TestCase):
         self.np_expected3 = np.fmin(self.input_a, self.input_c)
         self.np_expected4 = np.fmin(self.input_b, self.input_c)
 
-    @test_with_pir_api
     def test_static_api(self):
         """test_static_api"""
         paddle.enable_static()
@@ -137,23 +135,30 @@ class TestElementwiseFminOp(OpTest):
     def setUp(self):
         """setUp"""
         self.op_type = "elementwise_fmin"
+        self.prim_op_type = "prim"
         self.python_api = paddle.fmin
+        self.public_python_api = paddle.fmin
         # If x and y have the same value, the min() is not differentiable.
         # So we generate test data by the following method
         # to avoid them being too close to each other.
-        x = np.random.uniform(0.1, 1, [13, 17]).astype("float64")
-        sgn = np.random.choice([-1, 1], [13, 17]).astype("float64")
-        y = x + sgn * np.random.uniform(0.1, 1, [13, 17]).astype("float64")
+        self.init_shape()
+        x = np.random.uniform(0.1, 1, self.shape).astype("float64")
+        sgn = np.random.choice([-1, 1], self.shape).astype("float64")
+        y = x + sgn * np.random.uniform(0.1, 1, self.shape).astype("float64")
         self.inputs = {'X': x, 'Y': y}
         self.outputs = {'Out': np.fmin(self.inputs['X'], self.inputs['Y'])}
 
+    def init_shape(self):
+        """init_shape"""
+        self.shape = [13, 17]
+
     def test_check_output(self):
         """test_check_output"""
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         """test_check_grad_normal"""
-        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True)
 
     def test_check_grad_ignore_x(self):
         """test_check_grad_ignore_x"""
@@ -182,7 +187,9 @@ class TestElementwiseFmin2Op(OpTest):
     def setUp(self):
         """setUp"""
         self.op_type = "elementwise_fmin"
+        self.prim_op_type = "prim"
         self.python_api = paddle.fmin
+        self.public_python_api = paddle.fmin
         # If x and y have the same value, the min() is not differentiable.
         # So we generate test data by the following method
         # to avoid them being too close to each other.
@@ -196,11 +203,11 @@ class TestElementwiseFmin2Op(OpTest):
 
     def test_check_output(self):
         """test_check_output"""
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         """test_check_grad_normal"""
-        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True)
 
     def test_check_grad_ignore_x(self):
         """test_check_grad_ignore_x"""
@@ -229,7 +236,9 @@ class TestElementwiseFmin3Op(OpTest):
     def setUp(self):
         """setUp"""
         self.op_type = "elementwise_fmin"
+        self.prim_op_type = "prim"
         self.python_api = paddle.fmin
+        self.public_python_api = paddle.fmin
         # If x and y have the same value, the min() is not differentiable.
         # So we generate test data by the following method
         # to avoid them being too close to each other.
@@ -242,11 +251,11 @@ class TestElementwiseFmin3Op(OpTest):
 
     def test_check_output(self):
         """test_check_output"""
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         """test_check_grad_normal"""
-        self.check_grad(['X', 'Y'], 'Out', check_pir=True)
+        self.check_grad(['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True)
 
 
 @unittest.skipIf(
@@ -257,7 +266,9 @@ class TestElementwiseFmin3Op(OpTest):
 class TestFminBF16OP(OpTest):
     def setUp(self):
         self.op_type = "elementwise_fmin"
+        self.prim_op_type = "prim"
         self.python_api = paddle.fmin
+        self.public_python_api = paddle.fmin
         self.dtype = np.uint16
         x = np.random.uniform(1, 1, [13, 17]).astype("float32")
         sgn = np.random.choice([-1, 1], [13, 17]).astype("float32")
@@ -271,11 +282,25 @@ class TestFminBF16OP(OpTest):
 
     def test_check_output(self):
         place = core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         place = core.CUDAPlace(0)
-        self.check_grad_with_place(place, ['X', 'Y'], 'Out', check_pir=True)
+        self.check_grad_with_place(
+            place, ['X', 'Y'], 'Out', check_pir=True, check_prim_pir=True
+        )
+
+
+class TestElementwiseFminOpZeroSize(TestElementwiseFminOp):
+    def init_shape(self):
+        self.shape = [0, 9]
+
+
+class TestElementwiseFminOpZeroSize1(TestElementwiseFminOp):
+    def init_shape(self):
+        self.shape = [9, 0]
 
 
 if __name__ == "__main__":

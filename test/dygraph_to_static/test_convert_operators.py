@@ -18,7 +18,6 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     test_ast_only,
-    test_legacy_and_pt_and_pir,
 )
 
 import paddle
@@ -40,14 +39,9 @@ class ForwardNotExist(paddle.nn.Layer):
         return 0
 
 
-net = ForwardNotExist()
-net.forward = "A string so that convert forward will fail"
-
-
 class TestConvertCall(Dy2StTestBase):
     # fallback mode will raise a InnerError, it's ok.
     @test_ast_only
-    @test_legacy_and_pt_and_pir
     def test_class_exception(self):
         def call_not_exist():
             net = CallNotExist()
@@ -56,13 +50,16 @@ class TestConvertCall(Dy2StTestBase):
         with self.assertRaises(AttributeError):
             paddle.jit.to_static(call_not_exist())
 
+        net = ForwardNotExist()
+        net.forward = "A string so that convert forward will fail"
+
         def forward_not_exist():
             return net()
 
-        with self.assertRaises(AttributeError):
-            paddle.jit.to_static(forward_not_exist)()
+        with self.assertRaises(TypeError):
+            forward_not_exist_static = paddle.jit.to_static(forward_not_exist)()
+            forward_not_exist_static()
 
-    @test_legacy_and_pt_and_pir
     def test_callable_list(self):
         def callable_list(x, y):
             callable_list = CallableList()
@@ -79,13 +76,12 @@ class ShapeLayer(paddle.nn.Layer):
         x = paddle.reshape(x, [-1, x.shape[1]])
         bs = x.shape[0]  # -1
 
-        # for trigger choos_shape_attr_or_api
+        # for trigger choose_shape_attr_or_api
         out = paddle.zeros([bs, 1], dtype='float32')
         return out
 
 
 class TestChooseShapeAttrOrApiWithLayer(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_tensor_shape(self):
         x = paddle.zeros(shape=[4, 1], dtype='float32')
         net = paddle.jit.to_static(
@@ -98,7 +94,6 @@ class TestChooseShapeAttrOrApiWithLayer(Dy2StTestBase):
 
 
 class TestIfElseNoValue(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_else_ret_none(self):
         input_x = paddle.to_tensor([[1, 2, 3], [4, 5, 6]])
 
@@ -126,7 +121,6 @@ class TestIfElseNoValue(Dy2StTestBase):
         out = paddle.jit.to_static(without_common_value)(input_x, False)
         self.assertIsNone(out)
 
-    @test_legacy_and_pt_and_pir
     def test_else_ret_c(self):
         input_x = paddle.to_tensor([[1, 2, 3], [4, 5, 6]])
 
@@ -157,7 +151,6 @@ class TestIfElseNoValue(Dy2StTestBase):
         self.assertListEqual(paddle.tolist(y), paddle.tolist(input_x + 1))
         self.assertListEqual(paddle.tolist(z), paddle.tolist(input_x + 2))
 
-    @test_legacy_and_pt_and_pir
     def test_else_ret_cz(self):
         input_x = paddle.to_tensor([[1, 2, 3], [4, 5, 6]])
 

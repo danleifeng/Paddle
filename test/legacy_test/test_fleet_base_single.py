@@ -14,6 +14,7 @@
 
 import os
 
+os.environ['FLAGS_enable_pir_api'] = '0'
 import numpy as np
 
 cuda_visible_devices = os.getenv('CUDA_VISIBLE_DEVICES')
@@ -150,8 +151,7 @@ class TestFleetBaseSingleRunPS(unittest.TestCase):
                     fetch_list=[avg_cost.name],
                 )
                 print(
-                    "worker_index: %d, step%d cost = %f"
-                    % (fleet.worker_index(), i, cost_val[0])
+                    f"worker_index: {fleet.worker_index()}, step{i} cost = {cost_val[0]:f}"
                 )
 
 

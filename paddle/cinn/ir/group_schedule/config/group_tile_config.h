@@ -21,8 +21,10 @@
 namespace cinn {
 
 namespace hlir::framework::pir {
-struct GroupInfo;
+struct FusionGroupInfo;
 }  // namespace hlir::framework::pir
+
+using hlir::framework::pir::FusionGroupInfo;
 
 namespace ir {
 
@@ -31,26 +33,24 @@ using IterSpaceType = std::vector<std::pair<std::string, std::string>>;
 struct ScheduleConfig {
   struct BaseInfo {
     std::vector<int64_t> reduce_axis;
-    std::vector<int64_t> raw_reduce_axis;
-    int64_t data_rank;
-    int64_t raw_data_rank;
+    std::vector<int64_t> loop_ranges;
+    std::vector<int64_t> loop_strides;
     int64_t reduce_numel;
     int64_t spatial_numel;
     bool has_dynamic_spatial{false};
     bool has_dynamic_reduce{false};
-    bool is_reduce_all{false};
+    bool can_apply_grid_reduce{false};
+    bool can_apply_vectorize{false};
     IterSpaceType iter_space_type;
-
-    std::set<std::string> reduce_tensor_names;
-    std::set<std::string> temp_var_names;
-    std::set<std::string> shared_var_names;
-    std::set<std::string> direct_output_var_names;
   };
 
   struct TileConfig {
     int64_t warp_num{1};
     int64_t tree_reduce_num{1};
+    int64_t grid_reduce_num{1};
     int64_t spatial_inner_num{1};
+    int64_t vectorize_factor{1};
+    int64_t reduce_inner_num{1};
     ReduceMethod reduce_method{NoneReduceMethod()};
   };
 
@@ -58,7 +58,20 @@ struct ScheduleConfig {
   TileConfig tile_config;
 };
 
+struct SMConfig {
+  const int max_threads_per_sm;
+  const int max_blocks_per_sm;
+  const int sm_count;
+
+  SMConfig(int max_threads, int max_blocks, int sm_count)
+      : max_threads_per_sm(max_threads),
+        max_blocks_per_sm(max_blocks),
+        sm_count(sm_count) {}
+};
+
 struct BucketInfo {
+  static constexpr int kMaxNumel = INT32_MAX;
+
   struct Dimension {
     int lower_bound;
     int upper_bound;
@@ -97,7 +110,7 @@ struct BucketInfoHash {
         bucket_info.space.size(),
         0,
         ::common::errors::InvalidArgument(
-            "Bucketinfo 's dimension number should be more than 0"));
+            "BucketInfo's dimension number should be more than 0"));
 
     std::size_t hash_past_dims = adt::hash_combine(
         std::hash<uint64_t>{}(bucket_info.space[0].lower_bound),
@@ -118,7 +131,7 @@ struct BucketInfoHash {
 };
 
 std::shared_ptr<ScheduleConfig::BaseInfo> InitBasicInfo(
-    const std::shared_ptr<hlir::framework::pir::GroupInfo>& group_info);
+    const std::shared_ptr<FusionGroupInfo>& group_info);
 
 std::unordered_map<BucketInfo, ScheduleConfig, BucketInfoHash>
 CombineBaseInfoAndConfig(
@@ -128,9 +141,8 @@ CombineBaseInfoAndConfig(
     const std::shared_ptr<ScheduleConfig::BaseInfo>& base_info);
 
 std::unordered_map<BucketInfo, ScheduleConfig, BucketInfoHash>
-BuildScheduleConfig(
-    const std::shared_ptr<hlir::framework::pir::GroupInfo>& group_info,
-    const common::Target& target);
+BuildScheduleConfig(const std::shared_ptr<FusionGroupInfo>& group_info,
+                    const common::Target& target);
 
 }  // namespace ir
 }  // namespace cinn

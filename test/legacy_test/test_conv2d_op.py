@@ -21,7 +21,6 @@ from testsuite import create_op
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 def conv2d_forward_naive(
@@ -327,14 +326,14 @@ def create_test_cudnn_channel_last_fp16_class(parent, grad_check=True):
 
 
 def create_test_padding_SAME_class(parent):
-    class TestPaddingSMAECase(parent):
+    class TestPaddingSAMECase(parent):
         def init_paddings(self):
             self.pad = [0, 0]
             self.padding_algorithm = "SAME"
 
     cls_name = "{}_{}".format(parent.__name__, "PaddingSAMEOp")
-    TestPaddingSMAECase.__name__ = cls_name
-    globals()[cls_name] = TestPaddingSMAECase
+    TestPaddingSAMECase.__name__ = cls_name
+    globals()[cls_name] = TestPaddingSAMECase
 
 
 def create_test_padding_VALID_class(parent):
@@ -352,7 +351,7 @@ def create_test_cudnn_padding_SAME_class(parent):
     @unittest.skipIf(
         not core.is_compiled_with_cuda(), "core is not compiled with CUDA"
     )
-    class TestCUDNNPaddingSMAECase(parent):
+    class TestCUDNNPaddingSAMECase(parent):
         def init_kernel_type(self):
             self.use_cudnn = True
             self.dtype = (
@@ -364,8 +363,8 @@ def create_test_cudnn_padding_SAME_class(parent):
             self.padding_algorithm = "SAME"
 
     cls_name = "{}_{}".format(parent.__name__, "CudnnPaddingSAMEOp")
-    TestCUDNNPaddingSMAECase.__name__ = cls_name
-    globals()[cls_name] = TestCUDNNPaddingSMAECase
+    TestCUDNNPaddingSAMECase.__name__ = cls_name
+    globals()[cls_name] = TestCUDNNPaddingSAMECase
 
 
 def create_test_cudnn_padding_VALID_class(parent):
@@ -727,7 +726,7 @@ class TestCUDNNExhaustiveSearch(TestConv2DOp):
 
 
 class TestConv2DOpError(unittest.TestCase):
-    @test_with_pir_api
+
     def test_errors(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()

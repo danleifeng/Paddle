@@ -28,7 +28,6 @@ import paddle
 import paddle.inference as paddle_infer
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 
 class TestCumsumOp(unittest.TestCase):
@@ -100,7 +99,6 @@ class TestCumsumOp(unittest.TestCase):
         self.run_cases()
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_cpu_static(self):
         self.run_static()
 
@@ -111,18 +109,19 @@ class TestCumsumOp(unittest.TestCase):
         self.run_cases()
         paddle.enable_static()
 
-    @test_with_pir_api
     def test_gpu_static(self):
         if not base.core.is_compiled_with_cuda():
             return
         self.run_static(use_gpu=True)
 
     def test_name(self):
-        with paddle.pir_utils.OldIrGuard():
-            with base.program_guard(base.Program()):
-                x = paddle.static.data('x', [3, 4])
-                y = paddle.cumsum(x, name='out')
-                self.assertTrue('out' in y.name)
+        with (
+            paddle.pir_utils.OldIrGuard(),
+            base.program_guard(base.Program()),
+        ):
+            x = paddle.static.data('x', [3, 4])
+            y = paddle.cumsum(x, name='out')
+            self.assertTrue('out' in y.name)
 
 
 def cumsum_wrapper(x, axis=-1, flatten=False, exclusive=False, reverse=False):
@@ -212,6 +211,95 @@ class TestSumOp6(TestSumOp1):
 class TestSumOp7(TestSumOp1):
     def set_attrs_input_output(self):
         self.x = np.random.random(100).astype(self.dtype_)
+        self.out = self.x.cumsum(axis=0)
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp1(TestSumOp1):
+    def set_attrs_input_output(self):
+        self.attrs = {'axis': 2}
+        x_real = np.random.random((5, 6, 10)).astype(self.dtype_)
+        x_imag = np.random.random((5, 6, 10)).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
+        self.out = self.x.cumsum(axis=2)
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp2(TestSumOp1):
+    def set_attrs_input_output(self):
+        self.attrs = {'axis': -1, 'reverse': True}
+        x_real = np.random.random((5, 6, 10)).astype(self.dtype_)
+        x_imag = np.random.random((5, 6, 10)).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
+        self.out = np.flip(np.flip(self.x, axis=2).cumsum(axis=2), axis=2)
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp3(TestSumOp1):
+    def set_attrs_input_output(self):
+        self.attrs = {'axis': 1}
+        x_real = np.random.random((5, 6, 10)).astype(self.dtype_)
+        x_imag = np.random.random((5, 6, 10)).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
+        self.out = self.x.cumsum(axis=1)
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp4(TestSumOp1):
+    def set_attrs_input_output(self):
+        self.attrs = {'axis': 0}
+        x_real = np.random.random((5, 6, 10)).astype(self.dtype_)
+        x_imag = np.random.random((5, 6, 10)).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
+        self.out = self.x.cumsum(axis=0)
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp5(TestSumOp1):
+    def set_attrs_input_output(self):
+        x_real = np.random.random((5, 20)).astype(self.dtype_)
+        x_imag = np.random.random((5, 20)).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
+        self.out = self.x.cumsum(axis=1)
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp6(TestSumOp1):
+    def set_attrs_input_output(self):
+        self.attrs = {'axis': -1, 'flatten': True}
+        x_real = np.random.random((5, 6, 5)).astype(self.dtype_)
+        x_imag = np.random.random((5, 6, 5)).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
+        self.out = self.x.cumsum()
+
+
+@unittest.skipIf(
+    core.is_compiled_with_xpu(),
+    "Skip XPU for complex dtype is not fully supported",
+)
+class TestSumComplexOp7(TestSumOp1):
+    def set_attrs_input_output(self):
+        x_real = np.random.random(100).astype(self.dtype_)
+        x_imag = np.random.random(100).astype(self.dtype_)
+        self.x = x_real + 1j * x_imag
         self.out = self.x.cumsum(axis=0)
 
 
@@ -502,7 +590,7 @@ create_test_bf16_class(TestSumOpReverseExclusive)
 
 
 class BadInputTest(unittest.TestCase):
-    @test_with_pir_api
+
     def test_error(self):
         paddle.enable_static()
         with paddle.static.program_guard(
@@ -539,7 +627,6 @@ class TestTensorAxis(unittest.TestCase):
         )
         np.testing.assert_allclose(np_out, pd_out.numpy())
 
-    @test_with_pir_api
     def test_static_and_infer(self):
         paddle.enable_static()
         np_x = np.random.randn(9, 10, 11).astype('float32')
@@ -614,7 +701,6 @@ class TestTensorAxis(unittest.TestCase):
                 exe = paddle.static.Executor(self.place)
                 exe.run(startup_prog)
                 static_out = exe.run(feed={'x': np_x}, fetch_list=[out])
-
                 # run infer
                 paddle.static.save_inference_model(
                     self.save_path, [x], [out], exe, program=main_prog
@@ -627,7 +713,7 @@ class TestTensorAxis(unittest.TestCase):
 
                 self.assertEqual(
                     len(load_program.global_block().ops),
-                    11,
+                    9,
                 )
                 print(load_program)
                 self.assertEqual(
@@ -643,7 +729,7 @@ class TestTensorAxis(unittest.TestCase):
 
 
 class TestCumSumOpFp16(unittest.TestCase):
-    @test_with_pir_api
+
     def test_fp16(self):
         if core.is_compiled_with_cuda():
             paddle.enable_static()
@@ -662,6 +748,40 @@ class TestCumSumOpFp16(unittest.TestCase):
                 out = exe.run(feed={'x': x_np}, fetch_list=[y1, y2, y3, y4])
             paddle.disable_static()
 
+
+def create_test_class(op_type, dtype, shape, axis):
+    class Cls(unittest.TestCase):
+        def test_zero_size(self):
+            paddle.disable_static()
+            numpy_tensor_1 = np.random.rand(*shape).astype(dtype)
+            paddle_x = paddle.to_tensor(numpy_tensor_1)
+            paddle_x.stop_gradient = False
+
+            paddle_api = eval(f"paddle.{op_type}")
+            paddle_out = paddle_api(paddle_x, axis=axis)
+            numpy_api = eval(f"np.{op_type}")
+            numpy_out = numpy_api(numpy_tensor_1, axis=axis)
+
+            np.testing.assert_allclose(
+                paddle_out.numpy(),
+                numpy_out,
+                1e-2,
+                1e-2,
+            )
+            np.testing.assert_allclose(
+                paddle_out.shape,
+                numpy_out.shape,
+            )
+
+    cls_name = f"{op_type}{dtype}_0SizeTest"
+    Cls.__name__ = cls_name
+    globals()[cls_name] = Cls
+
+
+create_test_class("cumsum", "float32", [3, 4, 0], 0)
+create_test_class("cumsum", "float64", [3, 4, 0, 3, 4], -2)
+create_test_class("cumsum", "int32", [3, 4, 0], 0)
+create_test_class("cumsum", "int64", [3, 4, 0, 3, 4], -1)
 
 if __name__ == '__main__':
     unittest.main()

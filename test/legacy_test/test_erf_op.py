@@ -21,7 +21,6 @@ from scipy.special import erf
 import paddle
 import paddle.base.dygraph as dg
 from paddle import base, static
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -46,7 +45,7 @@ class TestErfOp(OpTest):
         return "float64"
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(['X'], 'Out', check_prim=True, check_pir=True)
@@ -82,7 +81,6 @@ class TestErfLayer(unittest.TestCase):
         if base.is_compiled_with_cuda():
             self._test_dygraph(base.CUDAPlace(0))
 
-    @test_with_pir_api
     def _test_static(self, place):
         mp, sp = static.Program(), static.Program()
         with static.program_guard(mp, sp):
@@ -114,7 +112,7 @@ class TestErfFP16OP(OpTest):
         self.outputs = {'Out': y_ref}
 
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad(self):
         self.check_grad(
@@ -148,7 +146,9 @@ class TestErfBF16OP(OpTest):
 
     def test_check_output(self):
         place = paddle.base.core.CUDAPlace(0)
-        self.check_output_with_place(place, check_pir=True)
+        self.check_output_with_place(
+            place, check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad(self):
         place = paddle.base.core.CUDAPlace(0)

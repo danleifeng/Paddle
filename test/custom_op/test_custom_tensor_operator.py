@@ -25,7 +25,6 @@ from utils import (
 
 import paddle
 from paddle import static
-from paddle.pir_utils import test_with_pir_api
 from paddle.utils.cpp_extension import get_build_directory, load
 from paddle.utils.cpp_extension.extension_utils import run_cmd
 
@@ -67,24 +66,26 @@ def test_custom_add_static(func, device, dtype, np_x, use_func=True):
     paddle.enable_static()
     paddle.set_device(device)
 
-    with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name='X', shape=[None, 8], dtype=dtype)
-            x.stop_gradient = False
-            if use_func:
-                out = func(x)
-            else:
-                out = x + 1
-            static.append_backward(out)
+    with (
+        static.scope_guard(static.Scope()),
+        static.program_guard(static.Program()),
+    ):
+        x = static.data(name='X', shape=[None, 8], dtype=dtype)
+        x.stop_gradient = False
+        if use_func:
+            out = func(x)
+        else:
+            out = x + 1
+        static.append_backward(out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
-            # in static graph mode, x data has been covered by out
-            out_v = exe.run(
-                static.default_main_program(),
-                feed={'X': np_x},
-                fetch_list=[out],
-            )
+        exe = static.Executor()
+        exe.run(static.default_startup_program())
+        # in static graph mode, x data has been covered by out
+        out_v = exe.run(
+            static.default_main_program(),
+            feed={'X': np_x},
+            fetch_list=[out],
+        )
 
     paddle.disable_static()
     return out_v
@@ -112,24 +113,26 @@ def test_custom_subtract_static(func, device, dtype, np_x, use_func=True):
     paddle.enable_static()
     paddle.set_device(device)
 
-    with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name='X', shape=[None, 8], dtype=dtype)
-            x.stop_gradient = False
-            if use_func:
-                out = func(x)
-            else:
-                out = x - 1
-            static.append_backward(out)
+    with (
+        static.scope_guard(static.Scope()),
+        static.program_guard(static.Program()),
+    ):
+        x = static.data(name='X', shape=[None, 8], dtype=dtype)
+        x.stop_gradient = False
+        if use_func:
+            out = func(x)
+        else:
+            out = x - 1
+        static.append_backward(out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
-            # in static graph mode, x data has been covered by out
-            out_v = exe.run(
-                static.default_main_program(),
-                feed={'X': np_x},
-                fetch_list=[out],
-            )
+        exe = static.Executor()
+        exe.run(static.default_startup_program())
+        # in static graph mode, x data has been covered by out
+        out_v = exe.run(
+            static.default_main_program(),
+            feed={'X': np_x},
+            fetch_list=[out],
+        )
 
     paddle.disable_static()
     return out_v
@@ -157,24 +160,26 @@ def test_custom_multiply_static(func, device, dtype, np_x, use_func=True):
     paddle.enable_static()
     paddle.set_device(device)
 
-    with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name='X', shape=[None, 8], dtype=dtype)
-            x.stop_gradient = False
-            if use_func:
-                out = func(x)
-            else:
-                out = x * 5
-            static.append_backward(out)
+    with (
+        static.scope_guard(static.Scope()),
+        static.program_guard(static.Program()),
+    ):
+        x = static.data(name='X', shape=[None, 8], dtype=dtype)
+        x.stop_gradient = False
+        if use_func:
+            out = func(x)
+        else:
+            out = x * 5
+        static.append_backward(out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
-            # in static graph mode, x data has been covered by out
-            out_v = exe.run(
-                static.default_main_program(),
-                feed={'X': np_x},
-                fetch_list=[out],
-            )
+        exe = static.Executor()
+        exe.run(static.default_startup_program())
+        # in static graph mode, x data has been covered by out
+        out_v = exe.run(
+            static.default_main_program(),
+            feed={'X': np_x},
+            fetch_list=[out],
+        )
 
     paddle.disable_static()
     return out_v
@@ -201,24 +206,26 @@ def test_custom_divide_dynamic(func, device, dtype, np_x, use_func=True):
 def test_custom_divide_static(func, device, dtype, np_x, use_func=True):
     paddle.enable_static()
     paddle.set_device(device)
-    with static.scope_guard(static.Scope()):
-        with static.program_guard(static.Program()):
-            x = static.data(name='X', shape=[4, 8], dtype=dtype)
-            x.stop_gradient = False
-            if use_func:
-                out = func(x)
-            else:
-                out = paddle.reciprocal(x)
-            static.append_backward(out)
+    with (
+        static.scope_guard(static.Scope()),
+        static.program_guard(static.Program()),
+    ):
+        x = static.data(name='X', shape=[4, 8], dtype=dtype)
+        x.stop_gradient = False
+        if use_func:
+            out = func(x)
+        else:
+            out = paddle.reciprocal(x)
+        static.append_backward(out)
 
-            exe = static.Executor()
-            exe.run(static.default_startup_program())
-            # in static graph mode, x data has been covered by out
-            out_v = exe.run(
-                static.default_main_program(),
-                feed={'X': np_x},
-                fetch_list=[out],
-            )
+        exe = static.Executor()
+        exe.run(static.default_startup_program())
+        # in static graph mode, x data has been covered by out
+        out_v = exe.run(
+            static.default_main_program(),
+            feed={'X': np_x},
+            fetch_list=[out],
+        )
 
     paddle.disable_static()
     return out_v
@@ -252,7 +259,6 @@ class TestJITLoad(unittest.TestCase):
         self._test_logical_operants()
         self._test_compare_operants()
 
-    @test_with_pir_api
     def test_static(self):
         self.add = self.custom_module.custom_add
         self.subtract = self.custom_module.custom_subtract

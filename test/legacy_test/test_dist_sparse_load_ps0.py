@@ -34,43 +34,44 @@ class SparseLoadOp(unittest.TestCase):
                 'input', shape=[None, 1], dtype="int64"
             )
 
-            emb = paddle.static.nn.embedding(
-                input=dense_input,
-                is_sparse=True,
-                size=[10, 10],
-                param_attr=base.ParamAttr(
+            emb = paddle.nn.Embedding(
+                num_embeddings=10,
+                embedding_dim=10,
+                sparse=True,
+                weight_attr=base.ParamAttr(
                     name="embedding",
                     initializer=paddle.nn.initializer.Assign(emb_array),
                 ),
-            )
-
-            fc1 = paddle.static.nn.fc(
-                x=emb,
-                size=10,
-                activation="relu",
+            )(dense_input)
+            linear = paddle.nn.Linear(
+                in_features=emb.shape[-1],
+                out_features=10,
                 weight_attr=base.ParamAttr(
                     name='fc',
                     initializer=paddle.nn.initializer.Assign(fc_array),
                 ),
-            )
+            )(emb)
+            fc1 = paddle.nn.ReLU()(linear)
             loss = paddle.mean(fc1)
         return loss
 
     def save_origin_model(self, emb_array, fc_array):
         startup_program = base.framework.Program()
         test_program = base.framework.Program()
-        with base.framework.program_guard(test_program, startup_program):
-            with base.unique_name.guard():
-                loss = self.net(emb_array, fc_array)
-                optimizer = paddle.optimizer.Adam(1e-3)
-                optimizer.minimize(loss)
+        with (
+            base.framework.program_guard(test_program, startup_program),
+            base.unique_name.guard(),
+        ):
+            loss = self.net(emb_array, fc_array)
+            optimizer = paddle.optimizer.Adam(1e-3)
+            optimizer.minimize(loss)
 
-                exe = base.Executor(base.CPUPlace())
-                exe.run(startup_program)
-                model_path = tempfile.mkdtemp()
-                paddle.distributed.io.save_persistables(
-                    executor=exe, dirname=model_path
-                )
+            exe = base.Executor(base.CPUPlace())
+            exe.run(startup_program)
+            model_path = tempfile.mkdtemp()
+            paddle.distributed.io.save_persistables(
+                executor=exe, dirname=model_path
+            )
         return model_path
 
 

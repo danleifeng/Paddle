@@ -18,7 +18,6 @@ import unittest
 
 import paddle
 import paddle.nn.functional as F
-from paddle.pir_utils import test_with_dygraph_pir
 
 
 def getModelOp(model_path):
@@ -87,7 +86,7 @@ class IfElseNet(paddle.nn.Layer):
 
 
 class TestConditionalOp(unittest.TestCase):
-    @test_with_dygraph_pir
+
     def test_while_op(self):
         paddle.disable_static()
         net = WhileNet()
@@ -105,12 +104,12 @@ class TestConditionalOp(unittest.TestCase):
         paddle.enable_static()
         if paddle.framework.use_pir_api():
             program = GetPirModelOp(model_file + ".json")
-            self.assertEqual(program.global_block().ops[-4].name(), "pd_op.add")
+            self.assertEqual(program.global_block().ops[-2].name(), "pd_op.add")
             self.assertEqual(
-                program.global_block().ops[-5].result(1).shape, [1, 3, -1, -1]
+                program.global_block().ops[-3].result(1).shape, [1, 3, -1, -1]
             )
             self.assertEqual(
-                program.global_block().ops[-5].name(), "pd_op.while"
+                program.global_block().ops[-3].name(), "pd_op.while"
             )
         else:
             right_pdmodel = {
@@ -128,7 +127,6 @@ class TestConditionalOp(unittest.TestCase):
             )
         root_path.cleanup()
 
-    @test_with_dygraph_pir
     def test_for_op(self):
         paddle.disable_static()
         net = ForNet()
@@ -144,9 +142,9 @@ class TestConditionalOp(unittest.TestCase):
         paddle.enable_static()
         if paddle.framework.use_pir_api():
             program = GetPirModelOp(model_file + ".json")
-            self.assertEqual(program.global_block().ops[-4].name(), "pd_op.add")
+            self.assertEqual(program.global_block().ops[-2].name(), "pd_op.add")
             self.assertEqual(
-                program.global_block().ops[-5].name(), "pd_op.while"
+                program.global_block().ops[-3].name(), "pd_op.while"
             )
         else:
             right_pdmodel = {
@@ -165,7 +163,6 @@ class TestConditionalOp(unittest.TestCase):
             )
         root_path.cleanup()
 
-    @test_with_dygraph_pir
     def test_if_op(self):
         paddle.disable_static()
         net = IfElseNet()
@@ -188,8 +185,6 @@ class TestConditionalOp(unittest.TestCase):
                 "pd_op.cast",
                 "pd_op.greater_than",
                 "pd_op.if",
-                "pd_op.full",
-                "pd_op.scale",
                 "pd_op.fetch",
             ]
             i = 0

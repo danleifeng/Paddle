@@ -19,7 +19,7 @@ limitations under the License. */
 #include "paddle/phi/common/transform.h"
 
 #if defined(PADDLE_WITH_XPU)
-#include "paddle/fluid/platform/device/device_wrapper.h"
+#include "paddle/phi/core/platform/device/device_wrapper.h"
 #endif
 
 namespace paddle {
@@ -37,7 +37,7 @@ struct CastDataTypeFunctor {
 template <typename InType, typename OutType>
 static void XPUCastData(const phi::DenseTensor& in,
                         phi::DenseTensor* out,
-                        const platform::XPUDeviceContext* dev_ctx) {
+                        const phi::XPUContext* dev_ctx) {
   using XPUInTDType = typename XPUTypeTrait<InType>::Type;
   using XPUOutTDType = typename XPUTypeTrait<OutType>::Type;
   int r = xpu::cast<XPUInTDType, XPUOutTDType>(
@@ -55,7 +55,7 @@ static void XPUTransDataType(
     phi::DenseTensor* out,
     const paddle::framework::proto::VarType::Type& dst_type,
     const phi::DeviceContext* ctx) {
-  auto* context = static_cast<const platform::XPUDeviceContext*>(ctx);
+  auto* context = static_cast<const phi::XPUContext*>(ctx);
 
 #define XPUCastCallback(cpp_type, proto_type)          \
   do {                                                 \
@@ -64,12 +64,13 @@ static void XPUTransDataType(
     }                                                  \
   } while (0)
 
-  if (dst_type == proto::VarType::FP32 && dst_type == proto::VarType::FP16 &&
-      dst_type == proto::VarType::BOOL && dst_type == proto::VarType::INT16 &&
-      dst_type == proto::VarType::INT32 && dst_type == proto::VarType::INT64) {
-    _ForEachDataType_(XPUCastCallback);
+  if (dst_type == proto::VarType::FP32 || dst_type == proto::VarType::FP16 ||
+      dst_type == proto::VarType::BOOL || dst_type == proto::VarType::INT16 ||
+      dst_type == proto::VarType::INT32 || dst_type == proto::VarType::INT64 ||
+      dst_type == proto::VarType::FP64) {
+    _ForEachDataTypeForXPU_(XPUCastCallback);
   } else {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "Data type (%s) is not supported in XPU when casting data type.",
         DataTypeToString(dst_type)));
   }
@@ -123,7 +124,7 @@ struct CastDataType {
             CastDataTypeFunctor<InType, OutType>());
 #endif
     } else {
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Place type is not supported when casting data type."));
     }
   }
@@ -135,7 +136,7 @@ void TransDataType(const phi::KernelKey& kernel_type_for_var,
                    phi::DenseTensor* out) {
   PADDLE_ENFORCE_EQ(in.dtype(),
                     kernel_type_for_var.dtype(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The src dtype(%s) of input tensor and kernel_type(%s) "
                         "are not consistent.",
                         DataTypeToString(in.dtype()),
@@ -155,33 +156,37 @@ void TransDataType(const phi::DenseTensor& in,
   auto ctx = pool.Get(in.place());
 
 #if defined(PADDLE_WITH_XPU)
-  switch (src_type) {
-    case proto::VarType::FP16:
-      XPUTransDataType<phi::dtype::float16>(in, out, dst_type, ctx);
-      break;
-    case proto::VarType::FP32:
-      XPUTransDataType<float>(in, out, dst_type, ctx);
-      break;
-    case proto::VarType::BOOL:
-      XPUTransDataType<bool>(in, out, dst_type, ctx);
-      break;
-    case proto::VarType::INT16:
-      XPUTransDataType<int16_t>(in, out, dst_type, ctx);
-      break;
-    case proto::VarType::INT32:
-      XPUTransDataType<int>(in, out, dst_type, ctx);
-      break;
-    case proto::VarType::INT64:
-      XPUTransDataType<int64_t>(in, out, dst_type, ctx);
-      break;
-    default:
-      PADDLE_THROW(phi::errors::Unimplemented(
-          "Data type (%s) is not supported in XPU when casting data type.",
-          DataTypeToString(src_type)));
+  if (phi::is_xpu_place(in.place())) {
+    switch (src_type) {
+      case proto::VarType::FP16:
+        XPUTransDataType<phi::dtype::float16>(in, out, dst_type, ctx);
+        break;
+      case proto::VarType::FP32:
+        XPUTransDataType<float>(in, out, dst_type, ctx);
+        break;
+      case proto::VarType::FP64:
+        XPUTransDataType<double>(in, out, dst_type, ctx);
+        break;
+      case proto::VarType::BOOL:
+        XPUTransDataType<bool>(in, out, dst_type, ctx);
+        break;
+      case proto::VarType::INT16:
+        XPUTransDataType<int16_t>(in, out, dst_type, ctx);
+        break;
+      case proto::VarType::INT32:
+        XPUTransDataType<int>(in, out, dst_type, ctx);
+        break;
+      case proto::VarType::INT64:
+        XPUTransDataType<int64_t>(in, out, dst_type, ctx);
+        break;
+      default:
+        PADDLE_THROW(common::errors::Unimplemented(
+            "Data type (%s) is not supported in XPU when casting data type.",
+            DataTypeToString(src_type)));
+    }
+    return;
   }
-
-#else
-
+#endif
   switch (src_type) {
     case proto::VarType::FP16:
       framework::VisitDataType(dst_type,
@@ -221,11 +226,10 @@ void TransDataType(const phi::DenseTensor& in,
       framework::VisitDataType(dst_type, CastDataType<uint8_t>(in, out, ctx));
       break;
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Data type (%s) is not supported when casting data type.",
           DataTypeToString(src_type)));
   }
-#endif
 }
 
 void TransComplexToReal(const proto::VarType::Type& dst_type,
@@ -246,7 +250,7 @@ void TransComplexToReal(const proto::VarType::Type& dst_type,
           dst_type, CastDataType<phi::dtype::complex<double>>(in, out, ctx));
       break;
     default:
-      PADDLE_THROW(phi::errors::Unimplemented(
+      PADDLE_THROW(common::errors::Unimplemented(
           "Data type (%s) is not supported when casting complex tensor to real "
           "data type.",
           DataTypeToString(src_type)));

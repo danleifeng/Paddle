@@ -32,17 +32,17 @@ void ConcatKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_NE(
       x[0],
       nullptr,
-      phi::errors::InvalidArgument("The input should not be null."));
+      common::errors::InvalidArgument("The input should not be null."));
   axis = phi::funcs::ComputeAxis(axis, x[0]->dims().size());
   PADDLE_ENFORCE_GE(
       axis,
       0,
-      phi::errors::InvalidArgument("concat: axis should be larger than or "
-                                   "equal to 0, but received axis is %d.",
-                                   axis));
+      common::errors::InvalidArgument("concat: axis should be larger than or "
+                                      "equal to 0, but received axis is %d.",
+                                      axis));
   PADDLE_ENFORCE_LT(axis,
                     x[0]->dims().size(),
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "concat: axis should be less than x[0]->dims()!"
                         "But received axis is %d, while x[0]->dims()"
                         "size is %d.",
@@ -57,6 +57,9 @@ void ConcatKernel(const Context& dev_ctx,
   phi::DDim out_dims = phi::funcs::ComputeAndCheckShape(true, x_dims, axis);
   out->Resize(out_dims);
   dev_ctx.template Alloc<T>(out);
+  if (out->numel() == 0) {
+    return;
+  }
 
   // If axis is 0, the lod of the output is not the same as inputs.
 
@@ -68,9 +71,9 @@ void ConcatKernel(const Context& dev_ctx,
         PADDLE_ENFORCE_EQ(
             x[i]->lod().size(),
             lod_size_0,
-            phi::errors::Unimplemented(
-                "The lod level of all input LoDTensors should be same. "
-                "Maybe different lod level of input LoDTensors can concat,"
+            common::errors::Unimplemented(
+                "The lod level of all input DenseTensors should be same. "
+                "Maybe different lod level of input DenseTensors can concat,"
                 "it is not supported currently. The lod level of %dth input "
                 "is %d and first input is %d.",
                 i,
@@ -84,19 +87,19 @@ void ConcatKernel(const Context& dev_ctx,
     if (lod_size) {
       auto* out_lod = out->mutable_lod();
       for (size_t i = 1; i < x.size(); ++i) {
-        auto in_lod = phi::ConvertToLengthBasedLoD(x[i]->lod());
-        phi::AppendLoD(out_lod, in_lod);
+        auto in_lod = phi::ConvertToLengthBasedLegacyLoD(x[i]->lod());
+        phi::AppendLegacyLoD(out_lod, in_lod);
       }
     }
   }
 
-  std::vector<std::vector<int>> xdims_list;
+  std::vector<std::vector<int64_t>> xdims_list;
   std::vector<const XPUType*> ptrs;
   for (unsigned int i = 0; i < x.size(); ++i) {
     if (x[i] && x[i]->numel() > 0) {
       ptrs.push_back(reinterpret_cast<const XPUType*>(x[i]->data<T>()));
       int size = x[i]->dims().size();
-      std::vector<int> tmp_dims(size);
+      std::vector<int64_t> tmp_dims(size);
       for (int j = 0; j < size; ++j) {
         tmp_dims[j] = x[i]->dims()[j];
       }
@@ -106,7 +109,7 @@ void ConcatKernel(const Context& dev_ctx,
 
   PADDLE_ENFORCE_GT(xdims_list.size(),
                     0,
-                    phi::errors::InvalidArgument("No tensor need concat"));
+                    common::errors::InvalidArgument("No tensor need concat"));
 
   int r = xpu::concat<XPUType>(dev_ctx.x_context(),
                                ptrs,

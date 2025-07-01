@@ -16,76 +16,42 @@
 # DecompInterface gen op list
 # =====================================
 
-# come into effect in generated file pd_op.h
-# manual decomp interface declare are located in manual_op.h
-decomp_interface_declare_gen_op_list = [
-    "add_n",
-    "any",
+
+##################### decomp_rule ####################
+# come into effect in generated file op_decomp_rule.cc
+# manual decomp interface implementation are located in manual_op_decomp.cc
+######################################################
+MANUAL_IMPL_DECOMP = [
     "batch_norm",
     "batch_norm_",
-    "bce_loss",
-    "bmm",
     "clip",
-    "dropout",
-    "elu",
-    "embedding",
-    "flatten",
-    "floor_divide",
-    "full_like",
-    "gelu",
-    "hardswish",
-    "hardsigmoid",
-    "group_norm",
-    "index_sample",
-    "index_select",
-    "instance_norm",
-    "layer_norm",
-    "leaky_relu",
-    "lerp",
-    "log_loss",
-    "log_softmax",
-    "mean",
-    "mean_all",
-    "meshgrid",
     "one_hot",
-    "p_norm",
-    "pow",
-    "reciprocal",
-    "relu",
-    "relu6",
-    "sigmoid_cross_entropy_with_logits",
-    "silu",
-    "swiglu",
-    "softmax",
-    "square",
-    "squared_l2_norm",
-    "squeeze",
-    "stack",
-    "unsqueeze",
-    "unbind",
-    "huber_loss",
 ]
 
-# come into effect in generated file op_decomp.cc
-# manual decomp interface implementation are located in manual_op_decomp.cc
-decomp_interface_implementation_gen_op_list = [
-    "any",
+GENERATE_IMPL_DECOMP = [
     "add_n",
+    "addmm",
+    "any",
+    "baddbmm",
     "bce_loss",
     "bmm",
+    "diag",
     "dropout",
     "elu",
     "embedding",
+    "eye",
     "flatten",
-    "floor_divide",
     "full_like",
     "gelu",
-    "hardswish",
-    "hardsigmoid",
     "group_norm",
+    "hardsigmoid",
+    "hardswish",
+    "heaviside",
+    "huber_loss",
     "index_sample",
     "index_select",
     "instance_norm",
+    "kldiv_loss",
     "layer_norm",
     "leaky_relu",
     "lerp",
@@ -94,87 +60,89 @@ decomp_interface_implementation_gen_op_list = [
     "mean",
     "mean_all",
     "meshgrid",
+    "numel",
     "p_norm",
-    "pow",
     "reciprocal",
     "relu",
     "relu6",
     "sigmoid_cross_entropy_with_logits",
     "silu",
-    "swiglu",
     "softmax",
+    "softsign",
     "square",
     "squared_l2_norm",
     "squeeze",
     "stack",
-    "unsqueeze",
+    "swiglu",
+    "swish",
     "unbind",
-    "huber_loss",
+    "unsqueeze",
+    "unstack",
+    "masked_fill",
 ]
-
+decomp_rule_interface_declare_gen_op_list = (
+    GENERATE_IMPL_DECOMP + MANUAL_IMPL_DECOMP
+)
+decomp_rule_interface_implementation_gen_op_list = GENERATE_IMPL_DECOMP
 # xshape output will no longer used after decomp, but return none to keep output num the same as origin op
 decomp_ops_contain_unused_output = ["squeeze", "unsqueeze"]
 
-# prim op with one input and one output, with no attribute
-UNARY_PRIM_VJP_OPS = [
+##################### decomp_vjp ####################
+# come into effect in generated file op_decomp_vjp.cc
+# manual decomp interface implementation are located in manual_op_decomp_vjp.cc
+####################################################
+
+GENERATE_IMPL_VJP = [
     'abs_grad',
+    'add_grad',
+    'angle_grad',
+    'bce_loss_grad',
+    'cos_grad',
+    'divide_grad',
+    'elementwise_pow_grad',
     'erf_grad',
     'exp_grad',
     'floor_grad',
-    'log_grad',
-    'rsqrt_grad',
-    'sin_grad',
-    'cos_grad',
-    'tanh_grad',
-]
-
-# prim op with two inputs and one output, with no attribute
-BINARY_PRIM_VJP_OPS = [
-    'matmul_grad',
-    'add_grad',
-    'divide_grad',
-    'subtract_grad',
-    'multiply_grad',
-    'elementwise_pow_grad',
-    'maximum_grad',
-    'reduce_as_grad',
-]
-
-OTHER_PRIM_VJP_OPS = [
-    'sum_grad',
-    'reshape_grad',
-    'roll_grad',
-    'transpose_grad',
-    'max_grad',
-    'squeeze_grad',
-    'unsqueeze_grad',
-]
-
-
-CUSTOM_VJP = [
     'gelu_grad',
+    'group_norm_grad',
+    'hardsigmoid_grad',
     'hardswish_grad',
     'leaky_relu_grad',
+    'layer_norm_grad',
+    'log_grad',
+    'matmul_grad',
+    'max_grad',
+    'maximum_grad',
     'mean_grad',
     'minimum_grad',
+    'multiply_grad',
     'pow_grad',
+    'reduce_as_grad',
     'relu_grad',
+    'relu6_grad',
+    'elu_grad',
+    'reshape_grad',
+    'roll_grad',
+    'rsqrt_grad',
     'sigmoid_grad',
     'silu_grad',
+    'sin_grad',
     'softmax_grad',
     'sqrt_grad',
+    'squeeze_grad',
+    'subtract_grad',
+    'sum_grad',
     'swiglu_grad',
-    'layer_norm_grad',
-    'group_norm_grad',
-]  # custom vjp list of composite op
+    'tanh_grad',
+    'transpose_grad',
+    'unsqueeze_grad',
+    'p_norm_grad',
+    'masked_fill_grad',
+]
 
 # declare belongs to codegen, but implementation not
-OTHER_VJP = ["concat_grad", "stack_grad", 'slice_grad']
+MANUAL_IMPL_VJP = ["concat_grad", "stack_grad", 'slice_grad']
 
-vjp_list = (
-    UNARY_PRIM_VJP_OPS + BINARY_PRIM_VJP_OPS + CUSTOM_VJP + OTHER_PRIM_VJP_OPS
-)
+decomp_vjp_interface_declare_gen_op_list = GENERATE_IMPL_VJP + MANUAL_IMPL_VJP
 
-decomp_vjp_interface_declare_gen_op_list = vjp_list + OTHER_VJP
-
-decomp_vjp_interface_implementation_gen_op_list = vjp_list
+decomp_vjp_interface_implementation_gen_op_list = GENERATE_IMPL_VJP

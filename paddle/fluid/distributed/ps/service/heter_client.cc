@@ -15,10 +15,9 @@
 #include "paddle/fluid/distributed/ps/service/heter_client.h"
 
 #include "paddle/fluid/framework/convert_utils.h"
-#include "paddle/fluid/platform/profiler.h"
+#include "paddle/phi/core/platform/profiler.h"
 
-namespace paddle {
-namespace distributed {
+namespace paddle::distributed {
 PD_DEFINE_int32(heter_world_size, 100, "group size");  // group max size
 PD_DEFINE_int32(switch_send_recv_timeout_s, 600, "switch_send_recv_timeout_s");
 
@@ -30,8 +29,8 @@ int GetMicroId(const phi::DeviceContext& ctx, const framework::Scope* scope) {
   framework::Variable* var = scope->FindVar("microbatch_id");
   PADDLE_ENFORCE_EQ(var->IsType<phi::DenseTensor>(),
                     true,
-                    phi::errors::InvalidArgument(
-                        "the type of micro id should be LoDTensor."));
+                    common::errors::InvalidArgument(
+                        "the type of micro id should be DenseTensor."));
   auto micro_id = -1;
   auto* tensor = var->GetMutable<phi::DenseTensor>();
   if (phi::is_cpu_place(tensor->place())) {
@@ -118,9 +117,8 @@ void HeterClient::SendAndRecvAsync(
     const std::vector<std::string>& send_var_name,
     const std::vector<std::string>& recv_var_name,
     const std::string& mode) {
-  platform::RecordEvent record_event("HeterClient->SendAndRecvAsync",
-                                     platform::TracerEventType::Communication,
-                                     1);
+  phi::RecordEvent record_event(
+      "HeterClient->SendAndRecvAsync", phi::TracerEventType::Communication, 1);
   const phi::DeviceContext* p_ctx = &ctx;
   const framework::Scope* p_scope = &scope;
   const std::vector<std::string> send_var_name_val = send_var_name;
@@ -133,7 +131,7 @@ void HeterClient::SendAndRecvAsync(
     PADDLE_ENFORCE_NE(
         closure->cntl.Failed(),
         true,
-        phi::errors::Unimplemented(
+        common::errors::Unimplemented(
             "HeterClient::SendAndRecv meets brpc error, error message is %s",
             closure->cntl.ErrorText()));
     VLOG(4) << "call heter_worker success";
@@ -225,7 +223,7 @@ int HeterClient::Send(const phi::DeviceContext& ctx,
       PADDLE_ENFORCE_NE(
           closure->cntl.Failed(),
           true,
-          phi::errors::Unimplemented(
+          common::errors::Unimplemented(
               "HeterClient::SendToSwitch meets brpc error, error message is %s",
               closure->cntl.ErrorText()));
     }
@@ -251,7 +249,7 @@ int HeterClient::Send(const phi::DeviceContext& ctx,
     framework::Variable* var = p_scope->FindVar(send_var_name);
     butil::IOBuf temp_iobuf;
     if (var->IsType<phi::DenseTensor>()) {
-      SerializeLodTensor(var, ctx, send_var_msg, &temp_iobuf);
+      SerializeDenseTensor(var, ctx, send_var_msg, &temp_iobuf);
     } else if (var->IsType<phi::SelectedRows>()) {
       SerializeSelectedRows(var, ctx, send_var_msg, &temp_iobuf);
     }
@@ -423,5 +421,4 @@ int HeterClient::Recv(int group_id,
   VLOG(4) << "Recv done";
   return 0;
 }
-}  // namespace distributed
-}  // end namespace paddle
+}  // namespace paddle::distributed

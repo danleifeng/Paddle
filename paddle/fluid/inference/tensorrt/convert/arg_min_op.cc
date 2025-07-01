@@ -14,9 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/inference/tensorrt/convert/op_converter.h"
 
-namespace paddle {
-namespace inference {
-namespace tensorrt {
+namespace paddle::inference::tensorrt {
 
 class ArgMinOpConverter : public OpConverter {
  public:
@@ -32,9 +30,6 @@ class ArgMinOpConverter : public OpConverter {
     int axis = op_desc.HasAttr("axis")
                    ? PADDLE_GET_CONST(int64_t, op_desc.GetAttr("axis"))
                    : -1;
-    if (axis > 0 && !engine_->with_dynamic_shape()) {
-      axis -= 1;
-    }
     if (axis < 0) axis += rank;
     auto* topk_layer = TRT_ENGINE_ADD_LAYER(
         engine_, TopK, *input, nvinfer1::TopKOperation::kMIN, 1, 1 << axis);
@@ -61,8 +56,6 @@ class ArgMinOpConverter : public OpConverter {
   }
 };
 
-}  // namespace tensorrt
-}  // namespace inference
-}  // namespace paddle
+}  // namespace paddle::inference::tensorrt
 
 REGISTER_TRT_OP_CONVERTER(arg_min, ArgMinOpConverter);

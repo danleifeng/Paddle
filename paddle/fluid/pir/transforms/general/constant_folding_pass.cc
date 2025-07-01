@@ -26,6 +26,7 @@
 #include "paddle/fluid/pir/dialect/operator/ir/op_dialect.h"
 #include "paddle/fluid/pir/dialect/operator/ir/op_type.h"
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
+#include "paddle/fluid/pir/dialect/operator/utils/utils.h"
 #include "paddle/fluid/pir/transforms/pd_op_to_kernel_pass.h"
 #include "paddle/fluid/pir/utils/general_functions.h"
 
@@ -46,6 +47,7 @@
 #include "paddle/pir/include/core/region.h"
 #include "paddle/pir/include/core/value.h"
 #include "paddle/pir/include/pass/pass.h"
+#include "paddle/pir/include/pass/pass_registry.h"
 #include "paddle/pir/include/pattern_rewrite/frozen_rewrite_pattern_set.h"
 #include "paddle/pir/include/pattern_rewrite/pattern_match.h"
 #include "paddle/pir/include/pattern_rewrite/pattern_rewrite_driver.h"
@@ -78,7 +80,8 @@ class ConstantFoldingPattern : public pir::RewritePattern {
     if (op->HasTrait<pir::SideEffectTrait>() ||
         op->isa<pir::ConstantTensorOp>() || op->isa<pir::ParameterOp>() ||
         op->isa<paddle::dialect::FeedOp>() ||
-        op->isa<paddle::dialect::DataOp>()) {
+        op->isa<paddle::dialect::DataOp>() ||
+        op->isa<paddle::dialect::AssignValueOp>()) {
       return false;
     }
 
@@ -178,13 +181,13 @@ class ConstantFoldingPattern : public pir::RewritePattern {
       auto* output_var = scope_->FindVar(output_var_name);
       PADDLE_ENFORCE_NOT_NULL(
           output_var,
-          phi::errors::InvalidArgument("Parameter var [%s] not in scope.",
-                                       output_var_name));
+          common::errors::InvalidArgument("Parameter var [%s] not in scope.",
+                                          output_var_name));
 
       if (use_parameter_op) {
         if (output_var->IsType<phi::DenseTensor>()) {
           auto* output_tensor = output_var->GetMutable<phi::DenseTensor>();
-          if (output_tensor->IsInitialized() &&
+          if (output_tensor->has_allocation() &&
               output_tensor->place().GetType() != place_.GetType()) {
             phi::DenseTensor temp_tensor;
             temp_tensor.Resize(output_tensor->dims());
@@ -243,7 +246,8 @@ class ConstantFoldingPattern : public pir::RewritePattern {
   bool CheckUseOps(
       const std::vector<std::pair<pir::Operation*, int32_t>>& use_ops) const {
     for (auto [use_op, idx] : use_ops) {
-      if (use_op->isa<pir::CombineOp>()) {
+      if (use_op->isa<pir::CombineOp>() ||
+          use_op->isa<paddle::dialect::StackOp>()) {
         if (!ReplaceResultByParameterOp(use_op)) {
           return false;
         }
@@ -287,11 +291,16 @@ class ConstantFoldingPattern : public pir::RewritePattern {
     for (const auto& output_var_name : output_var_names) {
       exe_config_->skip_gc_vars.insert(output_var_name);
     }
+    if (VLOG_IS_ON(3)) {
+      std::cout << "IR before lowering = " << new_program << std::endl;
+    }
     auto kernel_program =
         paddle::dialect::PdOpLowerToKernelPass(&new_program, place_);
+    if (VLOG_IS_ON(3)) {
+      std::cout << "IR after lowering = " << *kernel_program << std::endl;
+    }
     paddle::framework::InterpreterCore core(
         place_, {}, kernel_program->block(), scope_, *exe_config_);
-
     core.Run({});
     return output_var_names;
   }
@@ -307,8 +316,8 @@ class ConstantFoldingPattern : public pir::RewritePattern {
     auto* var = scope_->FindVar(var_name);
     PADDLE_ENFORCE_NOT_NULL(
         var,
-        phi::errors::InvalidArgument("Persistable var [%s] not in scope.",
-                                     var_name));
+        common::errors::InvalidArgument("Persistable var [%s] not in scope.",
+                                        var_name));
     auto from_op =
         builder.Build<Op>(var_name, op->operand_source(index).type());
     if (op->operand_source(index).use_count() > 1) {
@@ -348,7 +357,7 @@ class ConstantFoldingPattern : public pir::RewritePattern {
                       j, prev_op, builder, rewriter);
               combine_op_inputs.push_back(constant_op->result(0));
             } else {
-              PADDLE_THROW(phi::errors::Fatal(
+              PADDLE_THROW(common::errors::Fatal(
                   "Not support %s before builtin.combine op!",
                   prev_prev_op->name()));
             }
@@ -366,8 +375,8 @@ class ConstantFoldingPattern : public pir::RewritePattern {
                   i, op, builder, rewriter);
           op_inputs.push_back(constant_op->result(0));
         } else {
-          PADDLE_THROW(phi::errors::Fatal("Not support %s before matched op!",
-                                          prev_op->name()));
+          PADDLE_THROW(common::errors::Fatal(
+              "Not support %s before matched op!", prev_op->name()));
         }
       } else {
         op_inputs.push_back(nullptr);
@@ -388,6 +397,11 @@ class ConstantFoldingPattern : public pir::RewritePattern {
       if (!op_copy->result(i) || !op_copy->result(i).type()) {
         continue;
       }
+
+      auto cast_op = builder.Build<paddle::dialect::CastOp>(
+          op_copy->result(i),
+          paddle::dialect::GetValueDataType(op_copy->result(i)));
+
       std::stringstream ss;
       ss << std::chrono::high_resolution_clock::now()
                 .time_since_epoch()
@@ -395,7 +409,7 @@ class ConstantFoldingPattern : public pir::RewritePattern {
       std::string output_var_name =
           "constant_folding@_" + ss.str() + std::to_string((*suffix_)++);
 
-      builder.Build<pir::ShadowOutputOp>(op_copy->result(i), output_var_name);
+      builder.Build<pir::ShadowOutputOp>(cast_op.result(0), output_var_name);
       output_var_names.push_back(output_var_name);
     }
 
@@ -454,8 +468,8 @@ class ConstantFoldingPatternForTrain : public ConstantFoldingPattern {
       std::string output_var_name = output_var_names[i];
       PADDLE_ENFORCE_NOT_NULL(
           scope_->FindVar(output_var_name),
-          phi::errors::InvalidArgument("Parameter var [%s] not in scope.",
-                                       output_var_name));
+          common::errors::InvalidArgument("Parameter var [%s] not in scope.",
+                                          output_var_name));
 
       auto constant_op = rewriter.Build<pir::ConstantTensorOp>(
           output_var_name, op->result(i).type());
@@ -479,14 +493,14 @@ class ConstantFoldingPass : public pir::Pass {
     PADDLE_ENFORCE_EQ(
         Has(pir::Pass::kPlaceAttr),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Pass initialize failed."
             "When using ConstantFoldingPass, place attribute is required!"
             "Use Set method to set the place attribute."));
     PADDLE_ENFORCE_EQ(
         Has(pir::Pass::kParamScopeAttr),
         true,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "Pass initialize failed."
             "When using ConstantFoldingPass, scope attribute is required!"
             "Use Set method to set the scope attribute."));
@@ -495,7 +509,7 @@ class ConstantFoldingPass : public pir::Pass {
     scope_ = &Get<paddle::framework::Scope>(pir::Pass::kParamScopeAttr);
 
     PADDLE_ENFORCE_NOT_NULL(
-        scope_, phi::errors::InvalidArgument("scope can not be nullptr"));
+        scope_, common::errors::InvalidArgument("scope can not be nullptr"));
 
     pir::RewritePatternSet ps(context);
 
@@ -543,3 +557,5 @@ std::unique_ptr<Pass> CreateConstantFoldingPass() {
 }
 
 }  // namespace pir
+
+REGISTER_IR_PASS(constant_folding_pass, ConstantFoldingPass);

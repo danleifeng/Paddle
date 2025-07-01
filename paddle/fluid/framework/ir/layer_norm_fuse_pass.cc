@@ -24,9 +24,7 @@
 #include "paddle/utils/string/pretty_log.h"
 #include "paddle/utils/string/printf.h"
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 // cpplint complaints (wrong!) for not included <string> header in below line.
 using string::PrettyLogDetail;  // NOLINT
@@ -215,15 +213,15 @@ LayerNormFusePass::LayerNormFusePass() {
 }
 
 void LayerNormFusePass::ApplyImpl(Graph* graph) const {
-  PADDLE_ENFORCE_NOT_NULL(
-      graph,
-      phi::errors::InvalidArgument("The input graph of "
-                                   "LayerNormFusePass should not be nullptr."));
+  PADDLE_ENFORCE_NOT_NULL(graph,
+                          common::errors::InvalidArgument(
+                              "The input graph of "
+                              "LayerNormFusePass should not be nullptr."));
   FusePassBase::Init(scope_name_, graph);
 
   auto* scope = param_scope();
   PADDLE_ENFORCE_NOT_NULL(
-      scope, phi::errors::InvalidArgument("Scope cannot be nullptr."));
+      scope, common::errors::InvalidArgument("Scope cannot be nullptr."));
 
   GraphPatternDetector gpd;
   patterns::LayerNorm layer_norm_pattern(gpd.mutable_pattern(), scope_name_);
@@ -428,9 +426,7 @@ void LayerNormFusePass::ApplyImpl(Graph* graph) const {
                     found_layer_norm_count);
 }
 
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 
 #undef CHECK_TRUE
 #undef EXPECT_TRUE

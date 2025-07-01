@@ -120,6 +120,12 @@ class ProgramInterpreter : public InterpreterBaseImpl {
 
   std::tuple<double, double> InterpreterRunTime() override;
 
+  void SetCUDAGraphState(uint8_t cuda_graph_state) override {
+    PADDLE_THROW(common::errors::Unavailable(
+        "ProgramInterpreter does not support SetCUDAGraphState, "
+        "please use PirInterpreter instead."));
+  }
+
   // Only for debug
   Variable* DebugVar(const std::string& name) const override;
 
@@ -164,7 +170,7 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   // gc
   void RecordStreamForGC(const Instruction& instr);
   void CheckGC(const Instruction& instr);
-  void ClearLoDTensorArrayInLocalScope();
+  void ClearDenseTensorArrayInLocalScope();
 
   // workqueue
   std::shared_ptr<interpreter::AsyncWorkQueue> GetWorkQueue();
@@ -247,6 +253,26 @@ class ProgramInterpreter : public InterpreterBaseImpl {
   size_t last_calculate_instr_id_;
   bool enable_job_schedule_profiler_;
 };
+
+static inline const phi::DenseTensor& GetTensorFromVar(const Variable* var) {
+  if (var->IsType<phi::DenseTensor>()) {
+    return var->Get<phi::DenseTensor>();
+  } else {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Variable must be type of phi::DenseTensor, but received %s.",
+        framework::ToTypeName(var->Type())));
+  }
+}
+
+static inline phi::DenseTensor* GetMutableTensorFromVar(Variable* var) {
+  if (var->IsType<phi::DenseTensor>()) {
+    return var->GetMutable<phi::DenseTensor>();
+  } else {
+    PADDLE_THROW(common::errors::InvalidArgument(
+        "Variable must be type of phi::DenseTensor, but received %s.",
+        framework::ToTypeName(var->Type())));
+  }
+}
 
 }  // namespace framework
 }  // namespace paddle

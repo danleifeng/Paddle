@@ -16,9 +16,7 @@
 
 #include "paddle/fluid/framework/program_desc.h"
 
-namespace paddle {
-namespace framework {
-namespace interpreter {
+namespace paddle::framework::interpreter {
 
 Plan::Plan(const std::vector<std::shared_ptr<Job>>& job_list,
            const std::unordered_map<std::string, std::shared_ptr<ProgramDesc>>&
@@ -29,7 +27,7 @@ Plan::Plan(const std::vector<std::shared_ptr<Job>>& job_list,
   for (size_t i = 0; i < job_list_.size(); ++i) {
     const auto& job = job_list_[i];
     PADDLE_ENFORCE(type_to_program_.find(job->Type()) != type_to_program_.end(),
-                   phi::errors::InvalidArgument(
+                   common::errors::InvalidArgument(
                        "The %d-th job (type:%s, micro_batch_id:%d) has no "
                        "corresponding Program.",
                        i,
@@ -51,7 +49,7 @@ Plan::Plan(
     const auto& job = job_list_[i];
     PADDLE_ENFORCE(
         type_to_ir_program_.find(job->Type()) != type_to_ir_program_.end(),
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "The %d-th job (type:%s, micro_batch_id:%d) has no "
             "corresponding Program.",
             i,
@@ -92,6 +90,4 @@ void Plan::SetIrProgram(const std::string& job_type,
 
 int64_t Plan::MicroBatchNum() const { return micro_batch_num_; }
 
-}  // namespace interpreter
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::interpreter

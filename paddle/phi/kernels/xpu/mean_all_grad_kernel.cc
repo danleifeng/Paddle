@@ -25,6 +25,11 @@ void MeanAllGradKernel(const Context& dev_ctx,
                        const DenseTensor& x,
                        const DenseTensor& out_grad,
                        DenseTensor* x_grad) {
+  if (x_grad && x_grad->numel() == 0) {
+    dev_ctx.template Alloc<T>(x_grad);
+    return;
+  }
+
   using XPUType = typename XPUTypeTrait<T>::Type;
   auto IG = x_grad;
   dev_ctx.template Alloc<T>(IG);
@@ -32,7 +37,7 @@ void MeanAllGradKernel(const Context& dev_ctx,
   PADDLE_ENFORCE_EQ(
       OG->numel(),
       1,
-      phi::errors::InvalidArgument("Mean Gradient should be scalar"));
+      common::errors::InvalidArgument("Mean Gradient should be scalar"));
   auto dev_version =
       phi::backends::xpu::get_xpu_version(dev_ctx.GetPlace().GetDeviceId());
   if (dev_version == phi::backends::xpu::XPUVersion::XPU3) {

@@ -178,14 +178,37 @@ add_library(onnxruntime STATIC IMPORTED GLOBAL)
 set_property(TARGET onnxruntime PROPERTY IMPORTED_LOCATION ${ONNXRUNTIME_LIB})
 add_dependencies(onnxruntime ${ONNXRUNTIME_PROJECT})
 
+if(WIN32)
+  string(REGEX REPLACE "/" "\\\\" SOURCE_PATH "${ONNXRUNTIME_SHARED_LIB}")
+  set(ONNX_COPY_PATH
+      "${CMAKE_BINARY_DIR}/paddle/third_party/onnx_copy_retry.bat")
+  file(
+    WRITE ${CMAKE_BINARY_DIR}/paddle/third_party/onnx_copy_retry.bat
+    ""
+    "set build_times=1\n"
+    ":retry\n"
+    "ECHO copy_onnx run %build_times% time\n"
+    "xcopy ${SOURCE_PATH} %1 /Y\n"
+    "if %ERRORLEVEL% NEQ 0 (\n"
+    "    set /a build_times=%build_times%+1\n"
+    "    if %build_times% GEQ 10 (\n"
+    "        exit /b 1\n"
+    "    ) else (\n"
+    "        goto :retry\n"
+    "    )\n"
+    ")\n"
+    "exit /b 0")
+endif()
+
 function(copy_onnx TARGET_NAME)
   # If error of Exitcode0xc000007b happened when a .exe running, copy onnxruntime.dll
   # to the .exe folder.
   if(TARGET ${TARGET_NAME})
+    string(REGEX REPLACE "/" "\\\\" DESTINATION_PATH
+                         "${CMAKE_CURRENT_BINARY_DIR}")
     add_custom_command(
       TARGET ${TARGET_NAME}
       POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy ${ONNXRUNTIME_SHARED_LIB}
-              ${CMAKE_CURRENT_BINARY_DIR} DEPENDS onnxruntime)
+      COMMAND ${ONNX_COPY_PATH} ${DESTINATION_PATH} DEPENDS onnxruntime)
   endif()
 endfunction()

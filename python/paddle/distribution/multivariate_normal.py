@@ -133,7 +133,7 @@ class MultivariateNormal(distribution.Distribution):
                 scale_tril.shape[:-2], loc.shape[:-1]
             )
             self.scale_tril = scale_tril.expand(
-                batch_shape + [scale_tril.shape[-2], scale_tril.shape[-1]]
+                [*batch_shape, scale_tril.shape[-2], scale_tril.shape[-1]]
             )
         elif covariance_matrix is not None:
             if covariance_matrix.dim() < 2:
@@ -146,8 +146,11 @@ class MultivariateNormal(distribution.Distribution):
                 covariance_matrix.shape[:-2], loc.shape[:-1]
             )
             self.covariance_matrix = covariance_matrix.expand(
-                batch_shape
-                + [covariance_matrix.shape[-2], covariance_matrix.shape[-1]]
+                [
+                    *batch_shape,
+                    covariance_matrix.shape[-2],
+                    covariance_matrix.shape[-1],
+                ]
             )
         else:
             if precision_matrix.dim() < 2:
@@ -160,15 +163,13 @@ class MultivariateNormal(distribution.Distribution):
                 precision_matrix.shape[:-2], loc.shape[:-1]
             )
             self.precision_matrix = precision_matrix.expand(
-                batch_shape
-                + [precision_matrix.shape[-2], precision_matrix.shape[-1]]
+                [
+                    *batch_shape,
+                    precision_matrix.shape[-2],
+                    precision_matrix.shape[-1],
+                ]
             )
-        self.loc = loc.expand(
-            batch_shape
-            + [
-                -1,
-            ]
-        )
+        self.loc = loc.expand([*batch_shape, -1])
         event_shape = self.loc.shape[-1:]
 
         if scale_tril is not None:
@@ -206,7 +207,7 @@ class MultivariateNormal(distribution.Distribution):
             .expand(self._batch_shape + self._event_shape)
         )
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate Multivariate Normal samples of the specified shape. The final shape would be ``sample_shape + batch_shape + event_shape``.
 
         Args:
@@ -218,7 +219,7 @@ class MultivariateNormal(distribution.Distribution):
         with paddle.no_grad():
             return self.rsample(shape)
 
-    def rsample(self, shape: Sequence[int] = ()) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """Generate Multivariate Normal samples of the specified shape. The final shape would be ``sample_shape + batch_shape + event_shape``.
 
         Args:

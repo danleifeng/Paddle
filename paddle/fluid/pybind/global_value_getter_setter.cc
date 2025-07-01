@@ -22,11 +22,11 @@
 #include <utility>
 #include <vector>
 
+#include "paddle/common/errors.h"
 #include "paddle/common/flags.h"
 #include "paddle/common/macros.h"
 #include "paddle/fluid/framework/python_headers.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/errors.h"
 #include "pybind11/stl.h"
 
 // FIXME(zengjinle): these 2 flags may be removed by the linker when compiling
@@ -47,6 +47,8 @@ PD_DECLARE_int32(rpc_prefetch_thread_num);
 namespace paddle::pybind {
 
 namespace py = pybind11;
+
+static void RegisterGlobalVarGetterSetter();
 
 class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
   DISABLE_COPY_AND_ASSIGN(GlobalVarGetterSetterRegistry);
@@ -106,11 +108,11 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
     PADDLE_ENFORCE_EQ(
         HasGetterMethod(name),
         false,
-        phi::errors::AlreadyExists(
+        common::errors::AlreadyExists(
             "Getter of global variable %s has been registered", name));
-    PADDLE_ENFORCE_NOT_NULL(
-        getter,
-        phi::errors::InvalidArgument("Getter of %s should not be null", name));
+    PADDLE_ENFORCE_NOT_NULL(getter,
+                            common::errors::InvalidArgument(
+                                "Getter of %s should not be null", name));
     var_infos_.insert({name, VarInfo(is_public, getter, default_getter)});
   }
 
@@ -122,22 +124,22 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
     PADDLE_ENFORCE_EQ(
         HasGetterMethod(name),
         false,
-        phi::errors::AlreadyExists(
+        common::errors::AlreadyExists(
             "Getter of global variable %s has been registered", name));
 
     PADDLE_ENFORCE_EQ(
         HasSetterMethod(name),
         false,
-        phi::errors::AlreadyExists(
+        common::errors::AlreadyExists(
             "Setter of global variable %s has been registered", name));
 
-    PADDLE_ENFORCE_NOT_NULL(
-        getter,
-        phi::errors::InvalidArgument("Getter of %s should not be null", name));
+    PADDLE_ENFORCE_NOT_NULL(getter,
+                            common::errors::InvalidArgument(
+                                "Getter of %s should not be null", name));
 
-    PADDLE_ENFORCE_NOT_NULL(
-        setter,
-        phi::errors::InvalidArgument("Setter of %s should not be null", name));
+    PADDLE_ENFORCE_NOT_NULL(setter,
+                            common::errors::InvalidArgument(
+                                "Setter of %s should not be null", name));
     var_infos_.insert(
         {name, VarInfo(is_public, getter, default_getter, setter)});
   }
@@ -146,7 +148,7 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
     PADDLE_ENFORCE_EQ(
         HasGetterMethod(name),
         true,
-        phi::errors::NotFound("Cannot find global variable %s", name));
+        common::errors::NotFound("Cannot find global variable %s", name));
     return var_infos_.at(name).getter;
   }
 
@@ -154,7 +156,7 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
     PADDLE_ENFORCE_EQ(
         HasGetterMethod(name),
         true,
-        phi::errors::NotFound("Cannot find global variable %s", name));
+        common::errors::NotFound("Cannot find global variable %s", name));
     return var_infos_.at(name).default_getter;
   }
 
@@ -181,7 +183,7 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
     PADDLE_ENFORCE_EQ(
         HasSetterMethod(name),
         true,
-        phi::errors::NotFound("Global variable %s is not writable", name));
+        common::errors::NotFound("Global variable %s is not writable", name));
     return var_infos_.at(name).setter;
   }
 
@@ -199,6 +201,9 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
   }
 
   bool IsPublic(const std::string &name) const {
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+    RegisterGlobalVarGetterSetter();
+#endif
     return var_infos_.count(name) > 0 && var_infos_.at(name).is_public;
   }
 
@@ -218,8 +223,6 @@ class PYBIND11_HIDDEN GlobalVarGetterSetterRegistry {
 };
 
 GlobalVarGetterSetterRegistry GlobalVarGetterSetterRegistry::instance_;
-
-static void RegisterGlobalVarGetterSetter();
 
 void BindGlobalValueGetterSetter(pybind11::module *module) {
   RegisterGlobalVarGetterSetter();
@@ -290,7 +293,27 @@ struct RegisterGetterSetterVisitor {
   bool is_writable_;
   void *value_ptr_;
 };
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+static void RegisterGlobalVarGetterSetter() {
+  static std::unordered_set<std::string> registered_flags;
+  const auto &flag_map = phi::GetExportedFlagInfoMap();
+  for (const auto &pair : flag_map) {
+    const std::string &name = pair.second.name;
 
+    if (registered_flags.count(name)) {
+      continue;
+    }
+    registered_flags.insert(name);
+
+    bool is_writable = pair.second.is_writable;
+    void *value_ptr = pair.second.value_ptr;
+    const auto &default_value = pair.second.default_value;
+    RegisterGetterSetterVisitor visitor(
+        "FLAGS_" + name, is_writable, value_ptr);
+    paddle::visit(visitor, default_value);
+  }
+}
+#else
 static void RegisterGlobalVarGetterSetter() {
   const auto &flag_map = phi::GetExportedFlagInfoMap();
   for (const auto &pair : flag_map) {
@@ -303,5 +326,5 @@ static void RegisterGlobalVarGetterSetter() {
     paddle::visit(visitor, default_value);
   }
 }
-
+#endif
 }  // namespace paddle::pybind

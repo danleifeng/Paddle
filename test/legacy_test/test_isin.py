@@ -20,7 +20,6 @@ from op_test import convert_float_to_uint16
 import paddle
 from paddle import base
 from paddle.base import core
-from paddle.pir_utils import test_with_pir_api
 
 DATA_CASES = [
     {'x_data': np.array(1.0), 'test_x_data': np.array(-1.0)},
@@ -65,6 +64,10 @@ DATA_CASES_UNIQUE_BF16 = [
     },
 ]
 
+DATA_CASES_ZERO_SIZE = [
+    {'x_data': np.random.randn(8, 0), 'test_x_data': np.random.randn(4, 0)},
+    {'x_data': np.random.randn(8, 0), 'test_x_data': np.random.randn(4, 1)},
+]
 
 DATA_TYPE = ['float32', 'float64', 'int32', 'int64']
 
@@ -141,7 +144,6 @@ def test(
             )
             np.testing.assert_equal(dygraph_result, np_result)
 
-            @test_with_pir_api
             def test_static():
                 (static_result,) = run_static(
                     x_data,
@@ -222,7 +224,6 @@ def test_bf16(data_cases, assume_unique=False, invert=False, use_gpu=False):
         )
         np.testing.assert_equal(dygraph_result, np_result)
 
-        @test_with_pir_api
         def test_static():
             (static_result,) = run_static_bf16(
                 x_data,
@@ -321,6 +322,14 @@ class TestIsInBF16(unittest.TestCase):
             invert=True,
             use_gpu=True,
         )
+
+
+class TestIsIn_ZeroSize(unittest.TestCase):
+    def test_without_gpu(self):
+        test(DATA_CASES_ZERO_SIZE, DATA_TYPE)
+
+    def test_with_gpu(self):
+        test(DATA_CASES_ZERO_SIZE, DATA_TYPE, use_gpu=True)
 
 
 if __name__ == '__main__':

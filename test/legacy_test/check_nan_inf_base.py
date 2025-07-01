@@ -77,29 +77,31 @@ def check(use_cuda):
     startup = base.Program()
     scope = base.core.Scope()
 
-    with base.scope_guard(scope):
-        with base.program_guard(main, startup):
-            y_predict, avg_cost, acc_top1 = net()
+    with (
+        base.scope_guard(scope),
+        base.program_guard(main, startup),
+    ):
+        y_predict, avg_cost, acc_top1 = net()
 
-            place = base.CUDAPlace(0) if use_cuda else base.CPUPlace()
-            exe = base.Executor(place)
-            exe.run(startup)
+        place = base.CUDAPlace(0) if use_cuda else base.CPUPlace()
+        exe = base.Executor(place)
+        exe.run(startup)
 
-            step = 0.0
-            for train_data, y_label in generator():
-                outs = exe.run(
-                    main,
-                    feed={'x': train_data, 'y': y_label},
-                    fetch_list=[y_predict, avg_cost, acc_top1],
-                )
-                step += 1
-                print(f'iter={step:.0f},cost={outs[1]},acc1={outs[2]}')
+        step = 0.0
+        for train_data, y_label in generator():
+            outs = exe.run(
+                main,
+                feed={'x': train_data, 'y': y_label},
+                fetch_list=[y_predict, avg_cost, acc_top1],
+            )
+            step += 1
+            print(f'iter={step:.0f},cost={outs[1]},acc1={outs[2]}')
 
 
 if __name__ == '__main__':
     try:
         check(use_cuda=False)
-        raise AssertionError()
+        raise AssertionError
     except Exception as e:
         print(e)
         print(type(e))
@@ -108,7 +110,7 @@ if __name__ == '__main__':
     if core.is_compiled_with_cuda():
         try:
             check(use_cuda=True)
-            raise AssertionError()
+            raise AssertionError
         except Exception as e:
             print(e)
             print(type(e))

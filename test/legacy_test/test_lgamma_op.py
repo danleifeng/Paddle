@@ -30,7 +30,8 @@ class TestLgammaOp(OpTest):
         self.op_type = 'lgamma'
         self.python_api = paddle.lgamma
         self.init_dtype_type()
-        shape = (5, 20)
+        self.init_shape()
+        shape = self.shape
         data = np.random.random(shape).astype(self.dtype) + 1
         self.inputs = {'X': data}
         result = np.ones(shape).astype(self.dtype)
@@ -42,8 +43,11 @@ class TestLgammaOp(OpTest):
     def init_dtype_type(self):
         self.dtype = np.float64
 
+    def init_shape(self):
+        self.shape = (5, 20)
+
     def test_check_output(self):
-        self.check_output(check_pir=True)
+        self.check_output(check_pir=True, check_symbol_infer=False)
 
     def test_check_grad_normal(self):
         self.check_grad(['X'], 'Out', numeric_grad_delta=1e-7, check_pir=True)
@@ -63,6 +67,11 @@ class TestLgammaFP16Op(TestLgammaOp):
 
     def test_check_grad_normal(self):
         self.check_grad(['X'], 'Out', check_pir=True)
+
+
+class TestLgammaOp_ZeroSize(TestLgammaOp):
+    def init_shape(self):
+        self.shape = (5, 0)
 
 
 @unittest.skipIf(
@@ -86,7 +95,9 @@ class TestLgammaBF16Op(OpTest):
 
     def test_check_output(self):
         # After testing, bfloat16 needs to set the parameter place
-        self.check_output_with_place(core.CUDAPlace(0), check_pir=True)
+        self.check_output_with_place(
+            core.CUDAPlace(0), check_pir=True, check_symbol_infer=False
+        )
 
     def test_check_grad_normal(self):
         self.check_grad_with_place(

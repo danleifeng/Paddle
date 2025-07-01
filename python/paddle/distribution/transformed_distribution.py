@@ -14,11 +14,13 @@
 from __future__ import annotations
 
 import typing
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from paddle.distribution import distribution, independent, transform
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
     from paddle.distribution.distribution import Distribution
     from paddle.distribution.transform import Transform
@@ -55,6 +57,7 @@ class TransformedDistribution(distribution.Distribution):
                 -1.64333570)
             >>> # doctest: -SKIP
     """
+
     base: Distribution
     transforms: Sequence[Transform]
 
@@ -103,11 +106,11 @@ class TransformedDistribution(distribution.Distribution):
             ],
         )
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         """Sample from ``TransformedDistribution``.
 
         Args:
-            shape (Sequence[int], optional): The sample shape. Defaults to ().
+            shape (Sequence[int], optional): The sample shape. Defaults to [].
 
         Returns:
             [Tensor]: The sample result.
@@ -117,11 +120,11 @@ class TransformedDistribution(distribution.Distribution):
             x = t.forward(x)
         return x
 
-    def rsample(self, shape: Sequence[int] = ()) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         """Reparameterized sample from ``TransformedDistribution``.
 
         Args:
-            shape (Sequence[int], optional): The sample shape. Defaults to ().
+            shape (Sequence[int], optional): The sample shape. Defaults to [].
 
         Returns:
             [Tensor]: The sample result.

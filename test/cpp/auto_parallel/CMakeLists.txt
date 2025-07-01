@@ -34,6 +34,9 @@ if(WITH_DISTRIBUTE)
     cross_entropy_softmax_spmd_rule_test SRCS
     cross_entropy_softmax_spmd_rule_test.cc DEPS spmd_rule_test_util phi)
 
+  paddle_test(expand_spmd_rule_test SRCS expand_spmd_rule_test.cc DEPS
+              spmd_rule_test_util phi)
+
   paddle_test(expand_as_spmd_rule_test SRCS expand_as_spmd_rule_test.cc DEPS
               spmd_rule_test_util phi)
 
@@ -42,6 +45,11 @@ if(WITH_DISTRIBUTE)
 
   paddle_test(fused_rms_norm_spmd_rule_test SRCS
               fused_rms_norm_spmd_rule_test.cc DEPS spmd_rule_test_util phi)
+  paddle_test(moe_gate_dispatch_spmd_rule_test SRCS
+              moe_gate_dispatch_spmd_rule_test.cc DEPS spmd_rule_test_util phi)
+
+  paddle_test(moe_combine_spmd_rule_test SRCS moe_combine_spmd_rule_test.cc
+              DEPS spmd_rule_test_util phi)
 
 endif()
 

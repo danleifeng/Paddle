@@ -18,7 +18,6 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/elementwise/elementwise_op.h"
 #include "paddle/phi/backends/cpu/cpu_info.h"
-#include "paddle/phi/kernels/elementwise_kernel.h"
 
 namespace paddle {
 namespace operators {
@@ -39,7 +38,7 @@ class ElementwiseMulOp : public ElementwiseOp {
       const phi::DenseTensor& tensor,
       const phi::KernelKey& expected_kernel_type) const override {
     if (framework::IsComplexType(expected_kernel_type.dtype())) {
-      // only promote inputs’s types when contains complex input
+      // only promote inputs's types when contains complex input
       return phi::KernelKey(tensor.place(), tensor.layout(), tensor.dtype());
     } else {
       return phi::KernelKey(

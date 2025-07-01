@@ -46,7 +46,7 @@ static void SortDescending(const XPUContext& dev_ctx,
   DenseTensor index_t;
   index_t.Resize({value.numel()});
   int* index = dev_ctx.template HostAlloc<int>(&index_t);
-  for (int i = 0; i < value.numel(); ++i) {
+  for (int64_t i = 0; i < value.numel(); ++i) {
     index[i] = i;
   }
 
@@ -100,41 +100,41 @@ std::pair<DenseTensor, DenseTensor> ProposalForOneImage(
   var_sel.Resize(common::make_ddim({index_sort.numel(), 4}));
   dev_ctx.template Alloc<T>(&var_sel);
 
-  int r = xpu::gather<T>(dev_ctx.x_context(),
-                         scores_slice.data<T>(),
-                         index_sort.data<int>(),
-                         scores_sel.data<T>(),
-                         {static_cast<int>(scores_slice.numel()), 1},
-                         index_sort.numel(),
-                         0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  int r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                                scores_slice.data<T>(),
+                                index_sort.data<int>(),
+                                scores_sel.data<T>(),
+                                {scores_slice.numel(), 1},
+                                index_sort.numel(),
+                                0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     bbox_deltas_slice.data<T>(),
-                     index_sort.data<int>(),
-                     bbox_sel.data<T>(),
-                     {static_cast<int>(bbox_deltas_slice.numel()) / 4, 4},
-                     index_sort.numel(),
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            bbox_deltas_slice.data<T>(),
+                            index_sort.data<int>(),
+                            bbox_sel.data<T>(),
+                            {bbox_deltas_slice.numel() / 4, 4},
+                            index_sort.numel(),
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     anchors.data<T>(),
-                     index_sort.data<int>(),
-                     anchor_sel.data<T>(),
-                     {static_cast<int>(anchors.numel()) / 4, 4},
-                     index_sort.numel(),
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            anchors.data<T>(),
+                            index_sort.data<int>(),
+                            anchor_sel.data<T>(),
+                            {anchors.numel() / 4, 4},
+                            index_sort.numel(),
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     variances.data<T>(),
-                     index_sort.data<int>(),
-                     var_sel.data<T>(),
-                     {static_cast<int>(variances.numel()) / 4, 4},
-                     index_sort.numel(),
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            variances.data<T>(),
+                            index_sort.data<int>(),
+                            var_sel.data<T>(),
+                            {variances.numel() / 4, 4},
+                            index_sort.numel(),
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 
   int num = scores_slice.numel();
   int pre_nms_num = (pre_nms_top_n <= 0 || pre_nms_top_n > num)
@@ -203,23 +203,23 @@ std::pair<DenseTensor, DenseTensor> ProposalForOneImage(
   dev_ctx.template Alloc<T>(&proposals_filter);
   scores_filter.Resize(common::make_ddim({keep_num, 1}));
   dev_ctx.template Alloc<T>(&scores_filter);
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     proposals.data<T>(),
-                     keep_index.data<int>(),
-                     proposals_filter.data<T>(),
-                     {pre_nms_num, 4},
-                     keep_num,
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            proposals.data<T>(),
+                            keep_index.data<int>(),
+                            proposals_filter.data<T>(),
+                            {pre_nms_num, 4},
+                            keep_num,
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     scores_sel.data<T>(),
-                     keep_index.data<int>(),
-                     scores_filter.data<T>(),
-                     {pre_nms_num, 1},
-                     keep_num,
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            scores_sel.data<T>(),
+                            keep_index.data<int>(),
+                            scores_filter.data<T>(),
+                            {pre_nms_num, 1},
+                            keep_num,
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
 
   if (nms_thresh <= 0) {
     if (dev_ctx.x_context()->xpu_stream) {
@@ -229,7 +229,7 @@ std::pair<DenseTensor, DenseTensor> ProposalForOneImage(
   }
 
   // 4. nms
-  int nms_keep_num = 0;
+  int64_t nms_keep_num = 0;
   r = xpu::sorted_nms<T>(dev_ctx.x_context(),
                          proposals_filter.data<T>(),
                          keep_index.data<int>(),
@@ -249,22 +249,22 @@ std::pair<DenseTensor, DenseTensor> ProposalForOneImage(
   dev_ctx.template Alloc<T>(&proposals_nms);
   scores_nms.Resize(common::make_ddim({keep_index.numel(), 1}));
   dev_ctx.template Alloc<T>(&scores_nms);
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     proposals_filter.data<T>(),
-                     keep_index.data<int>(),
-                     proposals_nms.data<T>(),
-                     {keep_num, 4},
-                     keep_index.numel(),
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
-  r = xpu::gather<T>(dev_ctx.x_context(),
-                     scores_filter.data<T>(),
-                     keep_index.data<int>(),
-                     scores_nms.data<T>(),
-                     {keep_num, 1},
-                     keep_index.numel(),
-                     0);
-  PADDLE_ENFORCE_XDNN_SUCCESS(r, "gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            proposals_filter.data<T>(),
+                            keep_index.data<int>(),
+                            proposals_nms.data<T>(),
+                            {keep_num, 4},
+                            keep_index.numel(),
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
+  r = xpu::paddle_gather<T>(dev_ctx.x_context(),
+                            scores_filter.data<T>(),
+                            keep_index.data<int>(),
+                            scores_nms.data<T>(),
+                            {keep_num, 1},
+                            keep_index.numel(),
+                            0);
+  PADDLE_ENFORCE_XDNN_SUCCESS(r, "paddle_gather");
   if (dev_ctx.x_context()->xpu_stream) {
     dev_ctx.Wait();
   }
@@ -289,7 +289,7 @@ void GenerateProposalsKernel(const Context& dev_ctx,
                              DenseTensor* rpn_rois_num) {
   PADDLE_ENFORCE_GE(eta,
                     1.,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "Not support adaptive NMS. The attribute 'eta' "
                         "should not less than 1. But received eta=[%d]",
                         eta));
@@ -313,7 +313,7 @@ void GenerateProposalsKernel(const Context& dev_ctx,
   scores_swap.Resize(common::make_ddim({num, h_score, w_score, c_score}));
   dev_ctx.template Alloc<T>(&scores_swap);
 
-  std::vector<int> axis = {0, 2, 3, 1};
+  std::vector<int64_t> axis = {0, 2, 3, 1};
   int r = xpu::transpose<T>(dev_ctx.x_context(),
                             bbox_deltas.data<T>(),
                             bbox_deltas_swap.data<T>(),
@@ -400,7 +400,7 @@ void GenerateProposalsKernel(const Context& dev_ctx,
         place, num_data, cpu_place, &tmp_num[0], sizeof(int) * num);
   }
 
-  phi::LoD lod;
+  phi::LegacyLoD lod;
   lod.emplace_back(offset);
   rpn_rois->set_lod(lod);
   rpn_roi_probs->set_lod(lod);

@@ -34,10 +34,10 @@ SpmdInfo SplitWithNumInferSpmd(const DistMetaTensor& x, int num, int axis) {
   PADDLE_ENFORCE_EQ(
       x_ndim,
       x_dims_mapping.size(),
-      phi::errors::InvalidArgument("The Tensor X's rank [%d] and X's "
-                                   "dims_mapping size [%d] are not matched.",
-                                   x_ndim,
-                                   x_dims_mapping.size()));
+      common::errors::InvalidArgument("The Tensor X's rank [%d] and X's "
+                                      "dims_mapping size [%d] are not matched.",
+                                      x_ndim,
+                                      x_dims_mapping.size()));
 
   // Step1: Build Einsum Notation
   std::string alphabet = "abcdefghijlmnopqrstuvwxyz";
@@ -46,13 +46,13 @@ SpmdInfo SplitWithNumInferSpmd(const DistMetaTensor& x, int num, int axis) {
   }
 
   // get einsum notation for input, use a special
-  // notation 'k' to mark the splitted axis in input
+  // notation 'k' to mark the split axis in input
   std::string x_axes = alphabet.substr(0, x_ndim);
   x_axes[axis] = 'k';
 
   // get einsum notation for output
   std::string out_axes(x_axes);
-  // the splitted axis cannot be sharded, set its notation
+  // the split axis cannot be sharded, set its notation
   // with the special '1' to set its dim mapping to -1.
   out_axes[axis] = '1';
 
@@ -73,7 +73,7 @@ SpmdInfo SplitWithNumInferSpmd(const DistMetaTensor& x, int num, int axis) {
     out_dist_attrs[i].set_dims_mapping(out_dims_mapping);
   }
 
-  // Step2.3 get new dist attribute for input. the splitted
+  // Step2.3 get new dist attribute for input. the split
   // cannot be sharded, if it is sharded, set it to replicated.
   TensorDistAttr x_dist_attr_dst = CopyTensorDistAttrForOutput(x_dist_attr_src);
   x_dims_mapping[axis] = -1;
@@ -111,7 +111,7 @@ SpmdInfo SplitWithNumInferSpmdReverse(
   std::vector<int64_t> x_dims_mapping = x_dist_attr.dims_mapping();
   PADDLE_ENFORCE_EQ(nouts,
                     num,
-                    phi::errors::InvalidArgument(
+                    common::errors::InvalidArgument(
                         "The size of Output Tensors [%d] is not equal "
                         "to the specified split number [%d]",
                         nouts,
@@ -119,23 +119,23 @@ SpmdInfo SplitWithNumInferSpmdReverse(
   PADDLE_ENFORCE_EQ(
       x_ndim,
       out_ndim,
-      phi::errors::InvalidArgument("The Tensor X's rank [%d] is not equal "
-                                   "to the Tensor Out's rank [%d]",
-                                   x_ndim,
-                                   out_ndim));
+      common::errors::InvalidArgument("The Tensor X's rank [%d] is not equal "
+                                      "to the Tensor Out's rank [%d]",
+                                      x_ndim,
+                                      out_ndim));
   for (int i = 0; i < num; i++) {
     auto shape = common::vectorize(outs[i]->dims());
     int ndim = static_cast<int>(shape.size());
     auto dist_attr = outs[i]->dist_attr();
     int dims_mapping_size = static_cast<int>(dist_attr.dims_mapping().size());
-    PADDLE_ENFORCE_EQ(
-        ndim,
-        dims_mapping_size,
-        phi::errors::InvalidArgument("The Tensor Out[%d]'s rank [%d] and Its "
-                                     "dims_mapping size [%d] are not matched.",
-                                     i,
-                                     ndim,
-                                     dims_mapping_size));
+    PADDLE_ENFORCE_EQ(ndim,
+                      dims_mapping_size,
+                      common::errors::InvalidArgument(
+                          "The Tensor Out[%d]'s rank [%d] and Its "
+                          "dims_mapping size [%d] are not matched.",
+                          i,
+                          ndim,
+                          dims_mapping_size));
   }
 
   // Step1: Build Einsum Notation
@@ -145,7 +145,7 @@ SpmdInfo SplitWithNumInferSpmdReverse(
   std::string alphabet = "abcdefghijlmnopqrstuvwxyz";
 
   // get einsum notation for input, use a special
-  // notation 'k' to mark the splitted axis in input
+  // notation 'k' to mark the split axis in input
   std::string x_axes = alphabet.substr(0, x_ndim);
   x_axes[axis] = 'k';
 
@@ -171,7 +171,7 @@ SpmdInfo SplitWithNumInferSpmdReverse(
   auto x_dist_attr_dst = CopyTensorDistAttrForOutput(x_dist_attr);
   x_dist_attr_dst.set_dims_mapping(x_dims_mapping);
 
-  // step2.3 get new dist attribute for output. the splitted
+  // step2.3 get new dist attribute for output. the split
   // cannot be sharded, if it is sharded, set it to replicated.
   std::vector<TensorDistAttr> out_dist_attrs;
   for (int i = 0; i < nouts; i++) {

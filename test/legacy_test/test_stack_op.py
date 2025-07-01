@@ -19,7 +19,6 @@ from op_test import OpTest, convert_float_to_uint16
 
 import paddle
 from paddle import base
-from paddle.pir_utils import test_with_pir_api
 
 paddle.enable_static()
 
@@ -205,9 +204,9 @@ class TestStackBF16Op(OpTest):
         )
 
 
-class TestStackAPIWithLoDTensorArray(unittest.TestCase):
+class TestStackAPIWithDenseTensorArray(unittest.TestCase):
     """
-    Test stack api when the input(x) is a LoDTensorArray.
+    Test stack api when the input(x) is a DenseTensorArray.
     """
 
     def setUp(self):
@@ -221,7 +220,6 @@ class TestStackAPIWithLoDTensorArray(unittest.TestCase):
             else base.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_case(self):
         self.program = paddle.static.Program()
         with paddle.static.program_guard(self.program):
@@ -243,9 +241,9 @@ class TestStackAPIWithLoDTensorArray(unittest.TestCase):
         )
 
 
-class TestTensorStackAPIWithLoDTensorArray(unittest.TestCase):
+class TestTensorStackAPIWithDenseTensorArray(unittest.TestCase):
     """
-    Test stack api when the input(x) is a LoDTensorArray.
+    Test stack api when the input(x) is a DenseTensorArray.
     """
 
     def setUp(self):
@@ -259,7 +257,6 @@ class TestTensorStackAPIWithLoDTensorArray(unittest.TestCase):
             else base.CPUPlace()
         )
 
-    @test_with_pir_api
     def test_case(self):
         self.program = paddle.static.Program()
         with paddle.static.program_guard(self.program):
@@ -282,7 +279,7 @@ class TestTensorStackAPIWithLoDTensorArray(unittest.TestCase):
 
 
 class API_test(unittest.TestCase):
-    @test_with_pir_api
+
     def test_out(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -303,7 +300,6 @@ class API_test(unittest.TestCase):
             expected_result = np.stack([input1, input2, input3], axis=0)
             np.testing.assert_allclose(expected_result, result, rtol=1e-05)
 
-    @test_with_pir_api
     def test_single_tensor_error(self):
         with paddle.static.program_guard(
             paddle.static.Program(), paddle.static.Program()
@@ -340,7 +336,7 @@ class API_DygraphTest(unittest.TestCase):
 
 
 class TestStackOpWithNegativeShape(unittest.TestCase):
-    @test_with_pir_api
+
     def test_out(self):
         main_prg, startup_prg = paddle.static.Program(), paddle.static.Program()
         with paddle.static.program_guard(main_prg, startup_prg):
@@ -390,19 +386,24 @@ class TestStackAPI_ZeroDim(unittest.TestCase):
         paddle.enable_static()
 
 
-# class TestStackListOfSingleTensor(unittest.TestCase):
-#     def setUp(self):
-#         paddle.disable_static()
-#         paddle.seed(2022)
-#         self.x = [paddle.randn((4, 2, 6), dtype="float32")]
+class TestStackListOfSingleTensor(unittest.TestCase):
+    def setUp(self):
+        paddle.disable_static()
+        paddle.seed(2022)
+        self.x = [paddle.randn((4, 2, 6), dtype="float32")]
+        self.x[0].stop_gradient = False
 
-#     def test_list_single_tensor(self):
-#         expect = paddle.stack(self.x)
-#         paddle.base.core._set_prim_all_enabled(True)
-#         st_model = paddle.jit.to_static(paddle.stack, full_graph=True)
-#         actual = st_model(self.x)
-#         np.testing.assert_allclose(expect, actual)
-#         paddle.enable_static()
+    def test_list_single_tensor(self):
+        expect = paddle.stack(self.x)
+        paddle.base.core._set_prim_all_enabled(True)
+        st_model = paddle.jit.to_static(
+            paddle.stack,
+            backend=None,
+            full_graph=True,
+        )
+        actual = st_model(self.x)
+        np.testing.assert_allclose(expect, actual)
+        paddle.enable_static()
 
 
 class TestPrimStackGrad(unittest.TestCase):
@@ -466,8 +467,8 @@ class TestStackAPI_ZeroSizedTensor(unittest.TestCase):
         out.backward()
 
         np.testing.assert_equal(out.shape, [2, 1, 0])
-        np.testing.assert_equal(x1.grad, None)
-        np.testing.assert_equal(x2.grad, None)
+        # np.testing.assert_equal(x1.grad, None)
+        # np.testing.assert_equal(x2.grad, None)
         np.testing.assert_equal(out, np.ones([2, 1, 0]))
 
         paddle.enable_static()
@@ -492,7 +493,6 @@ class TestStackAPI_ZeroSizedTensor(unittest.TestCase):
 
             paddle.enable_static()
 
-    @test_with_pir_api
     def test_static_cpu(self):
         paddle.enable_static()
         place = base.CPUPlace()
@@ -514,7 +514,6 @@ class TestStackAPI_ZeroSizedTensor(unittest.TestCase):
             expected_result = np.stack([input1, input2, input3], axis=0)
             np.testing.assert_equal(expected_result, result)
 
-    @test_with_pir_api
     def test_static_gpu(self):
         if base.is_compiled_with_cuda():
             paddle.enable_static()

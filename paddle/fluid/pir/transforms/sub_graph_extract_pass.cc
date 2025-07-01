@@ -48,12 +48,12 @@ class SubGraphExtractPass : public pir::Pass {
     auto module_op = op->dyn_cast<pir::ModuleOp>();
     PADDLE_ENFORCE_NOT_NULL(
         module_op,
-        phi::errors::InvalidArgument(
+        common::errors::InvalidArgument(
             "sub_graph_extract_pass should run on module op."));
     auto& block = module_op.block();
 
     std::vector<GroupOpsVec> groups =
-        ::pir::SubgraphDetector(&block, IsMatmulOp)();
+        ::pir::DetectSubGraphs(&block, IsMatmulOp);
     AddStatistics(groups.size());
     for (auto& group_ops : groups) {
       VLOG(4) << "current group_ops.size(): " << group_ops.size();

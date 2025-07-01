@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Literal, Sequence, overload
+from typing import TYPE_CHECKING, Callable, Literal, overload
 
 import numpy as np
 
@@ -38,6 +38,8 @@ from ..nn import BatchNorm2D, Conv2D, Layer, ReLU, Sequential
 from ..nn.initializer import Normal
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor, nn
     from paddle._typing import ParamAttrLike, Size2, Size4
     from paddle.nn.functional.common import _PaddingSizeMode
@@ -639,7 +641,7 @@ def box_coder(
             data type is float32 or float64. The second is list or tuple consist
             of 4 elements shared by all boxes and data type is float32 or float64.
             Other is None and not involved in calculation.
-        target_box (Tensor): This input can be a 2-D LoDTensor with shape
+        target_box (Tensor): This input can be a 2-D DenseTensor with shape
             [N, 4] when code_type is 'encode_center_size'. This input also can
             be a 3-D Tensor with shape [N, M, 4] when code_type is
             'decode_center_size'. Each box is represented as
@@ -1097,6 +1099,7 @@ class DeformConv2D(Layer):
             >>> print(out.shape)
             [8, 16, 26, 26]
     """
+
     weight: Tensor
     bias: Tensor
 
@@ -1134,7 +1137,7 @@ class DeformConv2D(Layer):
 
         self._padding = convert_to_list(padding, 2, 'padding')
 
-        filter_shape = [out_channels, in_channels // groups] + self._kernel_size
+        filter_shape = [out_channels, in_channels // groups, *self._kernel_size]
 
         def _get_default_param_initializer():
             filter_elem_num = np.prod(self._kernel_size) * self._in_channels
@@ -1178,8 +1181,7 @@ def distribute_fpn_proposals(
     pixel_offset: bool = ...,
     rois_num: None = ...,
     name: str | None = ...,
-) -> tuple[list[Tensor], Tensor, None]:
-    ...
+) -> tuple[list[Tensor], Tensor, None]: ...
 
 
 @overload
@@ -1192,8 +1194,7 @@ def distribute_fpn_proposals(
     pixel_offset: bool = ...,
     rois_num: Tensor = ...,
     name: str | None = ...,
-) -> tuple[list[Tensor], Tensor, list[Tensor]]:
-    ...
+) -> tuple[list[Tensor], Tensor, list[Tensor]]: ...
 
 
 def distribute_fpn_proposals(
@@ -1887,9 +1888,9 @@ class ConvNormActivation(Sequential):
             in which case it will calculated as ``padding = (kernel_size - 1) // 2 * dilation``
         groups (int, optional): Number of blocked connections from input channels to output channels. Default: 1
         norm_layer (Callable[..., paddle.nn.Layer], optional): Norm layer that will be stacked on top of the convolution layer.
-            If ``None`` this layer wont be used. Default: ``paddle.nn.BatchNorm2D``
+            If ``None`` this layer won't be used. Default: ``paddle.nn.BatchNorm2D``
         activation_layer (Callable[..., paddle.nn.Layer], optional): Activation function which will be stacked on top of the normalization
-            layer (if not ``None``), otherwise on top of the conv layer. If ``None`` this layer wont be used. Default: ``paddle.nn.ReLU``
+            layer (if not ``None``), otherwise on top of the conv layer. If ``None`` this layer won't be used. Default: ``paddle.nn.ReLU``
         dilation (int): Spacing between kernel elements. Default: 1
         bias (bool|None, optional): Whether to use bias in the convolution layer. By default, biases are included if ``norm_layer is None``.
     """
@@ -2094,7 +2095,7 @@ def nms(
         return keep_boxes_idxs[sorted_sub_indices]
 
     if in_dygraph_mode():
-        top_k = shape if shape < top_k else top_k
+        top_k = min(top_k, shape)
         _, topk_sub_indices = paddle.topk(scores[keep_boxes_idxs], top_k)
         return keep_boxes_idxs[topk_sub_indices]
 
@@ -2116,8 +2117,7 @@ def generate_proposals(
     pixel_offset: bool = ...,
     return_rois_num: Literal[True] = ...,
     name: str | None = ...,
-) -> tuple[Tensor, Tensor, Tensor]:
-    ...
+) -> tuple[Tensor, Tensor, Tensor]: ...
 
 
 @overload
@@ -2135,8 +2135,7 @@ def generate_proposals(
     pixel_offset: bool = ...,
     return_rois_num: Literal[False] = ...,
     name: str | None = ...,
-) -> tuple[Tensor, Tensor, None]:
-    ...
+) -> tuple[Tensor, Tensor, None]: ...
 
 
 @overload
@@ -2154,8 +2153,7 @@ def generate_proposals(
     pixel_offset: bool = ...,
     return_rois_num: bool = ...,
     name: str | None = ...,
-) -> tuple[Tensor, Tensor, Tensor | None]:
-    ...
+) -> tuple[Tensor, Tensor, Tensor | None]: ...
 
 
 def generate_proposals(
@@ -2371,8 +2369,7 @@ def matrix_nms(
     return_index: Literal[True] = ...,
     return_rois_num: Literal[False] = ...,
     name: str | None = None,
-) -> tuple[Tensor, None, Tensor]:
-    ...
+) -> tuple[Tensor, None, Tensor]: ...
 
 
 @overload
@@ -2390,8 +2387,7 @@ def matrix_nms(
     return_index: Literal[True] = ...,
     return_rois_num: Literal[True] = ...,
     name: str | None = None,
-) -> tuple[Tensor, Tensor, Tensor]:
-    ...
+) -> tuple[Tensor, Tensor, Tensor]: ...
 
 
 @overload
@@ -2409,8 +2405,7 @@ def matrix_nms(
     return_index: Literal[False] = ...,
     return_rois_num: Literal[True] = ...,
     name: str | None = None,
-) -> tuple[Tensor, Tensor, None]:
-    ...
+) -> tuple[Tensor, Tensor, None]: ...
 
 
 @overload
@@ -2428,8 +2423,7 @@ def matrix_nms(
     return_index: Literal[False] = ...,
     return_rois_num: Literal[False] = ...,
     name: str | None = None,
-) -> tuple[Tensor, None, None]:
-    ...
+) -> tuple[Tensor, None, None]: ...
 
 
 @overload
@@ -2447,8 +2441,7 @@ def matrix_nms(
     return_index: bool = ...,
     return_rois_num: bool = ...,
     name: str | None = None,
-) -> tuple[Tensor, Tensor | None, Tensor | None]:
-    ...
+) -> tuple[Tensor, Tensor | None, Tensor | None]: ...
 
 
 def matrix_nms(

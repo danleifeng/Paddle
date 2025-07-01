@@ -47,7 +47,7 @@ func NewConfig() *Config {
 }
 
 ///
-/// \brief Set the combined model with two specific pathes for program and
+/// \brief Set the combined model with two specific paths for program and
 /// parameters.
 ///
 /// \param model model file path of the combined model.
@@ -270,7 +270,7 @@ func (config *Config) FractionOfGpuMemoryForPool() float32 {
 /// \brief Control whether to perform IR graph optimization.
 /// If turned off, the AnalysisConfig will act just like a NativeConfig.
 ///
-/// \param x Whether the ir graph optimization is actived.
+/// \param x Whether the ir graph optimization is active.
 ///
 func (config *Config) SwitchIrOptim(x bool) {
 	C.PD_ConfigSwitchIrOptim(config.c, cvtGoBoolToPD(x))
@@ -278,7 +278,7 @@ func (config *Config) SwitchIrOptim(x bool) {
 
 ///
 /// \brief A boolean state telling whether the ir graph optimization is
-/// actived.
+/// active.
 ///
 /// \return bool Whether to use ir graph optimization.
 ///
@@ -589,13 +589,6 @@ func (config *Config) SetMKLDNNOp(opList []string) {
 }
 
 ///
-/// \brief Turn on OneDNN quantization.
-///
-func (config *Config) EnableMkldnnQuantizer() {
-	C.PD_ConfigEnableMkldnnQuantizer(config.c)
-}
-
-///
 /// \brief Turn on OneDNN bfloat16.
 ///
 func (config *Config) EnableMkldnnBfloat16() {
@@ -636,15 +629,6 @@ func (config *Config) SetBfloat16Op(opList []string) {
 ///
 func (config *Config) ThreadLocalStreamEnabled() bool {
 	return cvtPDBoolToGo(C.PD_ConfigThreadLocalStreamEnabled(config.c))
-}
-
-///
-/// \brief A boolean state telling whether the OneDNN quantization is enabled.
-///
-/// \return bool Whether the OneDNN quantization is enabled.
-///
-func (config *Config) MkldnnQuantizerEnabled() bool {
-	return cvtPDBoolToGo(C.PD_ConfigMkldnnQuantizerEnabled(config.c))
 }
 
 ///

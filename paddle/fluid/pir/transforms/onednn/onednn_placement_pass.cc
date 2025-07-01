@@ -1,5 +1,4 @@
-// REGISTER_IR_PASS(onednn_placement_pass, OneDNNPlacementPass);
-// Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
+// Copyright (c) 2025 PaddlePaddle Authors. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +19,7 @@
 #include "paddle/fluid/pir/dialect/operator/ir/pd_op.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_parser.h"
 #include "paddle/fluid/pir/dialect/operator/utils/op_yaml_info_util.h"
+#include "paddle/fluid/pir/utils/general_functions.h"
 
 #include "paddle/pir/include/pass/pass.h"
 #include "paddle/pir/include/pass/pass_registry.h"
@@ -36,6 +36,21 @@ class OneDNNPlacementPattern : public pir::OpRewritePattern<OpType> {
       OpType op,
       pir::PatternRewriter &rewriter) const override {  // NOLINT
     std::string target_op_name = op->name();
+    if (target_op_name == "pd_op.scale" || target_op_name == "pd_op.scale_" ||
+        target_op_name == "pd_op.cast" || target_op_name == "pd_op.cast_") {
+      auto input_type = pir::GetDataTypeFromValue(op->operand_source(0));
+      if (!(pir::isa<pir::Float32Type>(input_type) ||
+            pir::isa<pir::BFloat16Type>(input_type)))
+        return false;
+    }
+    if (target_op_name == "pd_op.slice") {
+      auto input_type = pir::GetDataTypeFromValue(op->operand_source(0));
+      if (!(pir::isa<pir::Float32Type>(input_type) ||
+            pir::isa<pir::BFloat16Type>(input_type) ||
+            pir::isa<pir::UInt8Type>(input_type) ||
+            pir::isa<pir::Int8Type>(input_type)))
+        return false;
+    }
     target_op_name.replace(0, 5, "onednn_op");
 
     auto op_info =
@@ -86,7 +101,7 @@ class PatternCreator {
 
 class OneDNNPlacementPass : public pir::PatternRewritePass {
  public:
-  OneDNNPlacementPass() : pir::PatternRewritePass("onednn_placement_pass", 3) {}
+  OneDNNPlacementPass() : pir::PatternRewritePass("onednn_placement_pass", 2) {}
 
   pir::RewritePatternSet InitializePatterns(pir::IrContext *context) override {
     pir::RewritePatternSet ps(context);
@@ -173,7 +188,6 @@ class OneDNNPlacementPass : public pir::PatternRewritePass {
     patternCreator.CreatePatterns<paddle::dialect::SqueezeGrad_Op>(ps);
     patternCreator.CreatePatterns<paddle::dialect::TanhGradOp>(ps);
     patternCreator.CreatePatterns<paddle::dialect::TanhGrad_Op>(ps);
-    patternCreator.CreatePatterns<paddle::dialect::FcOp>(ps);
     patternCreator.CreatePatterns<paddle::dialect::FusionGruOp>(ps);
     patternCreator.CreatePatterns<paddle::dialect::AddNOp>(ps);
     patternCreator.CreatePatterns<paddle::dialect::Cast_Op>(ps);

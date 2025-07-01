@@ -18,8 +18,7 @@ import numpy as np
 from dygraph_to_static_utils import (
     Dy2StTestBase,
     enable_to_static_guard,
-    test_default_and_pir,
-    test_legacy_and_pt_and_pir,
+    test_default_mode_only,
     test_pir_only,
 )
 from test_resnet import ResNetHelper
@@ -79,7 +78,7 @@ class TestResnetWithPass(Dy2StTestBase):
         )
         self.verify_predict()
 
-    @test_default_and_pir
+    @test_default_mode_only
     def test_in_static_mode_mkldnn(self):
         paddle.set_flags({'FLAGS_use_mkldnn': True})
         try:
@@ -90,7 +89,6 @@ class TestResnetWithPass(Dy2StTestBase):
 
 
 class TestError(Dy2StTestBase):
-    @test_legacy_and_pt_and_pir
     def test_type_error(self):
         def foo(x):
             out = x + 1

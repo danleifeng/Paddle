@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import numbers
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -23,6 +23,8 @@ from paddle.base import framework
 from paddle.distribution import distribution
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from paddle import Tensor
 
 
@@ -57,6 +59,7 @@ class Laplace(distribution.Distribution):
                 1.31554604)
 
     """
+
     loc: Tensor
     scale: Tensor
 
@@ -258,13 +261,13 @@ class Laplace(distribution.Distribution):
                         0.54758132)
         """
         loc, scale, value = self._validate_value(value)
-        iterm = (
+        item = (
             0.5
             * (value - loc).sign()
             * paddle.expm1(-(value - loc).abs() / scale)
         )
 
-        return 0.5 - iterm
+        return 0.5 - item
 
     def icdf(self, value: float | Tensor) -> Tensor:
         r"""Inverse Cumulative distribution function.
@@ -300,11 +303,12 @@ class Laplace(distribution.Distribution):
 
         return loc - scale * (term).sign() * paddle.log1p(-2 * term.abs())
 
-    def sample(self, shape: Sequence[int] = ()) -> Tensor:
+    def sample(self, shape: Sequence[int] = []) -> Tensor:
         r"""Generate samples of the specified shape.
 
         Args:
-            shape(tuple[int]): The shape of generated samples.
+            shape(Sequence[int], optional): The shape of generated samples.
+                Defaults to [].
 
         Returns:
             Tensor: A sample tensor that fits the Laplace distribution.
@@ -323,11 +327,12 @@ class Laplace(distribution.Distribution):
         with paddle.no_grad():
             return self.rsample(shape)
 
-    def rsample(self, shape: Sequence[int]) -> Tensor:
+    def rsample(self, shape: Sequence[int] = []) -> Tensor:
         r"""Reparameterized sample.
 
         Args:
-            shape(tuple[int]): The shape of generated samples.
+            shape(Sequence[int], optional): The shape of generated samples.
+                Defaults to [].
 
         Returns:
             Tensor: A sample tensor that fits the Laplace distribution.

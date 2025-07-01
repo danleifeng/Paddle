@@ -630,7 +630,7 @@ void fused_attn_arbitrary_seqlen_fwd_impl(int64_t b,
 
     CHECK_CUDNN_FE(mha_graph->execute(handle, variant_pack, workspace));
   } catch (cudnn_frontend::cudnnException &e) {
-    PADDLE_THROW(phi::errors::Fatal(std::string(e.what())));
+    PADDLE_THROW(common::errors::Fatal(std::string(e.what())));
   }
 }
 
@@ -647,6 +647,7 @@ void fused_attn_arbitrary_seqlen_bwd_impl(int64_t b,
                                           MHA_Layout layout,
                                           MHA_Bias_Type bias_type,
                                           MHA_Mask_Type mask_type,
+                                          bool deterministic,
                                           void *devPtrQ,
                                           void *devPtrKTranspose,
                                           void *devPtrVTranspose,
@@ -789,6 +790,8 @@ void fused_attn_arbitrary_seqlen_bwd_impl(int64_t b,
                                   .set_name("flash_attention_backward")
                                   .set_causal_mask(is_causal)
                                   .set_attn_scale(attn_scale);
+
+      sdpa_backward_options.set_deterministic_algorithm(deterministic);
 
       sdpa_backward_options.set_alibi_mask(is_alibi);
 
@@ -989,7 +992,7 @@ void fused_attn_arbitrary_seqlen_bwd_impl(int64_t b,
 
     CHECK_CUDNN_FE(mha_graph->execute(handle, variant_pack, workspace));
   } catch (cudnn_frontend::cudnnException &e) {
-    PADDLE_THROW(phi::errors::Fatal(std::string(e.what())));
+    PADDLE_THROW(common::errors::Fatal(std::string(e.what())));
   }
 }
 

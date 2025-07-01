@@ -32,10 +32,6 @@
 
 PD_DECLARE_bool(cinn_enable_map_expr);
 
-PD_DECLARE_bool(cinn_new_group_scheduler);
-
-PD_DECLARE_bool(cinn_bucket_compile);
-
 namespace cinn {
 namespace hlir {
 namespace op {
@@ -46,338 +42,10 @@ using framework::OpStrategy;
 using framework::shape_t;
 using framework::StrategyFunction;
 
-using BlockReduceFunc =
-    std::function<std::vector<ir::Tensor>(const ir::Tensor &,
-                                          const std::vector<int> &,
-                                          const bool,
-                                          const std::string &)>;
 using ReduceFunc = std::function<ir::Tensor(const ir::Tensor &,
                                             const std::vector<int> &,
                                             const bool,
                                             const std::string &)>;
-
-std::shared_ptr<OpStrategy> StrategyForReduce(
-    const framework::NodeAttr &attrs,
-    const std::vector<ir::Tensor> &inputs,
-    const std::vector<Type> &out_type,
-    const std::vector<std::vector<int>> &output_shapes,
-    const Target &target,
-    const std::string &op_name,
-    BlockReduceFunc gpu_reduce_with_last_axis_func,
-    BlockReduceFunc gpu_reduce_without_last_axis_func,
-    ReduceFunc common_reduce_func) {
-  std::vector<int> reduce_axes;
-  auto ndim = inputs[0]->shape.size();
-  if (attrs.attr_store.count("axis")) {
-    reduce_axes = [&] {
-      if (absl::holds_alternative<std::vector<int64_t>>(
-              attrs.attr_store.at("axis"))) {
-        const auto &dim_attr =
-            absl::get<std::vector<int64_t>>(attrs.attr_store.at("axis"));
-        return std::vector<int>(dim_attr.begin(), dim_attr.end());
-      } else if (absl::holds_alternative<std::vector<int>>(
-                     attrs.attr_store.at("axis"))) {
-        return absl::get<std::vector<int>>(attrs.attr_store.at("axis"));
-      } else if (absl::holds_alternative<bool>(attrs.attr_store.at("axis"))) {
-        return std::vector<int>{};
-      } else {
-        PADDLE_THROW(phi::errors::InvalidArgument(
-            "reduce dimension's type is invalid!"));
-      }
-    }();
-    if (reduce_axes.empty()) {
-      for (int i = 0; i < ndim; ++i) {
-        reduce_axes.push_back(i);
-      }
-    } else {
-      std::for_each(reduce_axes.begin(), reduce_axes.end(), [&ndim](int &x) {
-        if (x < 0) x += ndim;
-      });
-    }
-    std::sort(reduce_axes.begin(), reduce_axes.end());
-    // check reduce_axes
-    CHECK_LE(reduce_axes.size(), ndim);
-    CHECK_LT(reduce_axes.back(), ndim);
-    for (int idx = 1; idx < reduce_axes.size(); ++idx) {
-      CHECK_NE(reduce_axes[idx - 1], reduce_axes[idx]);
-    }
-  } else {
-    PADDLE_THROW(phi::errors::InvalidArgument("reduce dimension is not set!"));
-  }
-
-  bool keepdim = false;
-  if (attrs.attr_store.count("keepdim")) {
-    keepdim = absl::get<bool>(attrs.attr_store.at("keepdim"));
-  }
-
-  auto WithoutLastDimInReduce = [](const std::vector<ir::Expr> &inshape,
-                                   const std::vector<int> &axes) {
-    // if last axis is in reduce.
-    if (std::find(axes.begin(), axes.end(), inshape.size() - 1) != axes.end() ||
-        std::find(axes.begin(), axes.end(), -1) != axes.end()) {
-      return false;
-    }
-
-    int sum_last_axes = 1;
-    for (int idx = axes.back() + 1; idx < inshape.size(); ++idx) {
-      sum_last_axes *= inshape[idx].as_int32();
-    }
-
-    if (sum_last_axes > 1) {
-      return true;
-    } else {
-      return false;
-    }
-  };
-
-  framework::CINNCompute reduction_compute([=](lang::Args args,
-                                               lang::RetValue *ret) {
-    PADDLE_ENFORCE_EQ(
-        !args.empty(),
-        true,
-        phi::errors::InvalidArgument(
-            "The input argument of %s compute is empty! Please check.",
-            op_name));
-    CINNValuePack arg_packs = args[0];
-    PADDLE_ENFORCE_EQ(
-        arg_packs.size(),
-        2U,
-        phi::errors::InvalidArgument(
-            "There should be 2 input args for %s compute", op_name));
-    PADDLE_ENFORCE_EQ(arg_packs[1].is_string(),
-                      true,
-                      phi::errors::InvalidArgument(
-                          "The arg_packs[1] is not empty! Please check."));
-    std::string tensor_name = arg_packs[1].operator std::string();
-    Expr x_expr = arg_packs[0];
-    PADDLE_ENFORCE_NOT_NULL(x_expr.as_tensor(),
-                            phi::errors::InvalidArgument(
-                                "The x_expr can not as tensor! Please check."));
-    ir::Tensor x = x_expr.as_tensor_ref();
-
-    std::unordered_set<std::string> bool_reduce_op = {"reduce_all",
-                                                      "reduce_any"};
-    PADDLE_ENFORCE_EQ(!bool_reduce_op.count(op_name) || x->type().is_bool(),
-                      true,
-                      phi::errors::InvalidArgument(
-                          "The type of input argument %s of %s should be bool, "
-                          "but get %s! Please check.",
-                          x->name,
-                          op_name,
-                          x->type().to_string()));
-
-    const auto &NaiveCompute = [&]() {
-      VLOG(3) << "Do Reduce Compute!";
-      auto out = common_reduce_func(x, reduce_axes, keepdim, tensor_name);
-
-      std::vector<CINNValue> cinn_values{CINNValue(out)};
-      *ret = CINNValuePack{cinn_values};
-    };
-    auto reductionComputeNvHygon = [&] {
-      if (!FLAGS_cinn_enable_map_expr && !FLAGS_cinn_new_group_scheduler) {
-        if (!WithoutLastDimInReduce(inputs[0]->shape, reduce_axes)) {
-          VLOG(3) << "Do Two Step Block Reduce Compute!";
-          auto res = gpu_reduce_with_last_axis_func(
-              x, reduce_axes, keepdim, tensor_name);
-
-          std::vector<CINNValue> cinn_values;
-          for (auto &t : res) {
-            cinn_values.emplace_back(t);
-          }
-          *ret = CINNValuePack{cinn_values};
-        } else {
-          VLOG(3) << "Do Block Shuffle Reduce Compute!";
-          auto res = gpu_reduce_without_last_axis_func(
-              x, reduce_axes, keepdim, tensor_name);
-
-          std::vector<CINNValue> cinn_values;
-          for (auto &t : res) {
-            cinn_values.emplace_back(t);
-          }
-          *ret = CINNValuePack{cinn_values};
-        }
-      } else {
-        NaiveCompute();
-      }
-    };
-    target.arch.Match(
-        [&](common::NVGPUArch) { reductionComputeNvHygon(); },
-        [&](std::variant<common::UnknownArch,
-                         common::X86Arch,
-                         common::ARMArch>) { NaiveCompute(); },
-        [&](common::HygonDCUArchHIP) { reductionComputeNvHygon(); });
-  });
-
-  framework::CINNSchedule reduction_schedule([=](lang::Args args,
-                                                 lang::RetValue *ret) {
-    CHECK(!args.empty()) << "The input argument of " << op_name
-                         << " schedule is empty! Please check.";
-
-    CINNValuePack arg_pack = args[0];
-    CHECK_GE(arg_pack.size(), 2UL);
-    CHECK_LE(arg_pack.size(), 8UL);
-    std::vector<Expr> vec_ast;
-    std::vector<Expr> vec_tensor;
-    for (int i = 0; i < arg_pack.size(); i++) {
-      if (arg_pack[i].is_expr()) {
-        Expr temp = arg_pack[i];
-        // TODO(zhhsplendid): old reduction schedule assumes all length-1
-        // for loops are simplified, but it is not after we add length-1
-        // back. Reduction schedule is complex and we haven't changed it to
-        // support the length-1 for loop yet. So we simplify here. The todo
-        // is that remove SimplifyForLoops below and change reduction schedule
-        optim::SimplifyForLoops(&temp);
-        optim::SimplifyBlocks(&temp);
-        vec_ast.emplace_back(temp);
-      } else if (arg_pack[i].is_tensor()) {
-        Expr temp = arg_pack[i];
-        vec_tensor.emplace_back(temp);
-      }
-    }
-    CHECK(!vec_ast.empty());
-    ir::ModuleExpr mod_expr(vec_ast);
-    ir::IRSchedule ir_sch(mod_expr);
-    ir_sch.MergeExprs();
-    const auto ReduceSchedule = [&]() {
-      if (!WithoutLastDimInReduce(inputs[0]->shape, reduce_axes)) {
-        if (arg_pack.size() == 4) {
-          CHECK_EQ(vec_tensor.size(), 2);
-          Expr out = vec_tensor[0];
-          Expr tmp_out = vec_tensor[1];
-
-          VLOG(3) << "Do IRGpuScheduleBlockReduceInternal Schedule!";
-          pe::IRGpuScheduleBlockReduceInternal(
-              ir_sch, tmp_out.as_tensor_ref(), out.as_tensor_ref(), target);
-
-          std::vector<CINNValue> res{
-              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-          *ret = CINNValuePack{res};
-        } else if (arg_pack.size() == 6) {
-          CHECK_EQ(vec_tensor.size(), 3);
-          Expr out = vec_tensor[0];
-          Expr tmp_out = vec_tensor[1];
-          Expr reduce_tmp_out = vec_tensor[2];
-
-          VLOG(3) << "Do IRGpuScheduleBlockReduce Schedule!";
-          pe::IRGpuScheduleBlockReduce(ir_sch,
-                                       reduce_tmp_out.as_tensor_ref(),
-                                       tmp_out.as_tensor_ref(),
-                                       out.as_tensor_ref(),
-                                       target);
-
-          std::vector<CINNValue> res{
-              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-          *ret = CINNValuePack{res};
-        } else if (arg_pack.size() == 7) {
-          CHECK_EQ(vec_tensor.size(), 4);
-          Expr out = vec_tensor[0];
-          Expr tmp_out = vec_tensor[1];
-          Expr reduce_tmp_out = vec_tensor[2];
-          Expr reshape = vec_tensor[3];
-
-          VLOG(3) << "Do IRGpuTwoStepReduceSchedule Schedule!";
-          pe::IRGpuTwoStepReduceSchedule(ir_sch,
-                                         reshape.as_tensor_ref(),
-                                         reduce_tmp_out.as_tensor_ref(),
-                                         tmp_out.as_tensor_ref(),
-                                         out.as_tensor_ref(),
-                                         cinn::common::DefaultDeviceTarget());
-
-          std::vector<CINNValue> res{
-              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-          *ret = CINNValuePack{res};
-        } else if (arg_pack.size() == 5) {
-          CHECK_EQ(vec_tensor.size(), 3);
-          Expr out = vec_tensor[0];
-          Expr tmp_out = vec_tensor[1];
-          Expr reduce_tmp_out = vec_tensor[2];
-
-          VLOG(3) << "Do IRGpuScheduleBlockReduce Schedule!";
-          pe::IRGpuScheduleBlockReduce(ir_sch,
-                                       reduce_tmp_out.as_tensor_ref(),
-                                       tmp_out.as_tensor_ref(),
-                                       out.as_tensor_ref(),
-                                       cinn::common::DefaultDeviceTarget());
-
-          std::vector<CINNValue> res{
-              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-          *ret = CINNValuePack{res};
-        } else {
-          PADDLE_THROW(phi::errors::InvalidArgument("Unkown Reduce Type!"));
-        }
-      } else {
-        if (arg_pack.size() == 2) {
-          CHECK_EQ(vec_tensor.size(), 1);
-          Expr reduce_out = vec_tensor[0];
-
-          VLOG(3) << "Do IRGpuScheduleReduce Schedule!";
-          pe::IRGpuScheduleReduce(
-              ir_sch,
-              reduce_out.as_tensor_ref(),
-              inputs[0]->shape.size() - reduce_axes.back() - 1,
-              target);
-
-          std::vector<CINNValue> res{
-              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-          *ret = CINNValuePack{res};
-        } else if (arg_pack.size() == 6) {
-          CHECK_EQ(vec_tensor.size(), 3);
-          Expr reduce_out = vec_tensor[0];
-          Expr reduce_internal = vec_tensor[1];
-          Expr reduce_reshape = vec_tensor[2];
-
-          VLOG(3) << "Do IRGpuScheduleBlockShuffleReduce Schedule!";
-          pe::IRGpuScheduleBlockShuffleReduce(ir_sch,
-                                              reduce_reshape.as_tensor_ref(),
-                                              reduce_internal.as_tensor_ref(),
-                                              reduce_out.as_tensor_ref(),
-                                              target);
-
-          std::vector<CINNValue> res{
-              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-          *ret = CINNValuePack{res};
-        } else {
-          PADDLE_THROW(phi::errors::InvalidArgument("Unkown Reduce Type!"));
-        }
-      }
-    };
-    target.arch.Match([&](common::UnknownArch) { CINN_NOT_IMPLEMENTED; },
-                      [&](common::X86Arch) {
-                        std::vector<CINNValue> res{
-                            CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-                        *ret = CINNValuePack{res};
-                      },
-                      [&](common::ARMArch) {
-                        std::vector<CINNValue> res{
-                            CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-                        *ret = CINNValuePack{res};
-                      },
-                      [&](common::NVGPUArch) {
-                        if (!FLAGS_cinn_new_group_scheduler) {
-                          ReduceSchedule();
-                        } else {
-                          std::vector<CINNValue> res{
-                              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-                          *ret = CINNValuePack{res};
-                        }
-                      },
-                      [&](common::HygonDCUArchHIP) {
-                        if (!FLAGS_cinn_new_group_scheduler) {
-                          ReduceSchedule();
-                        } else {
-                          std::vector<CINNValue> res{
-                              CINNValue(ir_sch.GetModule().GetExprs().at(0))};
-                          *ret = CINNValuePack{res};
-                        }
-                      });
-  });
-
-  auto strategy = std::make_shared<framework::OpStrategy>();
-  strategy->AddImpl(
-      reduction_compute, reduction_schedule, "strategy." + op_name + ".x86", 1);
-
-  return strategy;
-}
 
 std::shared_ptr<OpStrategy> StrategyForReduceSymbolic(
     const framework::NodeAttr &attrs,
@@ -386,25 +54,24 @@ std::shared_ptr<OpStrategy> StrategyForReduceSymbolic(
     const std::vector<std::vector<ir::Dim>> &output_shapes,
     const Target &target,
     const std::string &op_name,
-    BlockReduceFunc gpu_reduce_with_last_axis_func,
-    BlockReduceFunc gpu_reduce_without_last_axis_func,
-    ReduceFunc common_reduce_func) {
+    ReduceFunc common_reduce_func,
+    bool is_composite_reduce = false) {
   std::vector<int> reduce_axes;
   auto ndim = inputs[0]->shape.size();
   if (attrs.attr_store.count("axis")) {
     reduce_axes = [&] {
-      if (absl::holds_alternative<std::vector<int64_t>>(
+      if (std::holds_alternative<std::vector<int64_t>>(
               attrs.attr_store.at("axis"))) {
         const auto &dim_attr =
-            absl::get<std::vector<int64_t>>(attrs.attr_store.at("axis"));
+            std::get<std::vector<int64_t>>(attrs.attr_store.at("axis"));
         return std::vector<int>(dim_attr.begin(), dim_attr.end());
-      } else if (absl::holds_alternative<std::vector<int>>(
+      } else if (std::holds_alternative<std::vector<int>>(
                      attrs.attr_store.at("axis"))) {
-        return absl::get<std::vector<int>>(attrs.attr_store.at("axis"));
-      } else if (absl::holds_alternative<bool>(attrs.attr_store.at("axis"))) {
+        return std::get<std::vector<int>>(attrs.attr_store.at("axis"));
+      } else if (std::holds_alternative<bool>(attrs.attr_store.at("axis"))) {
         return std::vector<int>{};
       } else {
-        PADDLE_THROW(phi::errors::InvalidArgument(
+        PADDLE_THROW(::common::errors::InvalidArgument(
             "reduce dimension's type is invalid!"));
       }
     }();
@@ -418,161 +85,147 @@ std::shared_ptr<OpStrategy> StrategyForReduceSymbolic(
       });
     }
     std::sort(reduce_axes.begin(), reduce_axes.end());
-    CHECK_LE(reduce_axes.size(), ndim);
-    CHECK_LT(reduce_axes.back(), ndim);
+    PADDLE_ENFORCE_LE(
+        reduce_axes.size(),
+        ndim,
+        ::common::errors::InvalidArgument(
+            "The reduce axes size %d should be less than or equal "
+            "to the input tensor's dimension %d.",
+            reduce_axes.size(),
+            ndim));
+    PADDLE_ENFORCE_LT(reduce_axes.back(),
+                      ndim,
+                      ::common::errors::InvalidArgument(
+                          "The reduce axes back %d should be less than "
+                          "to the input tensor's dimension %d.",
+                          reduce_axes.back(),
+                          ndim));
     for (int idx = 1; idx < reduce_axes.size(); ++idx) {
-      CHECK_NE(reduce_axes[idx - 1], reduce_axes[idx]);
+      PADDLE_ENFORCE_NE(reduce_axes[idx - 1],
+                        reduce_axes[idx],
+                        ::common::errors::InvalidArgument(
+                            "The reduce axes should be unique!"));
     }
   } else {
-    PADDLE_THROW(phi::errors::InvalidArgument("reduce dimension is not set!"));
+    PADDLE_THROW(
+        ::common::errors::InvalidArgument("reduce dimension is not set!"));
   }
 
   bool keepdim = false;
   if (attrs.attr_store.count("keepdim")) {
-    keepdim = absl::get<bool>(attrs.attr_store.at("keepdim"));
+    keepdim = std::get<bool>(attrs.attr_store.at("keepdim"));
   }
 
-  framework::CINNCompute reduction_compute(
-      [=](lang::Args args, lang::RetValue *ret) {
-        CHECK(!args.empty()) << "The input argument of " << op_name
-                             << " compute is empty! Please check.";
-        CINNValuePack arg_packs = args[0];
-        CHECK_EQ(arg_packs.size(), 2U)
-            << "There should be 2 input args for " << op_name << " compute";
-        CHECK(arg_packs[1].is_string());
-        std::string tensor_name = arg_packs[1].operator std::string();
-        Expr x_expr = arg_packs[0];
-        CHECK(x_expr.as_tensor());
-        ir::Tensor x = x_expr.as_tensor_ref();
+  framework::CINNCompute reduction_compute([=](lang::Args args,
+                                               lang::RetValue *ret) {
+    PADDLE_ENFORCE_EQ(
+        !args.empty(),
+        true,
+        ::common::errors::InvalidArgument(
+            "The input argument of compute is empty! Please check."));
+    CINNValuePack arg_packs = args[0];
+    PADDLE_ENFORCE_EQ(arg_packs.size(),
+                      2U,
+                      ::common::errors::InvalidArgument(
+                          "There should be 2 input args for compute"));
+    PADDLE_ENFORCE_EQ(arg_packs[1].is_string(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The arg_packs[1] is not empty! Please check."));
+    std::string tensor_name = arg_packs[1].operator std::string();
+    Expr x_expr = arg_packs[0];
+    PADDLE_ENFORCE_NOT_NULL(x_expr.as_tensor(),
+                            ::common::errors::InvalidArgument(
+                                "The x_expr can not as tensor! Please check."));
 
-        std::unordered_set<std::string> bool_reduce_op = {"reduce_all",
-                                                          "reduce_any"};
-        CHECK(!bool_reduce_op.count(op_name) || x->type().is_bool())
-            << "The type of input argument " << x->name << " of " << op_name
-            << " should be bool, but get " << x->type() << "! Please check.";
+    ir::Tensor x = x_expr.as_tensor_ref();
 
-        VLOG(3) << "Do Reduce Compute!";
-        auto out = common_reduce_func(x, reduce_axes, keepdim, tensor_name);
+    std::unordered_set<std::string> bool_reduce_op = {"reduce_all",
+                                                      "reduce_any"};
+    PADDLE_ENFORCE_EQ(!bool_reduce_op.count(op_name) || x->type().is_bool(),
+                      true,
+                      ::common::errors::InvalidArgument(
+                          "The type of input argument should be bool, "
+                          "Please check."));
 
-        std::vector<CINNValue> cinn_values{CINNValue(out)};
-        *ret = CINNValuePack{cinn_values};
-      });
+    VLOG(3) << "Do Reduce Compute!";
+    auto out = common_reduce_func(x, reduce_axes, keepdim, tensor_name);
+    if (is_composite_reduce) {
+      PADDLE_ENFORCE_GT(
+          out_type.size(),
+          0,
+          ::common::errors::InvalidArgument(
+              "Out type vector is empty, this is invalid for arg reduce op"));
+      out->set_type(out_type[0]);
+      VLOG(4) << "Arg Reduce: out type: " << out->type();
+    }
+
+    std::vector<CINNValue> cinn_values{CINNValue(out)};
+    *ret = CINNValuePack{cinn_values};
+  });
 
   auto strategy = std::make_shared<framework::OpStrategy>();
-  strategy->AddImpl(
-      reduction_compute, lang::PackedFunc(), "strategy." + op_name + ".x86", 1);
+  strategy->AddImpl(reduction_compute, "strategy." + op_name + ".x86", 1);
 
   return strategy;
 }
 
-#define STRATEGY_FOR_REDUCE(op_name_,                           \
-                            reduce_op_,                         \
-                            gpu_reduce_with_last_axis_func,     \
-                            gpu_reduce_without_last_axis_func,  \
-                            common_reduce_func)                 \
-  std::shared_ptr<OpStrategy> StrategyFor##reduce_op_(          \
-      const framework::NodeAttr &attrs,                         \
-      const std::vector<ir::Tensor> &inputs,                    \
-      const std::vector<Type> &out_type,                        \
-      const std::vector<std::vector<int>> &output_shapes,       \
-      const Target &target) {                                   \
-    return StrategyForReduce(attrs,                             \
-                             inputs,                            \
-                             out_type,                          \
-                             output_shapes,                     \
-                             target,                            \
-                             #op_name_,                         \
-                             gpu_reduce_with_last_axis_func,    \
-                             gpu_reduce_without_last_axis_func, \
-                             common_reduce_func);               \
+#define STRATEGY_FOR_REDUCE_SYMBOLIC(                              \
+    op_name_, reduce_op_, common_reduce_func, is_composite_reduce) \
+  std::shared_ptr<OpStrategy> StrategyFor##reduce_op_##Symbolic(   \
+      const framework::NodeAttr &attrs,                            \
+      const std::vector<ir::Tensor> &inputs,                       \
+      const std::vector<Type> &out_type,                           \
+      const std::vector<std::vector<ir::Dim>> &output_shapes,      \
+      const Target &target) {                                      \
+    return StrategyForReduceSymbolic(attrs,                        \
+                                     inputs,                       \
+                                     out_type,                     \
+                                     output_shapes,                \
+                                     target,                       \
+                                     #op_name_,                    \
+                                     common_reduce_func,           \
+                                     is_composite_reduce);         \
   }
 
-#define STRATEGY_FOR_REDUCE_SYMBOLIC(op_name_,                          \
-                                     reduce_op_,                        \
-                                     gpu_reduce_with_last_axis_func,    \
-                                     gpu_reduce_without_last_axis_func, \
-                                     common_reduce_func)                \
-  std::shared_ptr<OpStrategy> StrategyFor##reduce_op_##Symbolic(        \
-      const framework::NodeAttr &attrs,                                 \
-      const std::vector<ir::Tensor> &inputs,                            \
-      const std::vector<Type> &out_type,                                \
-      const std::vector<std::vector<ir::Dim>> &output_shapes,           \
-      const Target &target) {                                           \
-    return StrategyForReduceSymbolic(attrs,                             \
-                                     inputs,                            \
-                                     out_type,                          \
-                                     output_shapes,                     \
-                                     target,                            \
-                                     #op_name_,                         \
-                                     gpu_reduce_with_last_axis_func,    \
-                                     gpu_reduce_without_last_axis_func, \
-                                     common_reduce_func);               \
-  }
-
-STRATEGY_FOR_REDUCE(reduce_sum,
-                    ReduceSum,
-                    pe::TwoStepBlockReduceSum,
-                    pe::BlockShuffleReduceSum,
-                    pe::ReduceSum);
-STRATEGY_FOR_REDUCE(reduce_prod,
-                    ReduceProd,
-                    pe::TwoStepBlockReduceProd,
-                    pe::BlockShuffleReduceProd,
-                    pe::ReduceProd);
-STRATEGY_FOR_REDUCE(reduce_max,
-                    ReduceMax,
-                    pe::TwoStepBlockReduceMax,
-                    pe::BlockShuffleReduceMax,
-                    pe::ReduceMax);
-STRATEGY_FOR_REDUCE(reduce_min,
-                    ReduceMin,
-                    pe::TwoStepBlockReduceMin,
-                    pe::BlockShuffleReduceMin,
-                    pe::ReduceMin);
-STRATEGY_FOR_REDUCE(reduce_all,
-                    ReduceAll,
-                    pe::TwoStepBlockReduceAll,
-                    pe::BlockShuffleReduceAll,
-                    pe::ReduceAll);
-STRATEGY_FOR_REDUCE(reduce_any,
-                    ReduceAny,
-                    pe::TwoStepBlockReduceAny,
-                    pe::BlockShuffleReduceAny,
-                    pe::ReduceAny);
+#define COMPOSITE_REDUCE_FLAG true
+#define NORMAL_REDUCE_FLAG false
 
 STRATEGY_FOR_REDUCE_SYMBOLIC(reduce_sum,
                              ReduceSum,
-                             pe::TwoStepBlockReduceSum,
-                             pe::BlockShuffleReduceSum,
-                             pe::ReduceSum);
+                             pe::ReduceSum,
+                             NORMAL_REDUCE_FLAG);
 STRATEGY_FOR_REDUCE_SYMBOLIC(reduce_prod,
                              ReduceProd,
-                             pe::TwoStepBlockReduceProd,
-                             pe::BlockShuffleReduceProd,
-                             pe::ReduceProd);
+                             pe::ReduceProd,
+                             NORMAL_REDUCE_FLAG);
 STRATEGY_FOR_REDUCE_SYMBOLIC(reduce_max,
                              ReduceMax,
-                             pe::TwoStepBlockReduceMax,
-                             pe::BlockShuffleReduceMax,
-                             pe::ReduceMax);
+                             pe::ReduceMax,
+                             NORMAL_REDUCE_FLAG);
 STRATEGY_FOR_REDUCE_SYMBOLIC(reduce_min,
                              ReduceMin,
-                             pe::TwoStepBlockReduceMin,
-                             pe::BlockShuffleReduceMin,
-                             pe::ReduceMin);
+                             pe::ReduceMin,
+                             NORMAL_REDUCE_FLAG);
 STRATEGY_FOR_REDUCE_SYMBOLIC(reduce_all,
                              ReduceAll,
-                             pe::TwoStepBlockReduceAll,
-                             pe::BlockShuffleReduceAll,
-                             pe::ReduceAll);
+                             pe::ReduceAll,
+                             NORMAL_REDUCE_FLAG);
 STRATEGY_FOR_REDUCE_SYMBOLIC(reduce_any,
                              ReduceAny,
-                             pe::TwoStepBlockReduceAny,
-                             pe::BlockShuffleReduceAny,
-                             pe::ReduceAny);
+                             pe::ReduceAny,
+                             NORMAL_REDUCE_FLAG);
+STRATEGY_FOR_REDUCE_SYMBOLIC(variance,
+                             Variance,
+                             pe::Variance,
+                             NORMAL_REDUCE_FLAG);
+STRATEGY_FOR_REDUCE_SYMBOLIC(argmax, Argmax, pe::Argmax, COMPOSITE_REDUCE_FLAG);
+STRATEGY_FOR_REDUCE_SYMBOLIC(argmin, Argmin, pe::Argmin, COMPOSITE_REDUCE_FLAG);
 
 #undef STRATEGY_FOR_REDUCE
 #undef STRATEGY_FOR_REDUCE_SYMBOLIC
+#undef COMPOSITE_REDUCE_FLAG
+#undef NORMAL_REDUCE_FLAG
 
 }  // namespace op
 }  // namespace hlir
@@ -584,8 +237,6 @@ CINN_REGISTER_HELPER(reduce_ops) {
       .describe(#op__ " function")                                       \
       .set_num_inputs(1)                                                 \
       .set_num_outputs(1)                                                \
-      .set_attr<cinn::hlir::framework::StrategyFunction>(                \
-          "CINNStrategy", cinn::hlir::op::StrategyFor##op_strategy__)    \
       .set_attr<cinn::hlir::framework::StrategyFunctionSymbolic>(        \
           "CINNStrategySymbolic",                                        \
           cinn::hlir::op::StrategyFor##op_strategy__##Symbolic)          \
@@ -598,6 +249,9 @@ CINN_REGISTER_HELPER(reduce_ops) {
 
   CINN_REGISTER_REDUCTION(reduce_sum, ReduceSum);
   CINN_REGISTER_REDUCTION(reduce_prod, ReduceProd);
+  CINN_REGISTER_REDUCTION(variance, Variance);
+  CINN_REGISTER_REDUCTION(argmax, Argmax);
+  CINN_REGISTER_REDUCTION(argmin, Argmin);
   CINN_REGISTER_REDUCTION(reduce_max, ReduceMax);
   CINN_REGISTER_REDUCTION(reduce_min, ReduceMin);
 
@@ -610,3 +264,6 @@ CINN_REGISTER_HELPER(reduce_ops) {
 
   return true;
 }
+
+bool __cinn__argmax_ops__registrar() { return true; }
+bool __cinn__argmin_ops__registrar() { return true; }

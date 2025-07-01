@@ -38,7 +38,7 @@ class TestSparsePcaLowrankAPI(unittest.TestCase):
     def transpose(self, x):
         shape = x.shape
         perm = list(range(0, len(shape)))
-        perm = perm[:-2] + [perm[-1]] + [perm[-2]]
+        perm = [*perm[:-2], perm[-1], perm[-2]]
         return paddle.transpose(x, perm)
 
     def random_sparse_matrix(self, rows, columns, density=0.01, **kwargs):
@@ -83,9 +83,9 @@ class TestSparsePcaLowrankAPI(unittest.TestCase):
         A1 = u.matmul(paddle.nn.functional.diag_embed(s)).matmul(
             self.transpose(v)
         )
-        ones_m1 = paddle.ones(batches + (rows, 1), dtype=a.dtype)
+        ones_m1 = paddle.ones((*batches, rows, 1), dtype=a.dtype)
         c = a.sum(axis=-2) / rows
-        c = c.reshape(batches + (1, columns))
+        c = c.reshape((*batches, 1, columns))
         A2 = a - ones_m1.matmul(c)
         np.testing.assert_allclose(A1.numpy(), A2.numpy(), atol=1e-5)
 

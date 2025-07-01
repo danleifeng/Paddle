@@ -213,8 +213,7 @@ void Executor::Run(const std::vector<const Tensor *> &inputs,
     tensor->Resize(common::make_ddim(output_shape));
     auto fetch_dtype = fetch_info.dataType();
     auto paddle_type = PopartDType2VarType(fetch_dtype);
-    tensor->mutable_data(ctx.GetPlace(),
-                         framework::TransToPhiDataType(paddle_type));
+    tensor->mutable_data(ctx.GetPlace(), phi::TransToPhiDataType(paddle_type));
     anchor_wrappers.emplace(tensor_id, PdIArray(tensor));
     popart_anchors.emplace(tensor_id, anchor_wrappers.at(tensor_id));
   }
@@ -415,7 +414,7 @@ void Executor::RunPopef(const std::vector<const Tensor *> &inputs,
         output_shape[0] = batch_size;
       } else {
         // shape of output must have batch info when when auto batch enabled
-        PADDLE_THROW(phi::errors::Unimplemented(
+        PADDLE_THROW(common::errors::Unimplemented(
             "Auto batch doesn't support the tensor with no batch info. "
             "Expected batch size in output tensor: %d should equal to "
             "micro batch size: %d. Please make sure batch size is set "
@@ -428,8 +427,7 @@ void Executor::RunPopef(const std::vector<const Tensor *> &inputs,
     auto *tensor = outputs[i];
     // resize output size to make data_ptr valid.
     tensor->Resize(common::make_ddim(output_shape));
-    tensor->mutable_data(ctx.GetPlace(),
-                         framework::TransToPhiDataType(paddle_dtype));
+    tensor->mutable_data(ctx.GetPlace(), phi::TransToPhiDataType(paddle_dtype));
 
     const auto size = tensor->memory_size();
 
@@ -453,7 +451,7 @@ void Executor::WeightsToHost() {
   if (ipu_strategy_->is_training && session_) {
     WeightsToPaddle();
   } else {
-    LOG(WARNING) << "For a non-trainning graph, cannot sync weights from IPU.";
+    LOG(WARNING) << "For a non-training graph, cannot sync weights from IPU.";
   }
 }
 

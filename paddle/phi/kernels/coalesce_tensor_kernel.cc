@@ -84,7 +84,7 @@ void GetMemSizeAndDtype(const std::vector<const DenseTensor *> &lod_tensors,
         lod_tensors[i]->initialized() ? lod_tensors[i]->data() : nullptr;
     VLOG(4) << size << " " << len;
     ss << "input(" << i << "-th tensor) dim:(" << lod_tensors[i]->dims() << ") "
-       << " addres:" << ptr << " len: " << len << ", ";
+       << " address:" << ptr << " len: " << len << ", ";
     *numel += len;
   }
   VLOG(10) << ss.str();
@@ -118,7 +118,7 @@ void CoalesceTensorKernel(const Context &dev_ctx,
                         input.size(),
                         output.size()));
 
-  // Input & Output check: only support LoDTensor
+  // Input & Output check: only support DenseTensor
   bool has_not_init_in_vars = false;
   for (size_t i = 0; i < input.size(); ++i) {
     PADDLE_ENFORCE_NOT_NULL(
@@ -301,6 +301,7 @@ PD_REGISTER_KERNEL(coalesce_tensor,
                    ALL_LAYOUT,
                    phi::CoalesceTensorKernel,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    int,
                    float,
                    double) {
@@ -315,6 +316,7 @@ PD_REGISTER_KERNEL(coalesce_tensor,
                    ALL_LAYOUT,
                    phi::CoalesceTensorKernel,
                    phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    int,
                    float,
                    double) {

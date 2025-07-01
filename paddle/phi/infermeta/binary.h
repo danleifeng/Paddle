@@ -1,4 +1,4 @@
-/* Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
+/* Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -202,7 +202,6 @@ void CrossEntropyWithSoftmaxInferMeta(const MetaTensor& logits,
 void CSoftmaxWithCrossEntropyInferMeta(const MetaTensor& logits,
                                        const MetaTensor& label,
                                        int64_t ignore_index,
-                                       int ring_id,
                                        int rank,
                                        int nranks,
                                        MetaTensor* softmax,
@@ -349,7 +348,7 @@ void CEmbeddingInferMeta(const MetaTensor& weight,
 
 void ExpandAsInferMeta(const MetaTensor& x,
                        const MetaTensor& y,
-                       const std::vector<int>& target_shape,
+                       const std::vector<int64_t>& target_shape,
                        MetaTensor* out);
 
 void FakeDequantizeMaxAbsInferMeta(const MetaTensor& x,
@@ -418,8 +417,8 @@ void HingeLossInferMeta(const MetaTensor& logits,
 void HistogramInferMeta(const MetaTensor& input,
                         const MetaTensor& weight,
                         int64_t bins,
-                        int min,
-                        int max,
+                        float min,
+                        float max,
                         bool density,
                         MetaTensor* out);
 
@@ -465,6 +464,26 @@ void IndexAddInferMeta(const MetaTensor& x,
                        int axis,
                        MetaTensor* output);
 
+void IndexElementwisePutInferMeta(const MetaTensor& x,
+                                  const std::vector<const MetaTensor*>& index,
+                                  const MetaTensor& value,
+                                  const std::vector<int64_t>& input_dims,
+                                  const std::vector<int64_t>& input_strides,
+                                  const std::vector<int64_t>& index_dims,
+                                  const std::vector<int64_t>& index_strides,
+                                  const int64_t slice_offset,
+                                  MetaTensor* out);
+
+void IndexElementwiseGetInferMeta(const MetaTensor& x,
+                                  const std::vector<const MetaTensor*>& index,
+                                  const std::vector<int64_t>& input_dims,
+                                  const std::vector<int64_t>& input_strides,
+                                  const std::vector<int64_t>& index_dims,
+                                  const std::vector<int64_t>& index_stride,
+                                  const int64_t slice_offset,
+                                  const bool accumulate,
+                                  MetaTensor* out);
+
 void KronInferMeta(const MetaTensor& x, const MetaTensor& y, MetaTensor* out);
 
 void LegacyCropInferMeta(const MetaTensor& x,
@@ -477,6 +496,13 @@ void LimitByCapacityInferMeta(const MetaTensor& expert_count,
                               const MetaTensor& capacity,
                               int n_worker,
                               MetaTensor* out);
+
+void LodResetInferMeta(const MetaTensor& x,
+                       const MetaTensor& y,
+                       const std::vector<int>& target_lod,
+                       bool append,
+                       MetaTensor* out,
+                       MetaConfig config = MetaConfig());
 
 void LogicalBinaryInferMeta(const MetaTensor& x,
                             const MetaTensor& y,
@@ -501,6 +527,10 @@ void LUUnpackInferMeta(const MetaTensor& x,
                        MetaTensor* l,
                        MetaTensor* u);
 
+void LookupTableInferMeta(const MetaTensor& w,
+                          const MetaTensor& ids,
+                          MetaTensor* out);
+
 void MarginCrossEntropyInferMeta(const MetaTensor& logits,
                                  const MetaTensor& label,
                                  bool return_softmax,
@@ -518,6 +548,11 @@ void MarginCrossEntropyInferMeta(const MetaTensor& logits,
 void MaskedSelectInferMeta(const MetaTensor& x,
                            const MetaTensor& mask,
                            MetaTensor* out);
+
+void MaskedFillInferMeta(const MetaTensor& x,
+                         const MetaTensor& mask,
+                         const MetaTensor& value,
+                         MetaTensor* out);
 
 void MatmulInferMeta(const MetaTensor& x,
                      const MetaTensor& y,
@@ -773,8 +808,12 @@ void Unpool3dInferMeta(const MetaTensor& x,
 void WeightDequantizeInferMeta(const MetaTensor& x,
                                const MetaTensor& scale,
                                const std::string& algo,
-                               DataType out_dtype,
                                const int32_t group_size,
                                MetaTensor* out);
+void FusedRMSNormInferMeta(const MetaTensor& x,
+                           const MetaTensor& scale,
+                           float epsilon,
+                           MetaTensor* y,
+                           MetaTensor* invvar);
 
 }  // namespace phi

@@ -54,7 +54,7 @@ int32_t PsGraphClient::Initialize() {
     }
   }
   for (uint32_t k = 0; k < max_shard_num; ++k) {
-    _thread_pools.push_back(std::make_shared<paddle::framework::ThreadPool>(1));
+    _thread_pools.push_back(std::make_shared<phi::ThreadPool>(1));
   }
   _local_shard_keys.resize(max_shard_num);
   _shard_ars.resize(max_shard_num);
@@ -113,15 +113,13 @@ void PsGraphClient::FinalizeWorker() {
       auto it = keys2rank_vec[shard].find(k);
       if (it != keys2rank_vec[shard].end()) {
         rank = it->second;
-        /*
-        int real = rank;
-        int expect = (k / 8) % 2;
-        CHECK(real == expect);
-        */
       } else {
         // Should not happen
         VLOG(0) << "PullSparsePtr, miss key " << k << " rank=" << _rank_id;
-        CHECK(it != keys2rank_vec[shard].end());
+        PADDLE_ENFORCE_NE(it,
+                          keys2rank_vec[shard].end(),
+                          common::errors::InvalidArgument(
+                              "The key was not found in the expected shard."));
       }
     } else {
       rank = ps_wrapper->PartitionKeyForRank(k);
@@ -216,7 +214,11 @@ void PsGraphClient::FinalizeWorker() {
         rank = it->second;
       } else {
         VLOG(0) << "PullSparseKey, miss key " << k << " rank=" << _rank_id;
-        CHECK(it != keys2rank_vec[shard].end());
+        PADDLE_ENFORCE_NE(
+            it,
+            keys2rank_vec[shard].end(),
+            common::errors::InvalidArgument(
+                "The key was not found in the expected shard.", k));
       }
     } else {
       rank = ps_wrapper->PartitionKeyForRank(k);
@@ -272,30 +274,30 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
   size_t num = 0;
   iar.ReadBack(&num, sizeof(size_t));
 
-  SparsePassValues *pass_refered = nullptr;
+  SparsePassValues *pass_referred = nullptr;
   SparseTableInfo &info = get_table_info(table_id);
   info.pass_mutex.lock();
-  auto it = info.refered_feas.find(id);
-  if (it == info.refered_feas.end()) {
-    pass_refered = new SparsePassValues;
-    pass_refered->wg.clear();
+  auto it = info.referred_feas.find(id);
+  if (it == info.referred_feas.end()) {
+    pass_referred = new SparsePassValues;
+    pass_referred->wg.clear();
     int total_ref = info.shard_num * (_rank_num - 1);
-    pass_refered->wg.add(total_ref);
-    pass_refered->values = new SparseShardValues;
-    pass_refered->shard_mutex = new std::mutex[info.shard_num];
-    pass_refered->values->resize(info.shard_num);
-    info.refered_feas[id].reset(pass_refered);
+    pass_referred->wg.add(total_ref);
+    pass_referred->values = new SparseShardValues;
+    pass_referred->shard_mutex = new std::mutex[info.shard_num];
+    pass_referred->values->resize(info.shard_num);
+    info.referred_feas[id].reset(pass_referred);
     info.sem_wait.post();
     VLOG(0) << "add request_handler table id=" << table_id
             << ", pass id=" << GET_PASS_ID(id) << ", shard_id=" << shard_id
             << ", total_ref=" << total_ref;
   } else {
-    pass_refered = it->second.get();
+    pass_referred = it->second.get();
   }
   info.pass_mutex.unlock();
 
-  auto &shard_values = (*pass_refered->values)[shard_id];
-  auto &shard_mutex = pass_refered->shard_mutex[shard_id];
+  auto &shard_values = (*pass_referred->values)[shard_id];
+  auto &shard_mutex = pass_referred->shard_mutex[shard_id];
   shard_mutex.lock();
   size_t shard_size = shard_values.keys.size();
   shard_values.offsets.push_back(shard_size);
@@ -308,15 +310,15 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
 
   if (num > 0) {
     auto f = _thread_pools[shard_id]->Run(
-        [this, table_id, id, shard_id, num, shard_size, pass_refered](void) {
+        [this, table_id, id, shard_id, num, shard_size, pass_referred](void) {
           thread_local std::vector<uint64_t> pull_keys;
           thread_local std::vector<char *> pull_vals;
 
           pull_keys.resize(num);
           pull_vals.resize(num);
 
-          auto &shard_values = (*pass_refered->values)[shard_id];
-          auto &shard_mutex = pass_refered->shard_mutex[shard_id];
+          auto &shard_values = (*pass_referred->values)[shard_id];
+          auto &shard_mutex = pass_referred->shard_mutex[shard_id];
           shard_mutex.lock();
           uint64_t *keys = &shard_values.keys[shard_size];
           for (size_t i = 0; i < num; ++i) {
@@ -350,11 +352,11 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
                   << ", shard_id=" << shard_id << ", keys count=" << num
                   << ", span=" << timeline.ElapsedSec();
           // notify done
-          pass_refered->wg.done();
+          pass_referred->wg.done();
         });
   } else {
     // zero done
-    pass_refered->wg.done();
+    pass_referred->wg.done();
   }
   // send response
   paddle::framework::BinaryArchive oar;
@@ -372,30 +374,30 @@ void PsGraphClient::request_key_handler(const simple::RpcMessageHead &head,
   size_t num = 0;
   iar.ReadBack(&num, sizeof(size_t));
 
-  SparsePassValues *pass_refered = nullptr;
+  SparsePassValues *pass_referred = nullptr;
   SparseTableInfo &info = get_table_info(table_id);
   info.pass_mutex.lock();
-  auto it = info.refered_feas.find(id);
-  if (it == info.refered_feas.end()) {
-    pass_refered = new SparsePassValues;
-    pass_refered->wg.clear();
+  auto it = info.referred_feas.find(id);
+  if (it == info.referred_feas.end()) {
+    pass_referred = new SparsePassValues;
+    pass_referred->wg.clear();
     int total_ref = info.shard_num * (_rank_num - 1);
-    pass_refered->wg.add(total_ref);
-    pass_refered->values = new SparseShardValues;
-    pass_refered->shard_mutex = new std::mutex[info.shard_num];
-    pass_refered->values->resize(info.shard_num);
-    info.refered_feas[id].reset(pass_refered);
+    pass_referred->wg.add(total_ref);
+    pass_referred->values = new SparseShardValues;
+    pass_referred->shard_mutex = new std::mutex[info.shard_num];
+    pass_referred->values->resize(info.shard_num);
+    info.referred_feas[id].reset(pass_referred);
     info.sem_wait.post();
     VLOG(0) << "add request_handler table id=" << table_id
             << ", pass id=" << GET_PASS_ID(id) << ", shard_id=" << shard_id
             << ", total_ref=" << total_ref;
   } else {
-    pass_refered = it->second.get();
+    pass_referred = it->second.get();
   }
   info.pass_mutex.unlock();
 
-  auto &shard_values = (*pass_refered->values)[shard_id];
-  auto &shard_mutex = pass_refered->shard_mutex[shard_id];
+  auto &shard_values = (*pass_referred->values)[shard_id];
+  auto &shard_mutex = pass_referred->shard_mutex[shard_id];
   shard_mutex.lock();
   size_t shard_size = shard_values.keys.size();
   shard_values.offsets.push_back(shard_size);
@@ -404,7 +406,7 @@ void PsGraphClient::request_key_handler(const simple::RpcMessageHead &head,
     iar.Read(&shard_values.keys[shard_size], num * sizeof(uint64_t));
   }
   shard_mutex.unlock();
-  pass_refered->wg.done();
+  pass_referred->wg.done();
   // send response
   paddle::framework::BinaryArchive oar;
   simple::global_rpc_server().send_response(head, oar);
@@ -416,39 +418,39 @@ PsGraphClient::SparseTableInfo &PsGraphClient::get_table_info(
   return (*_table_info[table_id].get());
 }
 // get pass keep keys values
-std::shared_ptr<SparseShardValues> PsGraphClient::TakePassSparseReferedValues(
+std::shared_ptr<SparseShardValues> PsGraphClient::TakePassSparseReferredValues(
     const size_t &table_id, const uint16_t &pass_id, const uint16_t &dim_id) {
   SparseTableInfo &info = get_table_info(table_id);
   uint32_t id = DIM_PASS_ID(dim_id, pass_id);
   info.sem_wait.wait();
-  SparsePassValues *pass_refered = nullptr;
+  SparsePassValues *pass_referred = nullptr;
 
   info.pass_mutex.lock();
-  auto it = info.refered_feas.find(id);
-  if (it == info.refered_feas.end()) {
+  auto it = info.referred_feas.find(id);
+  if (it == info.referred_feas.end()) {
     info.pass_mutex.unlock();
     VLOG(0) << "table_id=" << table_id
-            << ", TakePassSparseReferedValues pass_id=" << pass_id
+            << ", TakePassSparseReferredValues pass_id=" << pass_id
             << ", dim_id=" << dim_id << " is nullptr";
     return nullptr;
   }
-  pass_refered = it->second.get();
+  pass_referred = it->second.get();
   info.pass_mutex.unlock();
 
-  int cnt = pass_refered->wg.count();
+  int cnt = pass_referred->wg.count();
   VLOG(0) << "table_id=" << table_id
-          << ", begin TakePassSparseReferedValues pass_id=" << pass_id
+          << ", begin TakePassSparseReferredValues pass_id=" << pass_id
           << ", dim_id=" << dim_id << " wait count=" << cnt;
-  pass_refered->wg.wait();
+  pass_referred->wg.wait();
 
   std::shared_ptr<SparseShardValues> shard_ptr;
-  shard_ptr.reset(pass_refered->values);
-  pass_refered->values = nullptr;
+  shard_ptr.reset(pass_referred->values);
+  pass_referred->values = nullptr;
   // free shard mutex lock
-  delete[] pass_refered->shard_mutex;
+  delete[] pass_referred->shard_mutex;
 
   info.pass_mutex.lock();
-  info.refered_feas.erase(id);
+  info.referred_feas.erase(id);
   info.pass_mutex.unlock();
 
   return shard_ptr;

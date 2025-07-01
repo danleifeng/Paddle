@@ -60,11 +60,6 @@ void FusedBatchNormAddActKernel(const Context &dev_ctx,
                                 DenseTensor *saved_variance,
                                 DenseTensor *reserve_space) {
 #if defined(PADDLE_WITH_CUDA) and CUDNN_VERSION >= 7401
-  bool is_gpu_place = dev_ctx.GetPlace().GetType() == phi::AllocationType::GPU;
-  PADDLE_ENFORCE_EQ(is_gpu_place,
-                    true,
-                    phi::errors::PreconditionNotMet("It must use CUDAPlace."));
-
   double epsilon1 = static_cast<double>(epsilon);
   if (epsilon1 <= CUDNN_BN_MIN_EPSILON - FLT_EPSILON) {
     LOG(ERROR) << "Provided epsilon is smaller than "
@@ -131,7 +126,7 @@ void FusedBatchNormAddActKernel(const Context &dev_ctx,
   // backward. Thus this tensor shouldn't be temp.
   PADDLE_ENFORCE_NOT_NULL(
       reserve_space,
-      phi::errors::NotFound(
+      common::errors::NotFound(
           "The argument ReserveSpace of batch_norm op is not found."));
 
   // --------------- cudnn batchnorm workspace ---------------
@@ -207,7 +202,7 @@ void FusedBatchNormAddActKernel(const Context &dev_ctx,
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::cudnnDestroyTensorDescriptor(bn_param_desc_));
 #else
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "The fused_bn_add_activation operator is not supported on GPU "
       "when CUDNN version < 7.4.1"));
 #endif

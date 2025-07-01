@@ -94,7 +94,7 @@ class TestFft(unittest.TestCase):
 @parameterize(
     (TEST_CASE_NAME, 'x', 'n', 'axis', 'norm', 'expect_exception'),
     [
-        ('test_n_nagative', rand_x(2), -1, -1, 'backward', ValueError),
+        ('test_n_negative', rand_x(2), -1, -1, 'backward', ValueError),
         ('test_n_zero', rand_x(2), 0, -1, 'backward', ValueError),
         ('test_axis_out_of_range', rand_x(1), None, 10, 'backward', ValueError),
         (
@@ -117,11 +117,13 @@ class TestFft(unittest.TestCase):
 )
 class TestFftException(unittest.TestCase):
     def test_fft(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.fft, self.place, self.x, self.n, self.axis, self.norm
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -175,7 +177,7 @@ class TestFft2(unittest.TestCase):
     [
         # ('test_x_not_tensor', [0, 1], None, (0, 1), 'backward', ValueError),
         ('test_x_1dim_tensor', rand_x(1), None, (0, 1), 'backward', ValueError),
-        ('test_n_nagative', rand_x(2), -1, (0, 1), 'backward', ValueError),
+        ('test_n_negative', rand_x(2), -1, (0, 1), 'backward', ValueError),
         ('test_n_zero', rand_x(2), 0, (0, 1), 'backward', ValueError),
         (
             'test_axis_out_of_range',
@@ -206,16 +208,18 @@ class TestFft2(unittest.TestCase):
 )
 class TestFft2Exception(unittest.TestCase):
     def test_static_fft2(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.fft2,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -267,7 +271,7 @@ class TestFftn(unittest.TestCase):
     (TEST_CASE_NAME, 'x', 'n', 'axis', 'norm', 'expect_exception'),
     [
         (
-            'test_n_nagative',
+            'test_n_negative',
             rand_x(4),
             (-1, -1),
             (1, 2),
@@ -289,16 +293,18 @@ class TestFftn(unittest.TestCase):
 )
 class TestFftnException(unittest.TestCase):
     def test_static_fftn(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.fftn,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -707,7 +713,7 @@ class TestIrfft2(unittest.TestCase):
             TypeError,
         ),
         (
-            'test_n_nagative',
+            'test_n_negative',
             np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4),
             -1,
             -1,
@@ -766,15 +772,32 @@ class TestHfftException(unittest.TestCase):
     '''
 
     def test_static_hfft(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
-                paddle.fft.hfft,
-                self.place,
-                self.x,
-                self.n,
-                self.axis,
-                self.norm,
-            ) as y:
+        if 'test_input_dtype' in str(self):
+            with (
+                paddle.pir_utils.OldIrGuard(),
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.hfft,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
+                pass
+        else:
+            with (
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.hfft,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
                 pass
 
 
@@ -801,7 +824,7 @@ class TestHfftException(unittest.TestCase):
             TypeError,
         ),
         (
-            'test_n_nagative',
+            'test_n_negative',
             np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4),
             -1,
             -1,
@@ -861,15 +884,32 @@ class TestIrfftException(unittest.TestCase):
     '''
 
     def test_static_irfft(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
-                paddle.fft.irfft,
-                self.place,
-                self.x,
-                self.n,
-                self.axis,
-                self.norm,
-            ) as y:
+        if 'test_input_dtype' in str(self):
+            with (
+                paddle.pir_utils.OldIrGuard(),
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.irfft,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
+                pass
+        else:
+            with (
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.irfft,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
                 pass
 
 
@@ -896,7 +936,7 @@ class TestIrfftException(unittest.TestCase):
             TypeError,
         ),
         (
-            'test_n_nagative',
+            'test_n_negative',
             np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4),
             (-1, -2),
             (-2, -1),
@@ -964,15 +1004,32 @@ class TestHfft2Exception(unittest.TestCase):
     '''
 
     def test_static_hfft2(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
-                paddle.fft.hfft2,
-                self.place,
-                self.x,
-                self.n,
-                self.axis,
-                self.norm,
-            ) as y:
+        if 'test_input_dtype' in str(self):
+            with (
+                paddle.pir_utils.OldIrGuard(),
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.hfft2,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
+                pass
+        else:
+            with (
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.hfft2,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
                 pass
 
 
@@ -999,7 +1056,7 @@ class TestHfft2Exception(unittest.TestCase):
             TypeError,
         ),
         (
-            'test_n_nagative',
+            'test_n_negative',
             np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4),
             (-1, -2),
             (-2, -1),
@@ -1067,15 +1124,32 @@ class TestIrfft2Exception(unittest.TestCase):
     '''
 
     def test_static_irfft2(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
-                paddle.fft.irfft2,
-                self.place,
-                self.x,
-                self.n,
-                self.axis,
-                self.norm,
-            ) as y:
+        if 'test_input_dtype' in str(self):
+            with (
+                paddle.pir_utils.OldIrGuard(),
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.irfft2,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
+                pass
+        else:
+            with (
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.irfft2,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
                 pass
 
 
@@ -1102,7 +1176,7 @@ class TestIrfft2Exception(unittest.TestCase):
             TypeError,
         ),
         (
-            'test_n_nagative',
+            'test_n_negative',
             np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4),
             (-1, -2),
             (-2, -1),
@@ -1170,15 +1244,32 @@ class TestHfftnException(unittest.TestCase):
     '''
 
     def test_static_hfftn(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
-                paddle.fft.hfftn,
-                self.place,
-                self.x,
-                self.n,
-                self.axis,
-                self.norm,
-            ) as y:
+        if 'test_input_dtype' in str(self):
+            with (
+                paddle.pir_utils.OldIrGuard(),
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.hfftn,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
+                pass
+        else:
+            with (
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.hfftn,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
                 pass
 
 
@@ -1198,7 +1289,7 @@ class TestHfftnException(unittest.TestCase):
         #                (np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4)
         #                 ).astype(np.bool_), None, (-2, -1), 'backward', ValueError),
         (
-            'test_n_nagative',
+            'test_n_negative',
             np.random.randn(4, 4, 4) + 1j * np.random.randn(4, 4, 4),
             (-1, -2),
             (-2, -1),
@@ -1266,15 +1357,32 @@ class TestIrfftnException(unittest.TestCase):
     '''
 
     def test_static_irfftn(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
-                paddle.fft.irfftn,
-                self.place,
-                self.x,
-                self.n,
-                self.axis,
-                self.norm,
-            ) as y:
+        if 'test_input_dtype' in str(self):
+            with (
+                paddle.pir_utils.OldIrGuard(),
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.irfftn,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
+                pass
+        else:
+            with (
+                self.assertRaises(self.expect_exception),
+                stgraph(
+                    paddle.fft.irfftn,
+                    self.place,
+                    self.x,
+                    self.n,
+                    self.axis,
+                    self.norm,
+                ) as y,
+            ):
                 pass
 
 
@@ -1319,7 +1427,7 @@ class TestRfft(unittest.TestCase):
 @parameterize(
     (TEST_CASE_NAME, 'x', 'n', 'axis', 'norm', 'expect_exception'),
     [
-        ('test_n_nagative', rand_x(2), -1, -1, 'backward', ValueError),
+        ('test_n_negative', rand_x(2), -1, -1, 'backward', ValueError),
         ('test_n_zero', rand_x(2), 0, -1, 'backward', ValueError),
         ('test_axis_out_of_range', rand_x(1), None, 10, 'backward', ValueError),
         (
@@ -1342,16 +1450,18 @@ class TestRfft(unittest.TestCase):
 )
 class TestRfftException(unittest.TestCase):
     def test_rfft(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.rfft,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -1406,7 +1516,7 @@ class TestRfft2(unittest.TestCase):
         ),
         # ('test_x_not_tensor', [0, 1], None, (0, 1), 'backward', ValueError),
         ('test_x_1dim_tensor', rand_x(1), None, (0, 1), 'backward', ValueError),
-        ('test_n_nagative', rand_x(2), -1, (0, 1), 'backward', ValueError),
+        ('test_n_negative', rand_x(2), -1, (0, 1), 'backward', ValueError),
         ('test_n_zero', rand_x(2), 0, (0, 1), 'backward', ValueError),
         (
             'test_axis_out_of_range',
@@ -1437,16 +1547,18 @@ class TestRfft2(unittest.TestCase):
 )
 class TestRfft2Exception(unittest.TestCase):
     def test_static_rfft(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.rfft2,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -1499,7 +1611,7 @@ class TestRfftn(unittest.TestCase):
             TypeError,
         ),
         (
-            'test_n_nagative',
+            'test_n_negative',
             rand_x(4),
             (-1, -1),
             (1, 2),
@@ -1521,16 +1633,18 @@ class TestRfftn(unittest.TestCase):
 )
 class TestRfftnException(unittest.TestCase):
     def test_static_rfftn(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.rfftn,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -1574,7 +1688,7 @@ class TestIhfft(unittest.TestCase):
 @parameterize(
     (TEST_CASE_NAME, 'x', 'n', 'axis', 'norm', 'expect_exception'),
     [
-        ('test_n_nagative', rand_x(2), -1, -1, 'backward', ValueError),
+        ('test_n_negative', rand_x(2), -1, -1, 'backward', ValueError),
         ('test_n_zero', rand_x(2), 0, -1, 'backward', ValueError),
         ('test_axis_out_of_range', rand_x(1), None, 10, 'backward', ValueError),
         (
@@ -1597,16 +1711,18 @@ class TestIhfft(unittest.TestCase):
 )
 class TestIhfftException(unittest.TestCase):
     def test_static_ihfft(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.ihfft,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -1661,7 +1777,7 @@ class TestIhfft2(unittest.TestCase):
         ),
         # ('test_x_not_tensor', [0, 1], None, (0, 1), None, ValueError),
         ('test_x_1dim_tensor', rand_x(1), None, (0, 1), None, ValueError),
-        ('test_n_nagative', rand_x(2), -1, (0, 1), 'backward', ValueError),
+        ('test_n_negative', rand_x(2), -1, (0, 1), 'backward', ValueError),
         (
             'test_n_len_not_equal_axis',
             rand_x(5, max_dim_len=5),
@@ -1700,16 +1816,18 @@ class TestIhfft2(unittest.TestCase):
 )
 class TestIhfft2Exception(unittest.TestCase):
     def test_static_ihfft2(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.ihfft2,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)
@@ -1761,7 +1879,7 @@ class TestIhfftn(unittest.TestCase):
             'backward',
             TypeError,
         ),
-        ('test_n_nagative', rand_x(4), -1, None, 'backward', ValueError),
+        ('test_n_negative', rand_x(4), -1, None, 'backward', ValueError),
         ('test_n_zero', rand_x(4), 0, None, 'backward', ValueError),
         (
             'test_axis_out_of_range',
@@ -1776,16 +1894,18 @@ class TestIhfftn(unittest.TestCase):
 )
 class TestIhfftnException(unittest.TestCase):
     def test_static_ihfftn(self):
-        with self.assertRaises(self.expect_exception):
-            with stgraph(
+        with (
+            self.assertRaises(self.expect_exception),
+            stgraph(
                 paddle.fft.ihfftn,
                 self.place,
                 self.x,
                 self.n,
                 self.axis,
                 self.norm,
-            ) as y:
-                pass
+            ) as y,
+        ):
+            pass
 
 
 @place(DEVICES)

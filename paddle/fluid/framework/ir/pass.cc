@@ -20,21 +20,17 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_proto_maker.h"
 #include "paddle/fluid/framework/program_utils.h"
 
-namespace paddle {
-namespace framework {
+namespace paddle::framework {
 class Scope;
-namespace ir {
+}  // namespace paddle::framework
+namespace paddle::framework::ir {
 class Graph;
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir
 #ifdef PADDLE_WITH_DNNL
 #include "paddle/fluid/platform/onednn_helper.h"
 #endif
 
-namespace paddle {
-namespace framework {
-namespace ir {
+namespace paddle::framework::ir {
 
 static const char kParamScopeAttr[] = "__param_scope__";  // NOLINT
 
@@ -69,6 +65,7 @@ static const std::vector<std::string> xpu_support_subgraph_passes = {
     "delete_elementwise_mul_op_pass",
     "generate_sequence_xpu_fuse_pass",
     "group_norm_silu_xpu_fuse_pass",
+    "layer_norm_relu_xpu_fuse_pass",
     "embedding_with_eltwise_add_xpu_fuse_pass",
     "multi_encoder_xpu_fuse_pass",
     "multi_encoder_xpu_adaptive_seqlen_fuse_pass",
@@ -100,31 +97,31 @@ Graph *Pass::Apply(Graph *graph) const {
   VLOG(10) << "start to apply pass " << Type() << " to graph";
   CheckPrevPass();
   PADDLE_ENFORCE_NOT_NULL(
-      graph, phi::errors::InvalidArgument("Graph cannot be nullptr."));
+      graph, common::errors::InvalidArgument("Graph cannot be nullptr."));
   for (const std::string &attr : required_pass_attrs_) {
     PADDLE_ENFORCE_NE(
         attrs_.find(attr),
         attrs_.end(),
-        phi::errors::InvalidArgument(
-            "Required atrribute %s for pass < %s > is not set.", attr, Type()));
+        common::errors::InvalidArgument(
+            "Required attribute %s for pass < %s > is not set.", attr, Type()));
   }
   for (const std::string &attr : required_graph_attrs_) {
     PADDLE_ENFORCE_EQ(graph->Has(attr),
                       true,
-                      phi::errors::InvalidArgument(
-                          "Required atrribute %s for graph is not set.", attr));
+                      common::errors::InvalidArgument(
+                          "Required attribute %s for graph is not set.", attr));
   }
   ApplyImpl(graph);
   // TODO(panyx0718): Add more verifications.
   PADDLE_ENFORCE_EQ(
       HasCircle(*graph),
       false,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "Illegal pass %s. Generated graph shouldn't contain cycle.", Type()));
   PADDLE_ENFORCE_EQ(
       VarDescIsConsistency(*graph),
       true,
-      phi::errors::InvalidArgument(
+      common::errors::InvalidArgument(
           "The VarDescs of persistable variable are not consistency."));
   if (!graph->Has(kPassRecorder)) {
     graph->Set<PassRecorder>(kPassRecorder, new PassRecorder);
@@ -163,13 +160,13 @@ Graph *Pass::Apply(Graph *graph) const {
       PADDLE_ENFORCE_EQ(
           HasCircle(*sub_graph),
           false,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "Illegal pass %s. Generated graph shouldn't contain cycle.",
               Type()));
       PADDLE_ENFORCE_EQ(
           VarDescIsConsistency(*sub_graph),
           true,
-          phi::errors::InvalidArgument(
+          common::errors::InvalidArgument(
               "The VarDescs of persistable variable are not consistency."));
       if (!sub_graph->Has(kPassRecorder)) {
         sub_graph->Set<PassRecorder>(kPassRecorder, new PassRecorder);
@@ -226,21 +223,21 @@ void Pass::ApplyPassesToProgram(const std::vector<const Pass *> &passes,
   VLOG(10) << "ApplyPassesToProgram is called";
   PADDLE_ENFORCE_NOT_NULL(
       main_program,
-      phi::errors::InvalidArgument("The main program must be provided."));
+      common::errors::InvalidArgument("The main program must be provided."));
 
   PADDLE_ENFORCE_NOT_NULL(
       startup_program,
-      phi::errors::InvalidArgument("The startup program must be provided."));
+      common::errors::InvalidArgument("The startup program must be provided."));
 
   for (auto *p : passes) {
-    PADDLE_ENFORCE_NOT_NULL(
-        p,
-        phi::errors::InvalidArgument("The provided pass cannot be nullptr."));
+    PADDLE_ENFORCE_NOT_NULL(p,
+                            common::errors::InvalidArgument(
+                                "The provided pass cannot be nullptr."));
     VLOG(10) << "Pass " << p->Type();
     if (passes.size() > 1) {
       PADDLE_ENFORCE_EQ(p->SupportApplyProgramViaGraph(),
                         true,
-                        phi::errors::PermissionDenied(
+                        common::errors::PermissionDenied(
                             "Each pass must support to be applied via Graph if "
                             "multi-passes are applied."));
     }
@@ -264,7 +261,7 @@ void Pass::ApplyPassesToProgram(const std::vector<const Pass *> &passes,
 
 void Pass::ApplyImpl(ProgramDesc *main_program,
                      ProgramDesc *startup_program) const {
-  PADDLE_THROW(phi::errors::Unimplemented(
+  PADDLE_THROW(common::errors::Unimplemented(
       "The pass %s does not support to apply ProgramDesc directly", Type()));
 }
 
@@ -299,6 +296,4 @@ PassRegistry &PassRegistry::Instance() {
   static PassRegistry g_pass_info_map;
   return g_pass_info_map;
 }
-}  // namespace ir
-}  // namespace framework
-}  // namespace paddle
+}  // namespace paddle::framework::ir

@@ -18,8 +18,8 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/phi_utils.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/init.h"
+#include "paddle/phi/core/platform/device_context.h"
 #include "paddle/phi/kernels/funcs/elementwise_base.h"
 #include "paddle/phi/kernels/funcs/math_function.h"
 
@@ -73,7 +73,7 @@ class TestKernel : public OpKernel<float> {
     std::cout << "input place:" << input->place() << std::endl;
     auto* output = ctx.Output<phi::DenseTensor>("output");
     output->Resize(input->dims());
-    output->mutable_data<T>(ctx.GetPlace());
+    output->template mutable_data<T>(ctx.GetPlace());
 
     phi::funcs::TransformFunctor<AddFunctor<T>, T, DeviceContext> functor(
         *input,

@@ -22,7 +22,7 @@ namespace paddle {
 namespace distributed {
 
 // NOTE: Notice that some backends use `stream` as an abstract conception of
-// hardward resource. We provide this base class allowing users to put
+// hardware resource. We provide this base class allowing users to put
 // communications on calculation stream. In some scenarios, we found this will
 // save the time of switching streams.
 class ProcessGroupWithStream : public ProcessGroup {
@@ -107,7 +107,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       int64_t numel UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support all_gather.",
         GetBackendName()));
   }
@@ -130,7 +130,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       const AllreduceOptions& opts UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support all_reduce.",
         GetBackendName()));
   }
@@ -156,8 +156,29 @@ class ProcessGroupWithStream : public ProcessGroup {
       const std::vector<int64_t>& in_size_each_rank UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support all_to_all.",
+        GetBackendName()));
+  }
+
+  std::shared_ptr<ProcessGroup::Task> AllToAll(
+      std::vector<phi::DenseTensor>* out_tensors,
+      const std::vector<phi::DenseTensor>& in_tensors,
+      bool sync_op) {
+    return AllToAll(out_tensors,
+                    in_tensors,
+                    sync_op,
+                    /*use_calc_stream*/ false);
+  }
+
+  std::shared_ptr<ProcessGroup::Task> AllToAll(
+      std::vector<phi::DenseTensor>* out_tensors UNUSED,
+      const std::vector<phi::DenseTensor>& in_tensors UNUSED,
+      bool sync_op UNUSED,
+      bool use_calc_stream UNUSED) override {
+    PADDLE_THROW(common::errors::Unimplemented(
+        "ProcessGroup%s does not support all_to_all "
+        "with sync_op and use_calc_stream flag.",
         GetBackendName()));
   }
 
@@ -179,7 +200,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       const BroadcastOptions& opts UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support broadcast.",
         GetBackendName()));
   }
@@ -201,7 +222,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       const ReduceOptions& opts UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support reduce.",
         GetBackendName()));
   }
@@ -224,7 +245,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       const ReduceScatterOptions& opts UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support reduce_scatter.",
         GetBackendName()));
   }
@@ -246,7 +267,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       const ScatterOptions& opts UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support scatter.",
         GetBackendName()));
   }
@@ -293,7 +314,7 @@ class ProcessGroupWithStream : public ProcessGroup {
                                            bool sync_op UNUSED,
                                            bool use_calc_stream
                                                UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support recv.",
         GetBackendName()));
   }
@@ -340,7 +361,7 @@ class ProcessGroupWithStream : public ProcessGroup {
       int64_t numel UNUSED,
       bool sync_op UNUSED,
       bool use_calc_stream UNUSED) override {
-    PADDLE_THROW(phi::errors::Unimplemented(
+    PADDLE_THROW(common::errors::Unimplemented(
         "ProcessGroupWithStream (%s) does not support send.",
         GetBackendName()));
   }

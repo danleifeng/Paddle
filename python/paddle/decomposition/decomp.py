@@ -20,14 +20,20 @@ from paddle import pir
 from paddle.autograd import ir_backward
 from paddle.autograd.backward_utils import ValueDict, ValueSet
 from paddle.base.core import (
-    call_decomp,
+    call_decomp_rule,
     call_decomp_vjp,
     decomp_ops_contain_unused_output,
-    has_decomp,
+    has_decomp_rule,
     has_decomp_vjp,
+)
+from paddle.base.framework import (
+    pir_chunk_id_guard,
+    pir_op_name_guard,
+    pir_op_role_guard,
 )
 from paddle.base.libpaddle.pir import Block, Operation
 from paddle.base.wrapped_decorator import signature_safe_contextmanager
+from paddle.decomposition.recompute import DebugPrint, auto_recompute
 from paddle.framework import core
 
 from . import register
@@ -328,7 +334,7 @@ def _decomp_fwd_op(
         op_name = fwd_op.name()
         orig_outs = fwd_op.results()
         decom_rule = register.get_decomp_rule(op_name)
-        has_sink_decomp_rule = has_decomp(fwd_op)
+        has_sink_decomp_rule = has_decomp_rule(fwd_op)
         lower = decom_rule or has_sink_decomp_rule
 
         if lower:
@@ -345,7 +351,7 @@ def _decomp_fwd_op(
             # step3: decompose op, and get new outputs
             input_args = _prepare_python_api_arguments(fwd_op)
             if has_sink_decomp_rule:
-                decomp_outs = call_decomp(fwd_op)
+                decomp_outs = call_decomp_rule(fwd_op)
                 new_outs = _analyse_decomp_results(
                     orig_outs, decomp_outs, fwd_op
                 )
@@ -867,23 +873,30 @@ def decompose_dist_program(pir_program):
                 ) and _check_prim_dynamic(op):
                     skip_decomp = True
                 if not skip_decomp:
-                    pir.set_insertion_point(op)
-                    orig_outs = op.results()
+                    with (
+                        pir_op_name_guard(op.name()),
+                        pir_op_role_guard(op.op_role),
+                        pir_chunk_id_guard(op.chunk_id),
+                    ):
+                        pir.set_insertion_point(op)
+                        orig_outs = op.results()
 
-                    is_next_split = False
-                    decomp_outs = call_decomp_vjp(op)
-                    for i in range(len(orig_outs)):
-                        if orig_outs[i].has_one_use():
-                            next_op = orig_outs[i].first_use().owner()
-                            if next_op.name() == "builtin.split":
-                                is_next_split = True
-                                _check_op_results(
-                                    next_op.name(),
-                                    next_op.results(),
-                                    decomp_outs[i],
-                                )
-                                next_op.replace_all_uses_with(decomp_outs[i])
-                                block.remove_op(next_op)
+                        is_next_split = False
+                        decomp_outs = call_decomp_vjp(op)
+                        for i in range(len(orig_outs)):
+                            if orig_outs[i].has_one_use():
+                                next_op = orig_outs[i].first_use().owner()
+                                if next_op.name() == "builtin.split":
+                                    is_next_split = True
+                                    _check_op_results(
+                                        next_op.name(),
+                                        next_op.results(),
+                                        decomp_outs[i],
+                                    )
+                                    next_op.replace_all_uses_with(
+                                        decomp_outs[i]
+                                    )
+                                    block.remove_op(next_op)
 
                     if not is_next_split:
                         new_outs = _analyse_decomp_results(
@@ -929,3 +942,97 @@ def decompose_pir_program(pir_program, param_mapping, grad_var_to_var):
     _decomp_fwd_program(pir_program, pir_grad_var_to_var)
     # reset prim flags and pir_api flags
     _reset_prim_state(state)
+    return pir_grad_var_to_var
+
+
+def get_inputs_from_data_and_parameter(pir_program):
+    results = []
+    for op in pir_program.global_block().ops:
+        if op.name() == "pd_op.data":
+            results.append(op.results()[0])
+        if op.name() == "builtin.parameter":
+            results.append(op.results()[0])
+    return results
+
+
+def get_outputs_from_fetch_op(pir_program):
+    results = []
+    for op in pir_program.global_block().ops:
+        if op.name() == "pd_op.fetch":
+            results.append(op.operand(0).source())
+    return results
+
+
+def get_grad_var_for_list(outputs, pir_grad_var_to_var):
+    results = []
+    var2grad_var = ValueDict()
+    for k, v in pir_grad_var_to_var.items():
+        var2grad_var[v] = k
+    for output in outputs:
+        results.append(var2grad_var[output])
+    return results
+
+
+def get_defining_op_indices(program, output_values):
+    def getIdx(op):
+        for idx, op_iter in enumerate(program.global_block().ops):
+            if op == op_iter:
+                return idx
+        raise RuntimeError("op not found in program")
+
+    results = []
+    for output in output_values:
+        results.append(getIdx(output.get_defining_op()))
+    return results
+
+
+def get_forward_op_idxs(program, is_forward_op_func):
+    def getIdx(op):
+        for idx, op_iter in enumerate(program.global_block().ops):
+            if op == op_iter:
+                return idx
+        raise RuntimeError("op not found in program")
+
+    results = []
+    for op in program.global_block().ops:
+        if is_forward_op_func(op):
+            results.append(getIdx(op))
+    return results
+
+
+def auto_recompute_pir_program(pir_program, is_forward_op_func=None):
+    DebugPrint("Start Recompute Pir Program:")
+    DebugPrint("Before Recompute: ", pir_program)
+    # prepare essential inputs for auto_recompute
+    inputs = get_inputs_from_data_and_parameter(pir_program)
+    outputs = get_outputs_from_fetch_op(pir_program)
+    fwd_op_end_idx = -1
+    if len(outputs):
+        fwd_op_end_idx = max(get_defining_op_indices(pir_program, outputs))
+
+    logger = logging.getLogger("auto-recompute")
+    logger.setLevel(logging.INFO)
+
+    if is_forward_op_func is not None:
+        try:
+            fwd_op_end_idx = max(
+                get_forward_op_idxs(pir_program, is_forward_op_func)
+            )
+        except:
+            logger.info("No Forward Ops Found!")
+
+    if fwd_op_end_idx == -1:
+        logger.info("Skip Auto Recompute!")
+        return pir_program
+    backward_op_start_idx = fwd_op_end_idx + 1
+
+    program, _ = auto_recompute(
+        pir_program,
+        inputs,
+        outputs,
+        [],
+        fwd_op_end_idx,
+        backward_op_start_idx,
+    )
+
+    return program

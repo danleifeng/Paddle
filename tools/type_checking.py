@@ -192,6 +192,9 @@ class MypyChecker(TypeChecker):
                 "> python tools/type_checking.py "
                 + " ".join(sorted(failed_apis))
             )
+            logger.error(
+                ">>> For more information: https://www.paddlepaddle.org.cn/documentation/docs/zh/develop/dev_guides/style_guide_and_references/type_annotations_specification_cn.html"
+            )
             logger.error("----------------End of the Check--------------------")
 
             log_exit(1)
@@ -254,7 +257,7 @@ def get_test_results(
 
     codeblocks = []
     for api_name, raw_docstring in docstrings_to_test.items():
-        # we may extract more than one codeblocks from docsting.
+        # we may extract more than one codeblocks from docstring.
         for codeblock in extract_code_blocks_from_docstr(
             raw_docstring, google_style=google_style
         ):

@@ -98,13 +98,13 @@ void AssignValueKernel(const Context& dev_ctx,
                        const std::vector<Scalar>& values,
                        DenseTensor* out) {
   auto template_dtype = phi::CppTypeToDataType<T>::Type();
-  PADDLE_ENFORCE_EQ(
-      dtype,
-      template_dtype,
-      phi::errors::InvalidArgument("Argument dtype mismatch for kernel dtype, "
-                                   "argument dtype is %s, kernel dtype is %s.",
-                                   dtype,
-                                   template_dtype));
+  PADDLE_ENFORCE_EQ(dtype,
+                    template_dtype,
+                    common::errors::InvalidArgument(
+                        "Argument dtype mismatch for kernel dtype, "
+                        "argument dtype is %s, kernel dtype is %s.",
+                        dtype,
+                        template_dtype));
   CopyVectorToTensor<T>(dev_ctx, values, out);
   out->Resize(common::make_ddim(shape));
 }
@@ -138,6 +138,8 @@ PD_REGISTER_KERNEL(assign_value,
                    double,
                    int8_t,
                    int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
 
@@ -168,6 +170,8 @@ PD_REGISTER_KERNEL(assign_value,
                    double,
                    int8_t,
                    int64_t,
+                   phi::dtype::float16,
+                   phi::dtype::bfloat16,
                    phi::dtype::complex<float>,
                    phi::dtype::complex<double>) {}
 #endif

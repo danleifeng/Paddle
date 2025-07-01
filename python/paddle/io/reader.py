@@ -24,9 +24,7 @@ from typing import (
     Any,
     AnyStr,
     Callable,
-    Mapping,
     Protocol,
-    Sequence,
     TypeVar,
     overload,
 )
@@ -40,7 +38,10 @@ from ..base.framework import (
 )
 from ..framework import core, in_dynamic_mode
 from .dataloader import BatchSampler, IterableDataset, Subset
-from .dataloader.batch_sampler import _InfiniteIterableSampler
+from .dataloader.batch_sampler import (
+    DistributedBatchSampler,
+    _InfiniteIterableSampler,
+)
 from .dataloader.dataloader_iter import (
     _DataLoaderIterMultiProcess,
     _DataLoaderIterSingleProcess,
@@ -49,14 +50,15 @@ from .dataloader.dataloader_iter import (
 
 if TYPE_CHECKING:
     import numbers
+    from collections.abc import Mapping, Sequence
 
     import numpy.typing as npt
 
     from paddle import Tensor
     from paddle._typing import PlaceLike
+    from paddle._typing.device_like import _Place
+    from paddle.io.dataloader.dataloader_iter import _DataLoaderIterBase
     from paddle.io.dataloader.dataset import Dataset
-
-    from .dataloader.dataloader_iter import _DataLoaderIterBase
 
     _K = TypeVar('_K')
     _V = TypeVar('_V')
@@ -65,24 +67,21 @@ if TYPE_CHECKING:
         @overload
         def __call__(
             self, batch: Sequence[npt.NDArray[Any]] | Sequence[numbers.Number]
-        ) -> npt.NDArray[Any]:
-            ...
+        ) -> npt.NDArray[Any]: ...
 
         @overload
-        def __call__(self, batch: Sequence[Tensor]) -> Tensor:
-            ...
+        def __call__(self, batch: Sequence[Tensor]) -> Tensor: ...
 
         @overload
-        def __call__(self, batch: Sequence[AnyStr]) -> AnyStr:
-            ...
+        def __call__(self, batch: Sequence[AnyStr]) -> AnyStr: ...
 
         @overload
-        def __call__(self, batch: Sequence[Mapping[_K, _V]]) -> Mapping[_K, _V]:
-            ...
+        def __call__(
+            self, batch: Sequence[Mapping[_K, _V]]
+        ) -> Mapping[_K, _V]: ...
 
         @overload
-        def __call__(self, batch: Sequence[Sequence[_V]]) -> Sequence[_V]:
-            ...
+        def __call__(self, batch: Sequence[Sequence[_V]]) -> Sequence[_V]: ...
 
 
 # NOTE: [ avoid hanging & failed quickly ]
@@ -437,19 +436,23 @@ class DataLoader:
     collate_fn: _CollateFn | None
     use_buffer_reader: bool
     prefetch_factor: int
-    worker_init_fn: Callable[[int], None]
-    dataset: Dataset
+    worker_init_fn: Callable[[int], None] | None
+    dataset: Dataset[Any]
     feed_list: Sequence[Tensor] | None
-    places: Sequence[PlaceLike] | None
+    places: list[_Place]
     num_workers: int
     dataset_kind: _DatasetKind
     use_shared_memory: bool
+    timeout: int
+    batch_sampler: BatchSampler | _InfiniteIterableSampler | None
+    drop_last: bool
+    auto_collate_batch: bool
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: Dataset[Any],
         feed_list: Sequence[Tensor] | None = None,
-        places: Sequence[PlaceLike] | None = None,
+        places: PlaceLike | Sequence[PlaceLike] | None = None,
         return_list: bool = True,
         batch_sampler: BatchSampler | None = None,
         batch_size: int = 1,
@@ -461,7 +464,7 @@ class DataLoader:
         prefetch_factor: int = 2,
         use_shared_memory: bool = True,
         timeout: int = 0,
-        worker_init_fn: Callable[[int], None] = None,
+        worker_init_fn: Callable[[int], None] | None = None,
         persistent_workers: bool = False,
     ) -> None:
         self.return_list = return_list
@@ -546,6 +549,42 @@ class DataLoader:
                     shuffle=shuffle,
                     drop_last=drop_last,
                 )
+
+        # Note(luchang): In auto DP mode, we use a distributed batch sampler to
+        # ensure that each DP rank receives different data.
+        if paddle.distributed.auto_parallel.auto_dp_utils.in_auto_dp_mode():
+            mesh = paddle.distributed.fleet.auto.get_mesh()
+            if mesh is None:
+                word_size = paddle.distributed.get_world_size()
+                mesh = paddle.distributed.ProcessMesh(
+                    list(range(0, word_size)), dim_names=["dp"]
+                )
+
+            if "dp" not in mesh.dim_names:
+                raise ValueError(
+                    "Auto-DP mode requires the mesh to include a 'dp' dimension."
+                )
+
+            dp_rank = mesh.get_rank_by_dim_and_process_id(
+                "dp", paddle.distributed.get_rank()
+            )
+            dp_world_size = mesh.get_dim_size("dp")
+
+            self.batch_size = int(self.batch_sampler.batch_size / dp_world_size)
+            if isinstance(self.batch_sampler, _InfiniteIterableSampler):
+                shuffle = False
+                drop_last = False
+            else:
+                shuffle = self.batch_sampler.shuffle
+                drop_last = self.batch_sampler.drop_last
+            self.batch_sampler = DistributedBatchSampler(
+                dataset=dataset,
+                batch_size=self.batch_size,
+                num_replicas=dp_world_size,
+                rank=dp_rank,
+                shuffle=shuffle,
+                drop_last=drop_last,
+            )
 
         self.drop_last = drop_last
         self.auto_collate_batch = self.batch_sampler is not None

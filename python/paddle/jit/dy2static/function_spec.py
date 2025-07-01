@@ -14,6 +14,7 @@
 
 import collections
 import inspect
+import weakref
 
 import numpy as np
 
@@ -22,9 +23,6 @@ import paddle.pir.core as ir_static
 from paddle.base import core
 from paddle.base.data_feeder import convert_dtype
 from paddle.base.dygraph.base import switch_to_static_graph
-from paddle.distributed.auto_parallel.placement_type import (
-    to_placements,
-)
 from paddle.jit.pir_translated_layer import PirTranslatedLayer
 from paddle.jit.translated_layer import TranslatedLayer
 from paddle.nn.layer import layers
@@ -46,7 +44,12 @@ class FunctionSpec:
     """
 
     def __init__(self, function, input_spec=None):
-        self._dygraph_function = function
+        if inspect.ismethod(function):
+            self._dygraph_function = function.__func__
+            self._class_instance = weakref.ref(function.__self__)
+        else:
+            self._dygraph_function = function
+            self._class_instance = None
         if input_spec is None:
             self._input_spec = None
             self._flat_input_spec = None
@@ -83,7 +86,7 @@ class FunctionSpec:
             New arguments tuple containing default kwargs value.
         """
         if len(self._arg_names) < len(args):
-            error_msg = f"The decorated function `{self._dygraph_function.__name__}` requires {len(self._arg_names)} arguments: {self._arg_names}, but received {len(args)} with {args}."
+            error_msg = f"The decorated function `{self.dygraph_function.__name__}` requires {len(self._arg_names)} arguments: {self._arg_names}, but received {len(args)} with {args}."
             if args and inspect.isclass(args[0]):
                 error_msg += "\n\tMaybe the function has more than one decorator, we don't support this for now."
                 raise NotImplementedError(error_msg)
@@ -100,7 +103,7 @@ class FunctionSpec:
             else:
                 if arg_name not in self._default_kwargs:
                     raise ValueError(
-                        f"`{self._dygraph_function.__name__}()` requires `{arg_name}` arguments, but not found in input `args`: {args} and `kwargs`: {kwargs}."
+                        f"`{self.dygraph_function.__name__}()` requires `{arg_name}` arguments, but not found in input `args`: {args} and `kwargs`: {kwargs}."
                     )
                 args.append(self._default_kwargs[arg_name])
 
@@ -128,7 +131,7 @@ class FunctionSpec:
             # So we don't support to deal this case while specifying `input_spec` currently.
             if kwargs:
                 raise ValueError(
-                    f"{self._dygraph_function.__name__} got unexpected keyword arguments: {kwargs}. Cannot trace the function when `input_spec` is specified."
+                    f"{self.dygraph_function.__name__} got unexpected keyword arguments: {kwargs}. Cannot trace the function when `input_spec` is specified."
                 )
 
             # Note: The length of `input_spec` can be greater than `args`,
@@ -171,9 +174,15 @@ class FunctionSpec:
             input_with_spec(tuple): input arguments by replacing argument with InputSpec.
             main_program(Program): main program for inserting feed layer.
         """
+        from paddle.distributed.auto_parallel.placement_type import (
+            to_placements,
+        )
+
         flat_input_spec = paddle.utils.flatten(input_with_spec)
 
-        inputs = []
+        # NOTE(zhangbo): Why do we need function_args and program_inputs: The primary function of this module is to construct the corresponding DataOp based on the inputSpec. The output of DataOp serves as the input to the Program and will also become the arguments for subsequent Static functions to construct the static graph. When the input is a DistributedInputSpec, the shard_tensor operation will be performed on the output of DataOp to obtain the corresponding distributed Value. The input to the Program will still be the output of DataOp, but in this case, the arguments for the Static functions will be the output of shard_tensor.
+        function_args = []
+        program_inputs = []
         with ir_static.program_guard(main_program):
             for i, var_spec in enumerate(flat_input_spec):
                 if isinstance(var_spec, paddle.static.InputSpec):
@@ -191,28 +200,24 @@ class FunctionSpec:
                     )
 
                     if isinstance(var_spec, DistributedInputSpec):
-                        # paddle.distributed.shard_tensor(feed_value)
                         placements = to_placements(
                             var_spec.dims_mapping, var_spec
                         )
                         dist_feed_value = paddle._pir_ops.shard_tensor(
                             feed_value, var_spec.mesh, placements
                         )
-                        inputs.append(dist_feed_value)
-                        # dist_dense_tensor_type = paddle.base.libpaddle.pir.create_dist_dense_tensor_type_by_dense_tensor(
-                        #     feed_value.type(),
-                        #     var_spec.local_shape,
-                        #     var_spec.mesh,
-                        #     var_spec.dims_mapping,
-                        # )
-                        # feed_value.set_type(dist_dense_tensor_type)
+                        function_args.append(dist_feed_value)
                     else:
-                        inputs.append(feed_value)
+                        function_args.append(feed_value)
                 else:
                     feed_value = var_spec
-                    inputs.append(feed_value)
+                    function_args.append(feed_value)
 
-        return paddle.utils.pack_sequence_as(input_with_spec, inputs)
+                program_inputs.append(feed_value)
+
+        return paddle.utils.pack_sequence_as(
+            input_with_spec, function_args
+        ), paddle.utils.pack_sequence_as(input_with_spec, program_inputs)
 
     @switch_to_static_graph
     def to_static_inputs_with_spec(self, input_with_spec, main_program):
@@ -279,14 +284,27 @@ class FunctionSpec:
 
     def __repr__(self):
         return "function: {}({}), input_spec: {}".format(
-            self._dygraph_function.__name__,
+            self.dygraph_function.__name__,
             ','.join(self._arg_names),
             self._input_spec,
         )
 
     @property
+    def class_instance(self):
+        if self._class_instance is None:
+            return None
+        if self._class_instance() is None:
+            raise RuntimeError(
+                "The instance of class has been deleted, please re-create the instance."
+            )
+        return self._class_instance()
+
+    @property
     def dygraph_function(self):
-        return self._dygraph_function
+        if self.class_instance is not None:
+            return self._dygraph_function.__get__(self.class_instance)
+        else:
+            return self._dygraph_function
 
     @property
     def args_name(self):
@@ -302,7 +320,7 @@ class FunctionSpec:
 
     @property
     def code(self):
-        return func_to_source_code(self._dygraph_function)
+        return func_to_source_code(self.dygraph_function)
 
 
 def get_parameters(layer_instance, include_sublayer=True):
@@ -349,6 +367,13 @@ def get_buffers(layer_instance, include_sublayer=True):
 
 
 def _replace_value_with_input_spec(args):
+    from paddle.distributed.auto_parallel.placement_type import (
+        to_placements,
+    )
+    from paddle.distributed.auto_parallel.static.dist_input_spec import (
+        DistributedInputSpec,
+    )
+
     args_with_spec = []
     for idx, input_var in enumerate(paddle.utils.flatten(args)):
         if isinstance(input_var, np.ndarray):
@@ -356,15 +381,32 @@ def _replace_value_with_input_spec(args):
             input_var.stop_gradient = True
         elif isinstance(input_var, core.eager.Tensor):
             stop_gradient = input_var.stop_gradient
-            input_var = paddle.static.InputSpec.from_tensor(input_var)
+            if input_var.is_dist():
+                input_var = DistributedInputSpec.from_dtensor(input_var)
+            else:
+                input_var = paddle.static.InputSpec.from_tensor(input_var)
             input_var.stop_gradient = stop_gradient
         elif isinstance(
             input_var, (paddle.base.framework.Variable, paddle.pir.Value)
         ):
             stop_gradient = input_var.stop_gradient
-            input_var = paddle.static.InputSpec(
-                input_var.shape, input_var.dtype, input_var.name
-            )
+            if input_var.is_dist():
+                mesh = input_var.dist_attr().process_mesh
+                placements = to_placements(
+                    input_var.dist_attr().dims_mapping, mesh
+                )
+                input_var = DistributedInputSpec(
+                    input_var.shape,
+                    dtype=input_var.dtype,
+                    name=input_var.name,
+                    mesh=mesh,
+                    placements=placements,
+                    local_shape=input_var._local_shape,
+                )
+            else:
+                input_var = paddle.static.InputSpec(
+                    input_var.shape, input_var.dtype, input_var.name
+                )
             input_var.stop_gradient = stop_gradient
 
         args_with_spec.append(input_var)

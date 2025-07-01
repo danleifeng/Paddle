@@ -17,8 +17,10 @@ import os
 import paddle
 import paddle.distributed as dist
 from paddle.distributed.auto_parallel.static.pir_pass import (
-    apply_reshard_pass,
+    ReshardPasses,
 )
+from paddle.distributed.auto_parallel.static.utils import set_all_ops_op_role
+from paddle.distributed.fleet.meta_optimizers.common import OpRole
 
 
 class TestReshardNdMesh:
@@ -79,13 +81,14 @@ class TestReshardNdMesh:
                     dist_input, self._mesh, output_placements
                 )
             dist_program = main_program.clone()
-            apply_reshard_pass(dist_program)
+            set_all_ops_op_role(dist_program.global_block(), OpRole.Forward)
+            ReshardPasses.apply_reshard_pass(dist_program)
 
         return main_program, dist_program
 
     def run_pp_to_rr_case(self):
         # [Partial(), Partial()] --> [Replicate(), Replicate()]
-        # ops: c_allreduce_sum + c_allreduce_sum
+        # ops: all_reduce sum + all_reduce sum
         main_program, dist_program = self.create_program(
             [self.BATCH_SIZE, self.SEQ_LEN, self.HIDDEN_SIZE],
             [
@@ -99,8 +102,16 @@ class TestReshardNdMesh:
         new_ops_name = [op.name() for op in dist_program.global_block().ops]
 
         rank_id = dist.get_rank()
-        assert new_ops_name[-2] == "pd_op.c_allreduce_sum"
-        assert new_ops_name[-1] == "pd_op.c_allreduce_sum"
+        assert dist_program.global_block().ops[-2].name() == "pd_op.all_reduce"
+        assert (
+            dist_program.global_block().ops[-2].int_attr("reduce_type")
+            == dist.ReduceOp.SUM
+        )
+        assert dist_program.global_block().ops[-1].name() == "pd_op.all_reduce"
+        assert (
+            dist_program.global_block().ops[-1].int_attr("reduce_type")
+            == dist.ReduceOp.SUM
+        )
 
         # check the first allreduce_sum
         op = new_ops[-2]
@@ -140,7 +151,7 @@ class TestReshardNdMesh:
 
     def run_pr_to_rs_case(self):
         # [Partial(), Replicate()] --> [Replicate(), Shard(1)]
-        # c_allreduce_sum + slice
+        # all_reduce sum + slice
         main_program, dist_program = self.create_program(
             [self.BATCH_SIZE, self.SEQ_LEN, self.HIDDEN_SIZE],
             [dist.Partial(dist.ReduceType.kRedSum), dist.Replicate()],
@@ -150,12 +161,17 @@ class TestReshardNdMesh:
         new_ops = dist_program.global_block().ops
         new_ops_name = [op.name() for op in dist_program.global_block().ops]
 
+        check_all_reduce_sum = any(
+            op.name() == "pd_op.all_reduce"
+            and op.int_attr("reduce_type") == dist.ReduceOp.SUM
+            for op in dist_program.global_block().ops
+        )
+        assert check_all_reduce_sum
         rank_id = dist.get_rank()
-        assert "pd_op.c_allreduce_sum" in new_ops_name
         assert new_ops_name[-1] == "pd_op.slice"
 
         # check the allreduce_sum
-        op = new_ops[new_ops_name.index("pd_op.c_allreduce_sum")]
+        op = new_ops[new_ops_name.index("pd_op.all_reduce")]
         if rank_id == 0 or rank_id == 2:
             process_ids = [0, 2]
         elif rank_id == 1 or rank_id == 3:
@@ -203,7 +219,7 @@ class TestReshardNdMesh:
         all_gather_ops = []
         slice_ops = []
         for i, op in enumerate(new_ops):
-            if op.name() == "pd_op.c_allgather":
+            if op.name() == "pd_op.all_gather":
                 all_gather_ops.append(op)
             elif op.name() == "pd_op.slice":
                 slice_ops.append(op)
@@ -269,7 +285,7 @@ class TestReshardNdMesh:
 
     def run_ps_to_ps_case(self):
         # [Partial(), Shard(0)] --> [Replicate(), Shard(1)]
-        # c_allreduce_sum + all_gather + slice
+        # all_reduce sum + all_gather + slice
         main_program, dist_program = self.create_program(
             [self.BATCH_SIZE, self.SEQ_LEN, self.HIDDEN_SIZE],
             [dist.Partial(dist.ReduceType.kRedSum), dist.Shard(0)],
@@ -278,12 +294,17 @@ class TestReshardNdMesh:
 
         ops = dist_program.global_block().ops
         op_names = [op.name() for op in ops]
-        assert "pd_op.c_allreduce_sum" in op_names
-        assert "pd_op.c_allgather" in op_names
+        check_all_reduce_sum = any(
+            op.name() == "pd_op.all_reduce"
+            and op.int_attr("reduce_type") == dist.ReduceOp.SUM
+            for op in ops
+        )
+        assert check_all_reduce_sum
+        assert "pd_op.all_gather" in op_names
         assert "pd_op.slice" in op_names
 
-        allgather_op = ops[op_names.index("pd_op.c_allgather")]
-        allreduce_sum_op = ops[op_names.index("pd_op.c_allreduce_sum")]
+        allgather_op = ops[op_names.index("pd_op.all_gather")]
+        allreduce_sum_op = ops[op_names.index("pd_op.all_reduce")]
         slice_op = ops[op_names.index("pd_op.slice")]
 
         # check the allgather
